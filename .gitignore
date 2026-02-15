@@ -30,6 +30,8 @@ layer_visualizations
 datasets/
 checkpoints/
 output_features/
+svd_analysis/
+svd_comparison/
 OccamLGS/
 LitePT/ckpts
 .claude/
