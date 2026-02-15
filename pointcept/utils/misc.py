@@ -14,7 +14,7 @@ except ImportError:
     NUMBA_AVAILABLE = False
 
 
-def _majority_vote(neighbor_labels, ignore_label, num_classes):
+def _majority_vote(neighbor_labels : np.ndarray, ignore_label, num_classes):
     """
     neighbor_labels: (N, K) array, each row are the K neighbor labels for a point
     ignore_label: int, label to treat as "invalid" that we ignore in counting
@@ -25,10 +25,16 @@ def _majority_vote(neighbor_labels, ignore_label, num_classes):
     """
 
     # define the numba‐accelerated function inside so it can capture arguments
-    @numba.njit(parallel=True)
+    # @numba.njit(parallel=True)
     def _vote(labels_2d, out):
         n_points = labels_2d.shape[0]
         k = labels_2d.shape[1]
+        # N, 25
+        # n_points = len(labels_2d)
+        # if n_points > 0:
+        #     k = len(labels_2d[0])
+        # else:
+        #     k = 0
         for i in numba.prange(n_points):
             counts = np.zeros(num_classes, dtype=np.int32)
             max_count = 0

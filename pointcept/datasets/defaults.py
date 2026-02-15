@@ -59,6 +59,7 @@ class DefaultDataset(Dataset):
             self.aug_transform = [Compose(aug) for aug in self.test_cfg.aug_transform]
 
         self.data_list = self.get_data_list(filtered_scene=filtered_scene)
+        print(split, data_root)
         logger = get_root_logger()
         logger.info(
             "Totally {} x {} samples in {} set.".format(

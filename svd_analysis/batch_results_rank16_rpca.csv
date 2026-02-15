@@ -1,0 +1,5 @@
+file_path,N,D,target_rank,rank_energy_ratio,reconstruction_error,condition_number,use_rpca
+gaussian_train/lerf_ovs/train/figurines/lang_feat.npy,914670,768,16,0.967285,0.18061368,1.5541e+08,True
+gaussian_train/lerf_ovs/train/ramen/lang_feat.npy,687683,768,16,0.984574,0.12416655,1.9301e+08,True
+gaussian_train/lerf_ovs/train/teatime/lang_feat.npy,700182,768,16,0.979586,0.14292012,1.5720e+08,True
+gaussian_train/lerf_ovs/train/waldo_kitchen/lang_feat.npy,692743,768,16,0.948391,0.22709306,1.4456e+08,True

@@ -18,6 +18,8 @@ class GenericGSDataset(DefaultDataset):
         "scale",
         "opacity",
         "instance",
+        "lang_feat",           # Language features for open-vocabulary segmentation
+        "valid_feat_mask",     # Mask for valid language features
     ]
     EVAL_PC_ASSETS = ["pc_coord", "pc_segment", "pc_instance"]
 
@@ -91,5 +93,18 @@ class GenericGSDataset(DefaultDataset):
             data_dict["instance"] = (
                 data_dict.pop("instance").reshape([-1]).astype(np.int32)
             )
+
+        # Language features and mask (for open-vocabulary segmentation)
+        if "lang_feat" in data_dict.keys():
+            data_dict["lang_feat"] = data_dict["lang_feat"].astype(np.float32)
+
+        if "valid_feat_mask" in data_dict.keys():
+            # Use the real valid_feat_mask as-is (distinguishes valid from zero features)
+            data_dict["valid_feat_mask"] = data_dict["valid_feat_mask"].astype(bool)
+            num_points = data_dict["valid_feat_mask"].shape[0]
+            num_valid = data_dict["valid_feat_mask"].sum()
+            print(f"current: {name} valid_feat_mask: {num_valid}/{num_points} ({num_valid/num_points*100:.1f}%)")
+        else:
+            print("current:", name)
 
         return data_dict

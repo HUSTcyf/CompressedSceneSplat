@@ -24,6 +24,11 @@ $^\star$: Equal Contribution, $^\dagger$: Corresponding Author <br>
 <sup>5</sup> University of Pisa <br>
 <sup>6</sup> University of Trento <br>
 
+## Update
+- [x] We have updated the [ARKitScenes 3DGS](https://huggingface.co/datasets/SceneSplatPro/arkitscenes_mcmc_3dgs_new) for improved quality.
+- [x] We have updated the [Matterport3D 3DGS](https://huggingface.co/datasets/clapfor/matterport3d_scene_mcmc_3dgs_lang_base/tree/main) data part for improved quality, which are optimized from the full scenes. Note `test_eval` folder saves 3DGS corresponds to the test split of the `region_segmentations` version.
+- [x] Standalone language feature inference is supported in [commit](https://github.com/unique1i/SceneSplat/commit/dd7deb44c84dc2de972fca783f4e6d75bfce0927), we recommend using `tools/lang_inference.py` for later inference with our pretrained checkpoint.
+
 ## Installation
 
 Please set up the provided conda environment with Python 3.10, PyTorch 2.5.1, and CUDA 12.4. 

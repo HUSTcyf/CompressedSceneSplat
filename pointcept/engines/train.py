@@ -297,7 +297,7 @@ class Trainer(TrainerBase):
             pin_memory=True,
             worker_init_fn=init_fn,
             drop_last=True,
-            persistent_workers=True,
+            persistent_workers=True if self.cfg.num_worker_per_gpu > 0 else False,
         )
         return train_loader
 

@@ -384,11 +384,14 @@ class ToTensor(object):
         elif isinstance(data, float):
             return torch.FloatTensor([data])
         elif isinstance(data, np.ndarray) and np.issubdtype(data.dtype, bool):
-            return torch.from_numpy(data)
+            # return torch.from_numpy(data)
+            return torch.tensor(data, dtype=torch.bool)
         elif isinstance(data, np.ndarray) and np.issubdtype(data.dtype, np.integer):
-            return torch.from_numpy(data).long()
+            # return torch.from_numpy(data).long()
+            return torch.tensor(data, dtype=torch.long)
         elif isinstance(data, np.ndarray) and np.issubdtype(data.dtype, np.floating):
-            return torch.from_numpy(data).float()
+            # return torch.from_numpy(data).float()
+            return torch.tensor(data, dtype=torch.float)
         elif isinstance(data, Mapping):
             result = {sub_key: self(item) for sub_key, item in data.items()}
             return result

@@ -1,0 +1,269 @@
+# LoRA Fine-tuning Configuration for SceneSplat on ScanNet++
+#
+# Usage:
+#   python tools/train_lora.py \
+#       --config-file configs/scannet/lora-finetune-scannet.py \
+#       --options save_path=exp_runs/lora_ft
+
+_base_ = [
+    "../_base_/default_runtime.py",
+]
+
+# ============================================================
+# Dataset Configuration
+# ============================================================
+
+# Dataset type and root path
+dataset_type = "ScanNetPPGSDataset"
+data_root = "/path/to/your/scannetpp_preprocessed_data"
+
+# Split configurations for training/validation
+train_split = (
+    "train_grid1mm_chunk6x6_stride3x3",
+    "test_grid1mm_chunk6x6_stride3x3",
+    "train_scannet_fix_xyz",
+)
+val_split = "val_scannet_fix_xyz"
+
+# Optional: Filter out specific scenes
+filtered_scenes = [
+    "c601466b77",
+    "654a4f341b",
+    "0f25f24a4f",
+    "72f527a47c",
+    "2c7c10379b",
+    "5ea3e738c3",
+    "27dd4da69e",
+    "281ba69af1",
+    "816e996553",
+]
+
+# ============================================================
+# Data Configuration
+# ============================================================
+
+data = dict(
+    num_classes=100,  # ScanNet++ classes
+    ignore_index=-1,
+    train=dict(
+        type=dataset_type,
+        split=train_split,
+        data_root=data_root,
+        filtered_scene=filtered_scenes,
+        sample_tail_classes=False,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2),
+            dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
+            dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
+            dict(type="RandomScale", scale=[0.9, 1.1]),
+            dict(type="RandomFlip", p=0.5),
+            dict(type="RandomJitter", sigma=0.005, clip=0.01),
+            dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
+            dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+            dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+            dict(type="ChromaticJitter", p=0.95, std=0.05),
+            dict(
+                type="GridSample",
+                grid_size=0.02,
+                hash_type="fnv",
+                mode="train",
+                keys=("coord", "color", "opacity", "quat", "scale", "segment", "lang_feat", "valid_feat_mask"),
+                return_grid_coord=True,
+            ),
+            dict(type="SphereCrop", point_max=192000, mode="random"),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "lang_feat", "valid_feat_mask"),
+                feat_keys=("color", "opacity", "quat", "scale"),
+            ),
+        ],
+        test_mode=False,
+    ),
+    val=dict(
+        type=dataset_type,
+        split=val_split,
+        data_root=data_root,
+        filtered_scene=filtered_scenes,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(
+                type="GridSample",
+                grid_size=0.02,
+                hash_type="fnv",
+                mode="train",
+                keys=("coord", "color", "opacity", "quat", "scale", "segment", "lang_feat", "valid_feat_mask"),
+                return_grid_coord=True,
+            ),
+            dict(type="CenterShift", apply_z=False),
+            dict(type="NormalizeColor"),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord", "segment", "lang_feat", "valid_feat_mask"),
+                feat_keys=("color", "opacity", "quat", "scale"),
+            ),
+        ],
+        test_mode=False,
+    ),
+    test=dict(
+        type="ScanNetPPGSDataset",
+        split="val_selected_10",
+        data_root=data_root,
+        filtered_scene=filtered_scenes,
+        transform=[
+            dict(type="CenterShift", apply_z=True),
+            dict(type="NormalizeColor"),
+            dict(
+                type="Copy",
+                keys_dict={
+                    "segment": "origin_segment",
+                    "coord": "origin_coord",
+                    "valid_feat_mask": "origin_feat_mask",
+                },
+            ),
+            dict(
+                type="GridSample",
+                grid_size=0.01,
+                hash_type="fnv",
+                mode="train",
+                keys=("coord", "color", "opacity", "quat", "scale", "segment", "lang_feat", "valid_feat_mask"),
+                return_inverse=True,
+            ),
+        ],
+        test_mode=True,
+        test_cfg=dict(
+            voxelize=dict(
+                type="GridSample",
+                grid_size=0.02,
+                hash_type="fnv",
+                mode="test",
+                keys=("coord", "color", "opacity", "quat", "scale", "segment", "lang_feat", "valid_feat_mask"),
+                return_grid_coord=True,
+            ),
+            crop=None,
+            post_transform=[
+                dict(type="CenterShift", apply_z=False),
+                dict(type="ToTensor"),
+                dict(
+                    type="Collect",
+                    keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask"),
+                    feat_keys=("color", "opacity", "quat", "scale"),
+                ),
+            ],
+            aug_transform=[],
+        ),
+    ),
+)
+
+# ============================================================
+# Model Configuration with LoRA
+# ============================================================
+
+model = dict(
+    type="LangPretrainer",
+    backbone=dict(
+        type="PT-v3m1",
+        in_channels=11,  # xyz(3) + color(3) + opacity(1) + quat(4) = 11
+        order=("z", "z-trans"),
+        stride=(2, 2, 2, 2),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(32, 64, 128, 256, 512),
+        enc_num_head=(2, 4, 8, 16, 32),
+        enc_patch_size=(48, 48, 48, 48, 48),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(64, 64, 128, 256),
+        dec_num_head=(4, 4, 8, 16),
+        dec_patch_size=(48, 48, 48, 48),
+        mlp_ratio=4,
+        qkv_bias=True,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        pre_norm=True,
+        shuffle_orders=True,
+        enable_rpe=False,
+        enable_flash=True,
+        upcast_attention=False,
+        upcast_softmax=False,
+    ),
+    # LoRA configuration
+    lora=dict(
+        enabled=True,
+        r=8,  # Low-rank dimension
+        lora_alpha=8,  # Scaling factor
+        target_modules=["attn"],  # Apply to attention layers only
+        enable_prompt=False,  # Disable prompt MLP
+        encoder_only=True,  # Only fine-tune encoder
+        target_stages=[3, 4],  # Only deeper stages
+        freeze_backbone=True,  # Freeze non-LoRA parameters
+    ),
+    criteria=[
+        dict(type="CosineSimilarity", reduction="mean", loss_weight=1.0),
+        dict(type="L2Loss", reduction="mean", loss_weight=1.0),
+    ],
+)
+
+# ============================================================
+# Training Configuration
+# ============================================================
+
+# Optimizer - only optimize LoRA parameters
+optimizer = dict(
+    type="AdamW",
+    lr=0.0001,  # Lower learning rate for fine-tuning
+    betas=(0.9, 0.999),
+    weight_decay=0.01,
+    paramwise_cfg=dict(
+        custom_keys={
+            "lora_": dict(lr_mult=1.0),
+        },
+    ),
+)
+
+# Scheduler
+scheduler = dict(
+    type="CosineAnnealingLR",
+    warmup_lr=1e-5,
+    warmup_epochs=10,
+    min_lr=1e-6,
+)
+
+# Training epochs
+epoch = 50
+
+# ============================================================
+# LoRA Fine-tuning Settings
+# ============================================================
+
+lora_training = dict(
+    # Path to pretrained model
+    pretrained_path="checkpoints/pretrained_model.pth",
+
+    # Save options
+    save_lora_only=True,  # Only save LoRA parameters
+    merge_before_eval=False,  # Don't merge weights during training
+
+    # Evaluation
+    eval_epoch=1,
+    save_epoch=5,
+
+    # Optional: Merge and save full model after training
+    merge_on_end=False,
+)
+
+# ============================================================
+# Hooks
+# ============================================================
+
+hooks = [
+    dict(type="CheckpointLoader"),
+    dict(type="IterationTimer", warmup_iter=2),
+    dict(type="InformationWriter"),
+    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="BeginningEvaluator", test_last=True),
+]

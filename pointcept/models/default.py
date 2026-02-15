@@ -139,6 +139,9 @@ class LangPretrainer(nn.Module):
             for k, v in input_dict.items():
                 if isinstance(v, torch.Tensor) and v.shape[0] == N:
                     chunk_input_dict[k] = v[start_idx:end_idx]
+                elif not isinstance(v, torch.Tensor):
+                    # Copy non-tensor values (scalars like grid_size, etc.)
+                    chunk_input_dict[k] = v
             if "condition" in input_dict.keys():
                 chunk_input_dict["condition"] = input_dict["condition"][0]
             # need to address the 'offset' key separately, which is the same as N
@@ -165,6 +168,10 @@ class LangPretrainer(nn.Module):
             else:
                 # If eval, store chunk feats to concat
                 chunk_outputs.append(chunk_point_feat["feat"])
+
+            # Clean up to free memory before next chunk
+            del chunk_point, chunk_point_feat
+            torch.cuda.empty_cache()
 
         if is_training:
             # sum or average the chunk losses

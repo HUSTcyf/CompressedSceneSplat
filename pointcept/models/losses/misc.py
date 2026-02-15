@@ -419,3 +419,98 @@ class AggregatedContrastiveLoss(nn.Module):
         # print("contrastive loss:", self.loss_weight * loss.item())
 
         return self.loss_weight * loss
+
+
+@LOSSES.register_module()
+class ValidNonValidContrastiveLoss(nn.Module):
+    """
+    Contrastive loss between valid and non-valid Gaussians.
+    
+    This loss encourages the model to:
+    1. Make valid Gaussians' features similar to target features
+    2. Make non-valid Gaussians' features different from target features
+    3. Separate valid and non-valid features in the embedding space
+    
+    Args:
+        temperature: Temperature parameter for contrastive learning (default: 0.1)
+        margin: Minimum margin for separating valid from non-valid (default: 0.5)
+        reduction: Reduction method ("mean" or "sum")
+        loss_weight: Weight for this loss in the total loss
+    """
+    def __init__(
+        self,
+        temperature: float = 0.1,
+        margin: float = 0.5,
+        reduction: str = "mean",
+        loss_weight: float = 1.0,
+    ):
+        super().__init__()
+        self.temperature = temperature
+        self.margin = margin
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+    
+    def forward(self, pred, target, valid_feat_mask, **kwargs):
+        """
+        Args:
+            pred: Predicted features [N, D]
+            target: Target features [N, D]
+            valid_feat_mask: Real mask [N] where 1=valid (non-zero features), 0=non-valid (zero features)
+
+        Returns:
+            Scalar loss value
+        """
+        device = pred.device
+
+        # Separate valid and non-valid features
+        valid_mask = (valid_feat_mask > 0)
+        non_valid_mask = (valid_feat_mask == 0)
+        
+        # Check if we have both valid and non-valid samples
+        if not valid_mask.any() or not non_valid_mask.any():
+            # If all samples are the same type, return zero loss
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+        
+        valid_pred = pred[valid_mask]      # [N_valid, D]
+        non_valid_pred = pred[non_valid_mask]  # [N_non_valid, D]
+        
+        valid_target = target[valid_mask]   # [N_valid, D]
+        non_valid_target = target[non_valid_mask]  # [N_non_valid, D]
+        
+        # Normalize features for stable similarity computation
+        valid_pred = F.normalize(valid_pred, p=2, dim=1)
+        non_valid_pred = F.normalize(non_valid_pred, p=2, dim=1)
+        
+        # ============ Loss 1: Valid features should match target ============
+        # Cosine similarity between valid predictions and target
+        valid_sim = F.cosine_similarity(valid_pred, valid_target, dim=1)  # [N_valid]
+        loss_valid_match = 1 - valid_sim.mean()  # Encourage similarity
+        
+        # ============ Loss 2: Non-valid features should differ from target ============
+        # Cosine similarity between non-valid predictions and target
+        non_valid_sim = F.cosine_similarity(non_valid_pred, non_valid_target, dim=1)  # [N_non_valid]
+        # Push similarity below (1 - margin)
+        loss_non_valid_separate = F.relu(non_valid_sim - (1 - self.margin)).mean()
+        
+        # ============ Loss 3: Valid and non-valid should be separated ============
+        # Compute pairwise similarity between valid and non-valid
+        # valid_pred: [N_valid, D], non_valid_pred: [N_non_valid, D]
+        # sim_matrix: [N_valid, N_non_valid]
+        sim_matrix = torch.matmul(valid_pred, non_valid_pred.T) / self.temperature
+        # We want valid and non-valid to be dissimilar (low cosine similarity)
+        # Use contrastive loss: encourage similarities to be low (below threshold)
+        threshold = 0.0  # Cosine similarity threshold
+        loss_separation = F.relu(sim_matrix - threshold).mean()
+        
+        # Combine losses
+        total_loss = (
+            loss_valid_match +           # Valid should match target
+            loss_non_valid_separate +     # Non-valid should differ from target
+            loss_separation               # Valid and non-valid should be separated
+        )
+        
+        if self.reduction == "sum":
+            total_loss = total_loss * pred.size(0)
+        # For "mean", loss is already averaged
+        
+        return self.loss_weight * total_loss

@@ -257,6 +257,7 @@ class ZeroShotSemSegTester(TesterBase):
         comm.synchronize()
         # ================ End Submission Handling ================
         record = {}
+        runtime_skip_eval = False
         # Fragment inference
         for idx, data_dict in enumerate(self.test_loader):
             end = time.time()

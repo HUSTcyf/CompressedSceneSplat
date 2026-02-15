@@ -1,6 +1,6 @@
 _base_ = [
-    "../../_base_/default_runtime.py",
-    "../../_base_/dataset/scannetpp.py",
+    "../_base_/default_runtime.py",
+    "../_base_/dataset/scannetpp.py",
 ]
 
 # misc custom setting

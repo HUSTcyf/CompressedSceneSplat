@@ -21,8 +21,20 @@ outputs/
 Dockerfile
 .pre-commit-config.yaml
 
-exp/
+gaussian_results/
+gaussian_train/
+grid_sim/
+grid_svd_output/
+langfeat_visualizations
+layer_visualizations
+datasets/
+checkpoints/
+output_features/
+OccamLGS/
+LitePT/ckpts
+.claude/
+# CLAUDE.md
+*.pt
 *.whl
 *.ply
 *.pth
-data/
