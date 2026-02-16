@@ -450,7 +450,7 @@ class LangFeatDownloadCompressor:
 
         return sorted(lang_feat_files)
 
-    def _download_lang_feat_for_scene(self, scene_rel_path: str) -> bool:
+    def _download_lang_feat_for_scene(self, scene_rel_path: str, idx: int, total: int) -> bool:
         """
         Download lang_feat.npy for a single scene using huggingface_hub.
 
@@ -458,6 +458,8 @@ class LangFeatDownloadCompressor:
 
         Args:
             scene_rel_path: Relative path to scene directory
+            idx: Current scene index (1-based)
+            total: Total number of scenes to process
 
         Returns:
             True if download successful, False otherwise
@@ -472,6 +474,7 @@ class LangFeatDownloadCompressor:
 
         while infinite_retry or (retries <= self.max_retries):
             try:
+                print(f"  Progress: [{idx}/{total}]")
                 print(f"  [Download] Starting: {repo_file_path}")
 
                 # Use hf_hub_download for efficient single-file download
@@ -624,12 +627,12 @@ class LangFeatDownloadCompressor:
 
         return True
 
-    def _download_and_compress_worker(self, scene_rel_path: str):
+    def _download_and_compress_worker(self, scene_rel_path: str, idx: int, total: int):
         """Worker thread: download then immediately compress a single scene."""
         scene_name = Path(scene_rel_path).name
 
         # Step 1: Download lang_feat.npy
-        if self._download_lang_feat_for_scene(scene_rel_path):
+        if self._download_lang_feat_for_scene(scene_rel_path, idx, total):
             with self.lock:
                 self.stats['downloaded'] += 1
 
@@ -724,8 +727,8 @@ class LangFeatDownloadCompressor:
 
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
             futures = {
-                executor.submit(self._download_and_compress_worker, scene): scene
-                for scene in scenes
+                executor.submit(self._download_and_compress_worker, scene, idx + 1, len(scenes)): scene
+                for idx, scene in enumerate(scenes)
             }
 
             for future in as_completed(futures):
