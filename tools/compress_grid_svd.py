@@ -553,6 +553,7 @@ def perform_svd_decomposition(
         feat_reconstructed_point_level = U_r_point_level * S_r[None, :] @ Vt_r  # [N_valid, D]
         valid_feat_tensor = torch.from_numpy(valid_feat[valid_mask.cpu().numpy()]).to(device)
         error = torch.norm(valid_feat_tensor - feat_reconstructed_point_level, p='fro') / torch.norm(valid_feat_tensor, p='fro')
+        assert error < 1, f"Reconstruction error {error:.6f} >= 1 for rank {r}"
 
         results[r] = {
             'compressed': compressed_feat.astype(np.float32), 
@@ -604,13 +605,20 @@ def save_svd_results(
     return saved_paths
 
 
-def save_grid_meta_data(point_to_grid_indices: np.ndarray, grid_point_counts: np.ndarray, output_dir: str, scene_name: str):
+def save_grid_meta_data(
+    point_to_grid_indices: np.ndarray,
+    grid_point_counts: np.ndarray,
+    svd_results: Dict[int, Dict],
+    output_dir: str,
+    scene_name: str,
+):
     """
-    Save grid metadata to JSON file.
+    Save grid metadata to JSON file, including SVD reconstruction errors.
 
     Args:
         point_to_grid_indices: [N] - final grid index for each point (-1 if not in any grid)
         grid_point_counts: [M] - number of gaussians in each grid
+        svd_results: Dictionary mapping rank to SVD results (contains reconstruction_error)
         output_dir: Output directory path
         scene_name: Name of the scene
     """
@@ -626,6 +634,24 @@ def save_grid_meta_data(point_to_grid_indices: np.ndarray, grid_point_counts: np
         "num_grids": len(grid_point_counts),
         "num_points_with_grid": int(np.sum(point_to_grid_indices >= 0)),
     }
+
+    # Add SVD reconstruction errors for each rank
+    for r, results in svd_results.items():
+        # Convert torch tensor to float for JSON serialization
+        if 'reconstruction_error' in results:
+            error = results['reconstruction_error']
+            if hasattr(error, 'item'):
+                # torch tensor
+                meta_data[f'reconstruction_error_r{r}'] = float(error.item())
+            else:
+                # already a float/numpy float
+                meta_data[f'reconstruction_error_r{r}'] = float(error)
+        if 'rank_energy_ratio' in results:
+            energy = results['rank_energy_ratio']
+            if hasattr(energy, 'item'):
+                meta_data[f'rank_energy_ratio_r{r}'] = float(energy.item())
+            else:
+                meta_data[f'rank_energy_ratio_r{r}'] = float(energy)
 
     with open(output_file, 'w') as f:
         json.dump(meta_data, f)
@@ -730,7 +756,7 @@ def process_single_scene(
         )
 
         # Save grid metadata
-        save_grid_meta_data(point_to_grid_indices, grid_point_counts, output_dir, scene_name)
+        save_grid_meta_data(point_to_grid_indices, grid_point_counts, svd_results, output_dir, scene_name)
 
         # Print saved paths
         for r, path in saved_paths.items():

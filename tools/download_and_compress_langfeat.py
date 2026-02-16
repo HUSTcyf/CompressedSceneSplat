@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import threading
@@ -318,6 +319,9 @@ class LangFeatDownloadCompressor:
         min_vram_gb: float = 16.0,
         min_free_percent: float = 10.0,
         gpu_wait_timeout: int = 600,
+        single_gpu: Optional[int] = None,
+        test_mode: bool = False,
+        force_reprocess: bool = False,
     ):
         """
         Initialize the downloader and compressor.
@@ -331,11 +335,22 @@ class LangFeatDownloadCompressor:
             max_threads: Maximum number of concurrent downloads/compressions
             max_retries: Maximum download retries per file (0 = infinite)
             initial_delay: Initial retry delay in seconds
+            single_gpu: GPU ID to use for single-GPU single-thread mode (overrides max_threads to 1)
+            test_mode: If True, only process the first scene for testing
+            force_reprocess: If True, force reprocess all scenes including already compressed ones
         """
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
         self.target_subfolder = target_subfolder
         self.token = token
+        self.single_gpu = single_gpu
+        self.test_mode = test_mode
+        self.force_reprocess = force_reprocess
+
+        # Single GPU mode: force single thread
+        if single_gpu is not None:
+            max_threads = 1
+
         self.grid_size = grid_size
         # Handle both string and list input for ranks
         if isinstance(ranks, str):
@@ -384,6 +399,8 @@ class LangFeatDownloadCompressor:
         """Get list of scene directories that need lang_feat.npy download.
 
         Skips scenes that already have grid_meta_data.json (compression complete).
+        If grid_meta_data.json doesn't exist, delete lang_feat.npy to force re-download.
+        If force_reprocess=True, delete both grid_meta_data.json and lang_feat.npy to force full reprocessing.
         """
         lang_feat_files = []
         base_path = self.local_dir / self.target_subfolder
@@ -399,16 +416,37 @@ class LangFeatDownloadCompressor:
                 grid_meta_path = item / "grid_meta_data.json"
 
                 if coord_path.exists():
+                    rel_path = item.relative_to(self.local_dir)
+
+                    # Force reprocess mode: delete existing compressed files
+                    if self.force_reprocess and grid_meta_path.exists():
+                        print(f"  [Force Reprocess] Deleting compressed files: {rel_path}")
+                        try:
+                            # Delete grid_meta_data.json
+                            grid_meta_path.unlink()
+                            # Delete compressed SVD files (U, S, V matrices)
+                            for svd_file in item.glob("lang_feat_grid_svd_r*.npz"):
+                                svd_file.unlink()
+                            print(f"  [Force Reprocess] Deleted compressed files for: {rel_path}")
+                        except Exception as e:
+                            print(f"  [Force Reprocess] Warning: Could not delete compressed files for {rel_path}: {e}")
+
                     # Skip if already compressed (grid_meta_data.json exists)
                     if grid_meta_path.exists():
-                        rel_path = item.relative_to(self.local_dir)
                         print(f"  [Skip] Already compressed: {rel_path}")
                         continue
 
-                    # Check if lang_feat.npy needs to be downloaded
-                    if not lang_feat_path.exists():
-                        rel_path = item.relative_to(self.local_dir)
-                        lang_feat_files.append(str(rel_path).replace('\\', '/'))
+                    # If grid_meta_data.json doesn't exist, need to process
+                    # Delete existing lang_feat.npy to force re-download
+                    if lang_feat_path.exists():
+                        print(f"  [Cleanup] Deleting existing lang_feat.npy for re-download: {rel_path}")
+                        try:
+                            lang_feat_path.unlink()
+                        except Exception as e:
+                            print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+
+                    # Add scene to download list
+                    lang_feat_files.append(str(rel_path).replace('\\', '/'))
 
         return sorted(lang_feat_files)
 
@@ -503,15 +541,27 @@ class LangFeatDownloadCompressor:
             print(f"  [GPU] Allocating GPU for {scene_rel_path}...")
             self.gpu_monitor.print_status()
 
-            gpu_id = self.gpu_monitor.wait_for_available_gpu(timeout=self.gpu_wait_timeout)
+            # Single GPU mode: use the specified GPU directly
+            if self.single_gpu is not None:
+                gpu_id = self.single_gpu
+                # Validate GPU ID
+                if gpu_id >= NUM_GPUS:
+                    print(f"  [GPU] Invalid GPU ID {gpu_id}, only {NUM_GPUS} GPU(s) available")
+                    return False
+                device = f"cuda:{gpu_id}"
+                gpu_name = torch.cuda.get_device_name(gpu_id)
+                print(f"  [GPU] Using fixed GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
+            else:
+                # Multi-GPU mode: wait for available GPU
+                gpu_id = self.gpu_monitor.wait_for_available_gpu(timeout=self.gpu_wait_timeout)
 
-            if gpu_id is None:
-                print(f"  [GPU] No available GPU for {scene_rel_path}, skipping...")
-                return False
+                if gpu_id is None:
+                    print(f"  [GPU] No available GPU for {scene_rel_path}, skipping...")
+                    return False
 
-            device = f"cuda:{gpu_id}"
-            gpu_name = torch.cuda.get_device_name(gpu_id)
-            print(f"  [GPU] Accated GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
+                device = f"cuda:{gpu_id}"
+                gpu_name = torch.cuda.get_device_name(gpu_id)
+                print(f"  [GPU] Allocated GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
 
         try:
             # Build command for compress_grid_svd.py
@@ -524,6 +574,8 @@ class LangFeatDownloadCompressor:
                 "--grid_size", str(self.grid_size),
                 "--ranks", ",".join(map(str, self.ranks)),
                 "--output_dir", str(Path(self.compression_output_dir) / self.target_subfolder),
+                "--rpca_max_iter", str(self.rpca_max_iter),
+                "--rpca_tol", str(self.rpca_tol),
                 "--device", device,
             ]
 
@@ -532,15 +584,23 @@ class LangFeatDownloadCompressor:
 
             print(f"  [Compress] Starting: {scene_rel_path} on {device}")
 
-            # Run compression subprocess
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600,  # 1 hour timeout per scene
-            )
+            # Test mode: use os.system to show output directly
+            if self.test_mode:
+                print(f"  [Compress] Test mode: showing real-time output")
+                cmd_str = " ".join(cmd)
+                returncode = os.system(cmd_str)
+            else:
+                # Normal mode: run compression subprocess
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,  # 1 hour timeout per scene
+                )
+                returncode = result.returncode
+            success = (returncode == 0)
 
-            if result.returncode == 0:
+            if success:
                 print(f"  [Compress] Success: {scene_rel_path} on {device}")
 
                 # Delete original lang_feat.npy to save space
@@ -553,12 +613,13 @@ class LangFeatDownloadCompressor:
                     print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
             else:
                 print(f"  [Compress] Failed for {scene_rel_path}")
-                if result.stderr:
+                # Only show stderr in non-test mode (test mode already showed output)
+                if not self.test_mode and 'result' in locals() and result.stderr:
                     print(f"  [Compress] Error output:\n{result.stderr[:500]}")
                 return False
         finally:
-            # Release GPU when done (subprocess runs in separate process)
-            if gpu_id is not None:
+            # Release GPU when done (only in multi-GPU mode with monitor)
+            if gpu_id is not None and self.single_gpu is None:
                 self.gpu_monitor.release_gpu(gpu_id)
 
         return True
@@ -586,6 +647,25 @@ class LangFeatDownloadCompressor:
                 self.stats['failed'] += 1
                 self.failed_scenes.append((scene_rel_path, "compression failed"))
 
+    def _print_summary(self):
+        """Print processing summary."""
+        print("\n" + "=" * 60)
+        print("Summary")
+        print("=" * 60)
+        print(f"  Downloaded: {self.stats['downloaded']}")
+        print(f"  Compressed: {self.stats['compressed']}")
+        print(f"  Deleted: {self.stats['deleted']}")
+        print(f"  Failed: {self.stats['failed']}")
+
+        if self.failed_scenes:
+            print("\nFailed scenes:")
+            for scene, reason in self.failed_scenes[:10]:
+                print(f"  - {scene}: {reason}")
+            if len(self.failed_scenes) > 10:
+                print(f"  ... and {len(self.failed_scenes) - 10} more")
+
+        print("=" * 60)
+
     def run(self):
         """Main execution: download and compress all scenes."""
         # Print GPU status at startup
@@ -606,6 +686,13 @@ class LangFeatDownloadCompressor:
             print("All scenes may already have lang_feat.npy or compressed files.")
             return
 
+        # Test mode: only process the first scene
+        if self.test_mode:
+            print("\n" + "=" * 60)
+            print("TEST MODE: Only processing the first scene")
+            print("=" * 60)
+            scenes = scenes[:1]
+
         print(f"Found {len(scenes)} scenes requiring download:")
         for scene in scenes[:5]:
             print(f"  - {scene}")
@@ -624,8 +711,11 @@ class LangFeatDownloadCompressor:
         print(f"  Compression device: {self.compression_device}")
         print(f"  RPCA enabled: {self.use_rpca}")
 
-        if self.use_gpu and self.gpu_monitor:
-            print(f"  GPU allocation: Memory-based (min {self.gpu_monitor.min_vram_gb} GB VRAM)")
+        if self.use_gpu:
+            if self.single_gpu is not None:
+                print(f"  GPU allocation: Single-GPU mode (GPU {self.single_gpu}, single-threaded)")
+            else:
+                print(f"  GPU allocation: Multi-GPU mode (min {self.gpu_monitor.min_vram_gb} GB VRAM)")
 
         # Process scenes with threading
         print("\n" + "=" * 60)
@@ -663,6 +753,7 @@ Examples:
         --repo_id GaussianWorld/scannet_mcmc_3dgs_lang_base \\
         --local_dir ./gaussian_train/scannet/train \\
         --target_subfolder train
+
     # With custom token and compression parameters
     python tools/download_and_compress_langfeat.py \\
         --repo_id GaussianWorld/scannet_mcmc_3dgs_lang_base \\
@@ -671,8 +762,18 @@ Examples:
         --token hf_xxx \\
         --grid_size 0.01 \\
         --ranks 8,16,32 \\
-        --max_threads 4
+        --max_threads 4 \\
         --min_vram_gb 16
+
+    # Force reprocess all scenes (delete existing compressed files)
+    python tools/download_and_compress_langfeat.py \\
+        --repo_id clapfor/scannetpp_v2_mcmc_3dgs_lang_base \\
+        --local_dir /home/cyf/SceneSplat7k/scannetpp_v2 \\
+        --target_subfolder train_grid1.0cm_chunk6x6_stride3x3 \\
+        --token hf_xxx \\
+        --rpca_tol 1e-3 \\
+        --single_gpu 0 \\
+        --force_reprocess
     """
     )
     parser.add_argument(
@@ -770,6 +871,22 @@ Examples:
         default=600,
         help="Maximum wait time for available GPU in seconds",
     )
+    parser.add_argument(
+        "--single_gpu",
+        type=int,
+        default=None,
+        help="Single GPU mode: use specified GPU ID and disable multi-threading (overrides max_threads to 1)",
+    )
+    parser.add_argument(
+        "--test_mode",
+        action="store_true",
+        help="Test mode: only process the first scene for testing",
+    )
+    parser.add_argument(
+        "--force_reprocess",
+        action="store_true",
+        help="Force reprocess all scenes, including those already compressed (deletes grid_meta_data.json and SVD files)",
+    )
 
     args = parser.parse_args()
 
@@ -791,6 +908,9 @@ Examples:
         min_vram_gb=args.min_vram_gb,
         min_free_percent=args.min_free_percent,
         gpu_wait_timeout=args.gpu_wait_timeout,
+        single_gpu=args.single_gpu,
+        test_mode=args.test_mode,
+        force_reprocess=args.force_reprocess,
     )
 
     # Run processing

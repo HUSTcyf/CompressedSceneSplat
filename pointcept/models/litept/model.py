@@ -3,19 +3,29 @@ LitePT model adapted for SceneSplat 3D Gaussian Splatting data.
 
 Based on: https://github.com/prs-eth/LitePT
 
-LitePT dependencies are loaded from: /new_data/cyf/projects/SceneSplat/LitePT/libs/
+LitePT dependencies are loaded from: LitePT/libs/
 """
 # ============================================================================
 # CRITICAL: Setup sys.path FIRST before any other imports
 # ============================================================================
 import sys
+from pathlib import Path
+
+# Get the directory of this file
+FILE_DIR = Path(__file__).resolve().parent
+# Project root is 4 levels up from pointcept/models/litept/
+# pointcept/models/litept -> pointcept/models -> pointcept -> project_root
+PROJECT_ROOT = FILE_DIR.parent.parent.parent
+# LitePT directory is at project root / LitePT
+LITEPT_DIR = PROJECT_ROOT / "LitePT"
+LITEPT_LIBS_DIR = LITEPT_DIR / "libs"
 
 # Add LitePT to path for serialization module
-sys.path.insert(0, '/new_data/cyf/projects/SceneSplat/LitePT')
+sys.path.insert(0, str(LITEPT_DIR))
 
 # Add LitePT libs to path for pointrope and other LitePT-specific libraries
 # This ensures LitePT uses its own dependencies from LitePT/libs/
-sys.path.insert(0, '/new_data/cyf/projects/SceneSplat/LitePT/libs')
+sys.path.insert(0, str(LITEPT_LIBS_DIR))
 
 # Now we can safely import everything else
 from collections import OrderedDict

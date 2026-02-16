@@ -1,5 +1,6 @@
 image/
 __pycache__
+**/__pycache__
 **/build/
 **/*.egg-info/
 **/dist/
@@ -32,6 +33,7 @@ checkpoints/
 output_features/
 svd_analysis/
 svd_comparison/
+flash-attention/
 OccamLGS/
 LitePT/ckpts
 .claude/
