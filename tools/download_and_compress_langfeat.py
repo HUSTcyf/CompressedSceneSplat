@@ -4,11 +4,13 @@ import time
 import threading
 import subprocess
 import argparse
+import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Set, List, Tuple, Dict
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError, LocalEntryNotFoundError
+import numpy as np
 
 # Add project to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -322,6 +324,8 @@ class LangFeatDownloadCompressor:
         single_gpu: Optional[int] = None,
         test_mode: bool = False,
         force_reprocess: bool = False,
+        stats_only: bool = False,
+        skip_download: bool = False,
     ):
         """
         Initialize the downloader and compressor.
@@ -338,6 +342,8 @@ class LangFeatDownloadCompressor:
             single_gpu: GPU ID to use for single-GPU single-thread mode (overrides max_threads to 1)
             test_mode: If True, only process the first scene for testing
             force_reprocess: If True, force reprocess all scenes including already compressed ones
+            stats_only: If True, only show statistics of existing compressed scenes without downloading/compressing
+            skip_download: If True, skip download and only compress existing lang_feat.npy files
         """
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
@@ -346,6 +352,8 @@ class LangFeatDownloadCompressor:
         self.single_gpu = single_gpu
         self.test_mode = test_mode
         self.force_reprocess = force_reprocess
+        self.stats_only = stats_only
+        self.skip_download = skip_download
 
         # Single GPU mode: force single thread
         if single_gpu is not None:
@@ -402,6 +410,7 @@ class LangFeatDownloadCompressor:
         Skips scenes that already have grid_meta_data.json (compression complete).
         If grid_meta_data.json doesn't exist, delete lang_feat.npy to force re-download.
         If force_reprocess=True, delete both grid_meta_data.json and lang_feat.npy to force full reprocessing.
+        If skip_download=True, find scenes with lang_feat.npy that need compression.
         """
         lang_feat_files = []
         base_path = self.local_dir / self.target_subfolder
@@ -409,6 +418,21 @@ class LangFeatDownloadCompressor:
         if not base_path.exists():
             return []
 
+        # Skip download mode: find scenes with lang_feat.npy that need compression
+        if self.skip_download:
+            for item in base_path.rglob('*'):
+                if item.is_dir():
+                    coord_path = item / "coord.npy"
+                    lang_feat_path = item / "lang_feat.npy"
+                    grid_meta_path = item / "grid_meta_data.json"
+
+                    # Need both coord.npy and lang_feat.npy, but not compressed yet
+                    if coord_path.exists() and lang_feat_path.exists() and not grid_meta_path.exists():
+                        rel_path = item.relative_to(self.local_dir)
+                        lang_feat_files.append(str(rel_path).replace('\\', '/'))
+            return sorted(lang_feat_files)
+
+        # Normal mode: find scenes that need download
         # Find all directories that contain coord.npy but might not have lang_feat.npy
         for item in base_path.rglob('*'):
             if item.is_dir():
@@ -457,6 +481,128 @@ class LangFeatDownloadCompressor:
         total = self.total_scenes
         if total > 0:
             print(f"  [Progress] {completed}/{total} scenes processed")
+
+    def _collect_grid_meta_stats(self) -> Dict[str, any]:
+        """
+        Collect statistics from all existing grid_meta_data.json files.
+
+        Returns:
+            Dictionary containing aggregated statistics
+        """
+        base_path = self.local_dir / self.target_subfolder
+        stats = {
+            'total_scenes': 0,
+            'num_grids_list': [],
+            'grid_point_counts_mean_list': [],
+            'num_points_with_grid_list': [],
+            'reconstruction_errors': {},  # r -> [error1, error2, ...]
+            'rank_energy_ratios': {},  # r -> [ratio1, ratio2, ...]
+        }
+
+        if not base_path.exists():
+            return stats
+
+        # Find all grid_meta_data.json files
+        for meta_file in base_path.rglob("grid_meta_data.json"):
+            try:
+                with open(meta_file, 'r') as f:
+                    meta_data = json.load(f)
+
+                stats['total_scenes'] += 1
+
+                # Collect basic stats
+                if 'num_grids' in meta_data:
+                    stats['num_grids_list'].append(meta_data['num_grids'])
+                if 'grid_point_counts' in meta_data:
+                    stats['grid_point_counts_mean_list'].append(meta_data['grid_point_counts'])
+                if 'num_points_with_grid' in meta_data:
+                    stats['num_points_with_grid_list'].append(meta_data['num_points_with_grid'])
+
+                # Collect reconstruction errors and energy ratios for each rank
+                for key, value in meta_data.items():
+                    if key.startswith('reconstruction_error_r'):
+                        rank = key.split('_r')[-1]
+                        if rank not in stats['reconstruction_errors']:
+                            stats['reconstruction_errors'][rank] = []
+                        stats['reconstruction_errors'][rank].append(value)
+                    elif key.startswith('rank_energy_ratio_r'):
+                        rank = key.split('_r')[-1]
+                        if rank not in stats['rank_energy_ratios']:
+                            stats['rank_energy_ratios'][rank] = []
+                        stats['rank_energy_ratios'][rank].append(value)
+
+            except Exception as e:
+                print(f"  [Warning] Could not read {meta_file}: {e}")
+                continue
+
+        return stats
+
+    def _print_grid_meta_stats(self, stats: Dict[str, any]):
+        """
+        Print aggregated grid metadata statistics.
+
+        Args:
+            stats: Statistics dictionary from _collect_grid_meta_stats
+        """
+        print("\n" + "=" * 60)
+        print("Existing Compressed Scenes Statistics")
+        print("=" * 60)
+
+        if stats['total_scenes'] == 0:
+            print("No compressed scenes found.")
+            print("=" * 60)
+            return
+
+        print(f"Total compressed scenes: {stats['total_scenes']}")
+
+        # Basic stats
+        if stats['num_grids_list']:
+            num_grids = stats['num_grids_list']
+            print(f"\nGrids per scene:")
+            print(f"  Min: {min(num_grids):,}")
+            print(f"  Max: {max(num_grids):,}")
+            print(f"  Mean: {np.mean(num_grids):.1f}")
+            print(f"  Median: {np.median(num_grids):.1f}")
+
+        if stats['grid_point_counts_mean_list']:
+            grid_point_counts = stats['grid_point_counts_mean_list']
+            print(f"\nMean grid point counts per scene:")
+            print(f"  Min: {min(grid_point_counts):.2f}")
+            print(f"  Max: {max(grid_point_counts):.2f}")
+            print(f"  Mean: {np.mean(grid_point_counts):.2f}")
+            print(f"  Median: {np.median(grid_point_counts):.2f}")
+
+        if stats['num_points_with_grid_list']:
+            num_points = stats['num_points_with_grid_list']
+            print(f"\nPoints with grid per scene:")
+            print(f"  Min: {min(num_points):,}")
+            print(f"  Max: {max(num_points):,}")
+            print(f"  Mean: {np.mean(num_points):.0f}")
+            print(f"  Median: {np.median(num_points):.0f}")
+
+        # Reconstruction errors by rank
+        if stats['reconstruction_errors']:
+            print(f"\nReconstruction Errors by Rank:")
+            for rank in sorted(stats['reconstruction_errors'].keys(), key=int):
+                errors = stats['reconstruction_errors'][rank]
+                print(f"  Rank {rank}:")
+                print(f"    Min: {min(errors):.6f}")
+                print(f"    Max: {max(errors):.6f}")
+                print(f"    Mean: {np.mean(errors):.6f}")
+                print(f"    Median: {np.median(errors):.6f}")
+
+        # Energy ratios by rank
+        if stats['rank_energy_ratios']:
+            print(f"\nRank Energy Ratios:")
+            for rank in sorted(stats['rank_energy_ratios'].keys(), key=int):
+                ratios = stats['rank_energy_ratios'][rank]
+                print(f"  Rank {rank}:")
+                print(f"    Min: {min(ratios):.6f}")
+                print(f"    Max: {max(ratios):.6f}")
+                print(f"    Mean: {np.mean(ratios):.6f}")
+                print(f"    Median: {np.median(ratios):.6f}")
+
+        print("=" * 60)
 
     def _download_lang_feat_for_scene(self, scene_rel_path: str) -> bool:
         """
@@ -636,6 +782,20 @@ class LangFeatDownloadCompressor:
         """Worker thread: download then immediately compress a single scene."""
         scene_name = Path(scene_rel_path).name
 
+        # Skip download mode: directly compress
+        if self.skip_download:
+            self._print_progress()
+            if self._compress_scene(scene_rel_path):
+                with self.lock:
+                    self.stats['compressed'] += 1
+                    self.processed_scenes.add(scene_name)
+            else:
+                with self.lock:
+                    self.stats['failed'] += 1
+                    self.failed_scenes.append((scene_rel_path, "compression failed"))
+            return
+
+        # Normal mode: download then compress
         # Step 1: Download lang_feat.npy
         self._print_progress()
         if self._download_lang_feat_for_scene(scene_rel_path):
@@ -677,6 +837,12 @@ class LangFeatDownloadCompressor:
 
     def run(self):
         """Main execution: download and compress all scenes."""
+        # Stats-only mode: just show statistics and exit
+        if self.stats_only:
+            existing_stats = self._collect_grid_meta_stats()
+            self._print_grid_meta_stats(existing_stats)
+            return
+
         # Print GPU status at startup
         print("\n" + "=" * 60)
         print("GPU Detection")
@@ -760,32 +926,28 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Download and compress scannet train scenes
+    # Basic usage
     python tools/download_and_compress_langfeat.py \\
-        --repo_id GaussianWorld/scannet_mcmc_3dgs_lang_base \\
-        --local_dir ./gaussian_train/scannet/train \\
-        --target_subfolder train
+        --repo_id <repo_id> --local_dir <dir> --target_subfolder <subfolder>
 
-    # With custom token and compression parameters
-    python tools/download_and_compress_langfeat.py \\
-        --repo_id GaussianWorld/scannet_mcmc_3dgs_lang_base \\
-        --local_dir ./gaussian_train/scannet/train \\
-        --target_subfolder train \\
-        --token hf_xxx \\
-        --grid_size 0.01 \\
-        --ranks 8,16,32 \\
-        --max_threads 4 \\
-        --min_vram_gb 16
+    # Required parameters:
+    #   --repo_id:          HuggingFace repository ID
+    #   --local_dir:         Local directory to save files
+    #   --target_subfolder:  Target subfolder in the repository
 
-    # Force reprocess all scenes (delete existing compressed files)
-    python tools/download_and_compress_langfeat.py \\
-        --repo_id clapfor/scannetpp_v2_mcmc_3dgs_lang_base \\
-        --local_dir /home/cyf/SceneSplat7k/scannetpp_v2 \\
-        --target_subfolder train_grid1.0cm_chunk6x6_stride3x3 \\
-        --token hf_xxx \\
-        --rpca_tol 1e-3 \\
-        --single_gpu 0 \\
-        --force_reprocess
+    # Optional mode flags (mutually exclusive):
+    #   --stats_only:        Only show statistics of existing compressed scenes
+    #   --skip_download:     Skip download, only compress existing lang_feat.npy files
+    #   --force_reprocess:   Force reprocess all scenes (delete existing compressed files)
+    #   --test_mode:         Only process the first scene for testing
+
+    # Optional parameters:
+    #   --token:             HuggingFace access token (for private repos)
+    #   --single_gpu N:      Use specific GPU ID, disable multi-threading
+    #   --grid_size:         Grid size in meters (default: 0.01)
+    #   --ranks:             SVD ranks, comma-separated (default: 8,16,32)
+    #   --max_threads:       Max concurrent downloads/compressions (default: 2)
+    #   --rpca_tol:          RPCA convergence tolerance (default: 1e-3)
     """
     )
     parser.add_argument(
@@ -899,6 +1061,16 @@ Examples:
         action="store_true",
         help="Force reprocess all scenes, including those already compressed (deletes grid_meta_data.json and SVD files)",
     )
+    parser.add_argument(
+        "--stats_only",
+        action="store_true",
+        help="Only show statistics of existing compressed scenes without downloading/compressing",
+    )
+    parser.add_argument(
+        "--skip_download",
+        action="store_true",
+        help="Skip download and only compress existing lang_feat.npy files (useful for val/test datasets)",
+    )
 
     args = parser.parse_args()
 
@@ -923,6 +1095,8 @@ Examples:
         single_gpu=args.single_gpu,
         test_mode=args.test_mode,
         force_reprocess=args.force_reprocess,
+        stats_only=args.stats_only,
+        skip_download=args.skip_download,
     )
 
     # Run processing
