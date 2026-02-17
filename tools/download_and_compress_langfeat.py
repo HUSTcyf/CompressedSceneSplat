@@ -391,6 +391,7 @@ class LangFeatDownloadCompressor:
             'deleted': 0,
             'failed': 0,
         }
+        self.total_scenes = 0
 
         # Determine output directory for compression (same as download path)
         self.compression_output_dir = str(self.local_dir)
@@ -450,7 +451,14 @@ class LangFeatDownloadCompressor:
 
         return sorted(lang_feat_files)
 
-    def _download_lang_feat_for_scene(self, scene_rel_path: str, idx: int, total: int) -> bool:
+    def _print_progress(self):
+        """Print current processing progress."""
+        completed = self.stats['compressed'] + self.stats['failed']
+        total = self.total_scenes
+        if total > 0:
+            print(f"  [Progress] {completed}/{total} scenes processed")
+
+    def _download_lang_feat_for_scene(self, scene_rel_path: str) -> bool:
         """
         Download lang_feat.npy for a single scene using huggingface_hub.
 
@@ -458,8 +466,6 @@ class LangFeatDownloadCompressor:
 
         Args:
             scene_rel_path: Relative path to scene directory
-            idx: Current scene index (1-based)
-            total: Total number of scenes to process
 
         Returns:
             True if download successful, False otherwise
@@ -474,7 +480,6 @@ class LangFeatDownloadCompressor:
 
         while infinite_retry or (retries <= self.max_retries):
             try:
-                print(f"  Progress: [{idx}/{total}]")
                 print(f"  [Download] Starting: {repo_file_path}")
 
                 # Use hf_hub_download for efficient single-file download
@@ -627,12 +632,13 @@ class LangFeatDownloadCompressor:
 
         return True
 
-    def _download_and_compress_worker(self, scene_rel_path: str, idx: int, total: int):
+    def _download_and_compress_worker(self, scene_rel_path: str):
         """Worker thread: download then immediately compress a single scene."""
         scene_name = Path(scene_rel_path).name
 
         # Step 1: Download lang_feat.npy
-        if self._download_lang_feat_for_scene(scene_rel_path, idx, total):
+        self._print_progress()
+        if self._download_lang_feat_for_scene(scene_rel_path):
             with self.lock:
                 self.stats['downloaded'] += 1
 
@@ -696,6 +702,9 @@ class LangFeatDownloadCompressor:
             print("=" * 60)
             scenes = scenes[:1]
 
+        # Set total scenes for progress tracking
+        self.total_scenes = len(scenes)
+
         print(f"Found {len(scenes)} scenes requiring download:")
         for scene in scenes[:5]:
             print(f"  - {scene}")
@@ -727,8 +736,8 @@ class LangFeatDownloadCompressor:
 
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
             futures = {
-                executor.submit(self._download_and_compress_worker, scene, idx + 1, len(scenes)): scene
-                for idx, scene in enumerate(scenes)
+                executor.submit(self._download_and_compress_worker, scene): scene
+                for scene in scenes
             }
 
             for future in as_completed(futures):
