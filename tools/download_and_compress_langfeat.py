@@ -43,7 +43,6 @@ def get_gpu_memory_info(gpu_id: int, process_allocated_memory: Dict[int, int] = 
 
     try:
         # First try to get memory info using nvidia-smi for accurate per-process tracking
-        import subprocess
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total,memory.used,memory.free',
              '--format=csv,noheader,nounits', f'--id={gpu_id}'],

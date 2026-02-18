@@ -9,7 +9,11 @@ Higher JM distance = Better separability between classes
 Lower JM distance = Classes overlap more in the feature space
 
 Usage:
+    # Standard mode with lang_feat_svd.npz files
     python tools/compute_jm.py --data-root /path/to/data --rank 16
+
+    # Grid SVD mode with grid_svd_output directory
+    python tools/compute_jm.py --data-root /path/to/data --grid-svd-dir ./grid_svd_output --rank 16
 
 Formula:
     Gaussian: JM = sqrt(2 * (1 - exp(-DB)))
@@ -593,6 +597,64 @@ def find_scene_data(data_root: str) -> Dict[str, Dict[str, Path]]:
     return scenes
 
 
+def find_scene_data_grid_svd(data_root: str, grid_svd_dir: str) -> Dict[str, Dict[str, Path]]:
+    """
+    Find all scenes with lang_feat.npy and grid SVD compressed files.
+
+    This function handles the grid_svd_output format where compressed features
+    are stored in a separate directory with structure:
+        grid_svd_dir/{scene_name}/lang_feat_grid_svd_r{rank}.npz
+
+    Args:
+        data_root: Path to training data directory (for original lang_feat.npy)
+        grid_svd_dir: Path to grid_svd_output directory
+
+    Returns:
+        Dictionary mapping scene keys to scene info with file paths.
+    """
+    data_root = Path(data_root)
+    grid_svd_path = Path(grid_svd_dir)
+    scenes = {}
+
+    # Find all scene directories in grid_svd_output
+    for scene_svd_dir in grid_svd_path.iterdir():
+        if not scene_svd_dir.is_dir():
+            continue
+
+        scene_name = scene_svd_dir.name
+
+        # Find corresponding lang_feat.npy in data_root
+        lang_feat_path = None
+        for lang_feat_file in data_root.glob(f"**/{scene_name}/lang_feat.npy"):
+            lang_feat_path = lang_feat_file
+            break
+
+        if lang_feat_path is None:
+            continue
+
+        scene_dir_full = lang_feat_path.parent
+        # Determine dataset name
+        if "train" in scene_dir_full.parts:
+            train_idx = scene_dir_full.parts.index("train")
+            if train_idx > 0:
+                dataset_name = scene_dir_full.parts[train_idx - 1]
+            else:
+                dataset_name = "unknown"
+        else:
+            dataset_name = scene_dir_full.parent.name if scene_dir_full.parent.name != scene_name else "unknown"
+
+        key = f"{dataset_name}/{scene_name}"
+        scenes[key] = {
+            "original": lang_feat_path,
+            "grid_svd_dir": scene_svd_dir,
+            "scene_name": scene_name,
+            "dataset": dataset_name,
+            "scene_dir": scene_dir_full
+        }
+
+    return scenes
+
+
 def load_features(scene_info: Dict, rank: int = 16,
                   max_samples: int = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -673,6 +735,102 @@ def load_features(scene_info: Dict, rank: int = 16,
     return original, compressed, labels
 
 
+def load_features_grid_svd(scene_info: Dict, rank: int = 16,
+                           max_samples: int = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load original features, compressed features (from grid SVD), and labels for a scene.
+
+    This function handles the grid_svd_output format where:
+    - Grid SVD files are at: grid_svd_dir/{scene_name}/lang_feat_grid_svd_r{rank}.npz
+    - Files contain: 'compressed' [M, rank] and 'indices' [N] mapping points to grids
+
+    Args:
+        scene_info: Scene info dictionary from find_scene_data_grid_svd
+        rank: SVD rank to load (must match available files)
+        max_samples: Maximum samples per scene (default: use all)
+
+    Returns:
+        (original_features, compressed_features, labels)
+    """
+    scene_dir = scene_info["original"].parent
+    grid_svd_dir = scene_info["grid_svd_dir"]
+
+    # Load original features
+    original = np.load(scene_info["original"])
+
+    # Load grid SVD compressed features
+    grid_svd_file = grid_svd_dir / f"lang_feat_grid_svd_r{rank}.npz"
+
+    if not grid_svd_file.exists():
+        raise FileNotFoundError(f"Grid SVD file not found: {grid_svd_file}")
+
+    svd_data = np.load(grid_svd_file)
+    compressed_grid = svd_data["compressed"]  # [M, rank] - compressed features per grid
+    point_to_grid_indices = svd_data["indices"]  # [N] - grid index for each point
+
+    # Load labels
+    label_path = scene_dir / "lang_label.npy"
+    label_mask_path = scene_dir / "lang_label_mask.npy"
+
+    if label_path.exists():
+        labels = np.load(label_path)
+    else:
+        print(f"  Warning: {scene_info['scene_name']} has no lang_label.npy")
+        labels = np.full(len(original), -1, dtype=int)
+
+    if label_mask_path.exists():
+        label_mask = np.load(label_mask_path).astype(bool)
+    else:
+        print(f"  Warning: {scene_info['scene_name']} has no lang_label_mask.npy")
+        label_mask = np.full(len(original), False, dtype=bool)
+
+    # Load valid_feat_mask
+    valid_feat_mask_path = scene_dir / "valid_feat_mask.npy"
+
+    if valid_feat_mask_path.exists():
+        valid_feat_mask = np.load(valid_feat_mask_path).astype(bool)
+    else:
+        print(f"  Warning: {scene_info['scene_name']} has no valid_feat_mask.npy")
+        valid_feat_mask = np.ones(len(original), dtype=bool)
+
+    # Combine masks: filtered_label_mask = label_mask & valid_feat_mask
+    filtered_label_mask = label_mask & valid_feat_mask
+
+    # For grid SVD, indices map all points to grids
+    # Need to filter based on filtered_label_mask
+    # point_to_grid_indices contains -1 for points not in any grid
+
+    # Filter original features and labels
+    original = original[filtered_label_mask]
+    labels = labels[filtered_label_mask]
+
+    # Map filtered points to their grid features
+    # filtered_indices[i] is the grid index for filtered point i
+    filtered_label_mask = label_mask[valid_feat_mask] if valid_feat_mask_path.exists() else label_mask
+    filtered_indices = point_to_grid_indices[filtered_label_mask]
+
+    # Create compressed features by mapping each point to its grid feature
+    # Handle points with invalid grid index (-1)
+    valid_grid_mask = filtered_indices >= 0
+    compressed = np.zeros((len(filtered_indices), rank), dtype=np.float32)
+
+    if np.any(valid_grid_mask):
+        compressed[valid_grid_mask] = compressed_grid[filtered_indices[valid_grid_mask]]
+    else:
+        print(f"  Warning: No valid grid indices found for {scene_info['scene_name']}")
+
+    # Subsample if needed
+    if max_samples is not None and len(original) > max_samples:
+        indices = np.random.choice(len(original), max_samples, replace=False)
+        original = original[indices]
+        compressed = compressed[indices]
+        labels = labels[indices]
+
+    print(f"  Loaded grid SVD features: {compressed.shape[0]} samples, rank {compressed.shape[1]}")
+    print(f"  Original features: {original.shape[0]} samples, {original.shape[1]} dimensions")
+    return original, compressed, labels
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Compute Average JM Distance Between Classes'
@@ -707,6 +865,8 @@ def main():
                        help='Show per-scene results')
     parser.add_argument('--per-class-pair', action='store_true',
                        help='Show per-class-pair JM distances')
+    parser.add_argument('--grid-svd-dir', type=str, default=None,
+                       help='Path to grid_svd_output directory (for loading grid-compressed features)')
 
     args = parser.parse_args()
 
@@ -721,14 +881,24 @@ def main():
     print(f"Method:         {args.method}")
     if args.method in ['histogram', 'multidim_gpu', 'random_proj']:
         print(f"Histogram bins:  {args.bins}")
+    if args.grid_svd_dir:
+        print(f"Grid SVD dir:   {args.grid_svd_dir}")
 
     # Find all scene data
-    print(f"\nSearching for scenes in {args.data_root}...")
-    scenes = find_scene_data(args.data_root)
-
-    if not scenes:
-        print("No scenes found with both lang_feat.npy and lang_feat_svd.npz files!")
-        return
+    if args.grid_svd_dir:
+        print(f"\nSearching for scenes in grid_svd_dir: {args.grid_svd_dir}...")
+        scenes = find_scene_data_grid_svd(args.data_root, args.grid_svd_dir)
+        if not scenes:
+            print("No scenes found with grid SVD files!")
+            return
+        use_grid_svd = True
+    else:
+        print(f"\nSearching for scenes in {args.data_root}...")
+        scenes = find_scene_data(args.data_root)
+        if not scenes:
+            print("No scenes found with both lang_feat.npy and lang_feat_svd.npz files!")
+            return
+        use_grid_svd = False
 
     print(f"Found {len(scenes)} scenes")
 
@@ -740,12 +910,15 @@ def main():
     original_jm_values = []
     compressed_jm_values = []
 
+    # Choose the appropriate load function
+    load_func = load_features_grid_svd if use_grid_svd else load_features
+
     for scene_key in sorted(scenes.keys()):
         scene_info = scenes[scene_key]
         print(f"\n[{list(scenes.keys()).index(scene_key) + 1}/{len(scenes)}] Processing {scene_key}...")
 
         try:
-            original, compressed, labels = load_features(
+            original, compressed, labels = load_func(
                 scene_info, rank=args.rank, max_samples=args.max_samples
             )
 
@@ -853,7 +1026,7 @@ def main():
             print(f"\nExample pairwise JM distances for {first_scene} ({args.method} method):")
             scene_info = scenes[first_scene]
             try:
-                original, _, labels = load_features(scene_info, rank=args.rank, max_samples=1000)
+                original, _, labels = load_func(scene_info, rank=args.rank, max_samples=1000)
                 pairwise_orig, _ = compute_pairwise_jm_distances(
                     original, labels, method=args.method, n_bins=args.bins, aggregation=args.aggregation, device='cuda'
                 )
@@ -899,6 +1072,8 @@ def main():
                 "svd_rank": args.rank,
                 "max_samples": args.max_samples,
                 "method": args.method,
+                "grid_svd_dir": args.grid_svd_dir,
+                "use_grid_svd": use_grid_svd,
                 "histogram_bins": args.bins if args.method in ['histogram', 'multidim_gpu', 'random_proj'] else None
             }
         }
