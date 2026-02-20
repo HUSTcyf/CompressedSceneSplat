@@ -496,26 +496,101 @@ def perform_svd_decomposition(
     print(f"  Scene: {scene_name}")
     print(f"    Grids: {M:,}, Feature dim: {D}")
 
+    # Build weight vectors from grid_point_counts (for weighted SVD) - ALWAYS needed
+    # Convert numpy arrays to PyTorch tensors on GPU
+    d_gpu = torch.from_numpy(grid_point_counts).to(device)
+    d_sqrt = torch.sqrt(d_gpu)  # [M] - sqrt counts
+    d_inv_sqrt = 1.0 / d_sqrt  # [M] - inverse sqrt counts
+
     # Apply RPCA if requested
     # feat_matrix = torch.from_numpy(grid_avg_feats).to(device)
     if use_rpca:
         print(f"    Applying RPCA preprocessing...")
         rpca_results = apply_rpca(grid_avg_feats, max_iter=rpca_max_iter, tol=rpca_tol, device=device, structured=True, indices=point_to_grid_indices, d=grid_point_counts, return_tensors=True)
-        feat_matrix = rpca_results['L']  # L is now a GPU tensor directly
+        L_matrix = rpca_results['L']  # L is now a GPU tensor directly
         print("rpca finished")
-        # Build weight vectors from grid_point_counts (for weighted SVD) - PyTorch GPU
-        # Convert numpy arrays to PyTorch tensors on GPU
-        d_gpu = torch.from_numpy(grid_point_counts).to(device)
-        d_sqrt = torch.sqrt(d_gpu)  # [M] - sqrt counts
-        d_inv_sqrt = 1.0 / d_sqrt  # [M] - inverse sqrt counts
-        # Use broadcasting: [M, 1] * [M, D] = [M, D] via GPU (feat_matrix is already a GPU tensor)
+        # Use broadcasting: [M, 1] * [M, D] = [M, D] via GPU (L_matrix is already a GPU tensor)
+        feat_matrix = d_sqrt.unsqueeze(-1) * L_matrix  # [M, 1] * [M, D] = [M, D] broadcasting
+        # Safe cleanup: clear references without triggering CUDA errors
+        rpca_results.clear()
+        rpca_results = None
+    else:
+        # No RPCA, directly use grid_avg_feats with weighting
+        feat_matrix = torch.from_numpy(grid_avg_feats).to(device)
         feat_matrix = d_sqrt.unsqueeze(-1) * feat_matrix  # [M, 1] * [M, D] = [M, D] broadcasting
-        del rpca_results  # 释放 L 和 S 矩阵
-        torch.cuda.empty_cache()  # 清空 CUDA 缓存
 
-    # Perform SVD
+    # Perform SVD with error handling and fallback
     print(f"    Computing SVD...")
-    U, S, Vt = torch.linalg.svd(feat_matrix, full_matrices=False)
+
+    # Validate tensor before operations
+    try:
+        print(f"    feat_matrix shape: {feat_matrix.shape}, dtype: {feat_matrix.dtype}, device: {feat_matrix.device}")
+        # Check for NaN or Inf values in feat_matrix (with error handling)
+        has_nan = torch.isnan(feat_matrix).any()
+        has_inf = torch.isinf(feat_matrix).any()
+    except RuntimeError as e:
+        print(f"    [Error] feat_matrix is corrupted: {e}")
+        print(f"    [Fallback] Recreating feat_matrix from original data...")
+        # Fallback: recreate feat_matrix without RPCA
+        feat_matrix = torch.from_numpy(grid_avg_feats).to(device)
+        feat_matrix = d_sqrt.unsqueeze(-1) * feat_matrix  # Apply weighting
+        has_nan = torch.isnan(feat_matrix).any()
+        has_inf = torch.isinf(feat_matrix).any()
+
+    if has_nan or has_inf:
+        issues = []
+        if has_nan:
+            issues.append("NaN")
+        if has_inf:
+            issues.append("Inf")
+        raise ValueError(f"feat_matrix contains {', '.join(issues)} values, cannot proceed with SVD")
+
+    # Try SVD with different backends
+    svd_success = False
+    svd_error = None
+    original_backend = torch.backends.cuda.preferred_linalg_library()
+
+    # List of backends to try: default, cusolver_native, magma
+    backends_to_try = [None, 'cusolver_native', 'magma']
+
+    for backend in backends_to_try:
+        try:
+            if backend is not None:
+                torch.backends.cuda.preferred_linalg_library(backend)
+                print(f"    Trying SVD with backend: {backend}...")
+            else:
+                print(f"    Trying SVD with default backend...")
+
+            U, S, Vt = torch.linalg.svd(feat_matrix, full_matrices=False)
+            svd_success = True
+            print(f"    SVD successful with backend: {backend if backend else 'default'}")
+            break
+
+        except RuntimeError as e:
+            svd_error = e
+            print(f"    SVD failed with backend {backend if backend else 'default'}: {str(e)[:100]}")
+            # Clean up before next attempt
+            torch.cuda.empty_cache()
+            continue
+
+    # Restore original backend
+    if original_backend is not None:
+        torch.backends.cuda.preferred_linalg_library(original_backend)
+
+    # If all GPU attempts failed, try CPU fallback
+    if not svd_success:
+        print(f"    [Warning] All GPU SVD attempts failed, trying CPU fallback...")
+        try:
+            feat_matrix_cpu = feat_matrix.cpu()
+            U, S, Vt = torch.linalg.svd(feat_matrix_cpu, full_matrices=False)
+            U = U.to(device)
+            S = S.to(device)
+            Vt = Vt.to(device)
+            svd_success = True
+            print(f"    SVD successful on CPU, moved results back to {device}")
+        except Exception as e:
+            print(f"    [Error] CPU SVD also failed: {e}")
+            raise RuntimeError(f"Failed to compute SVD after all fallback attempts. Original error: {svd_error}") from svd_error
 
     # Perform weighted SVD using broadcasting (no large matrix allocation)
     # U [M, D] * D_inv_sqrt [M, 1] -> [M, D] via broadcast

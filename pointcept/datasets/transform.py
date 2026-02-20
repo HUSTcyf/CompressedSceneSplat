@@ -242,6 +242,8 @@ class SphereCropRandomMaxPoints(object):
                 data_dict["lang_feat_64"] = data_dict["lang_feat_64"][idx_crop]
             if "valid_feat_mask" in data_dict.keys():
                 data_dict["valid_feat_mask"] = data_dict["valid_feat_mask"][idx_crop]
+            if "point_to_grid" in data_dict.keys():
+                data_dict["point_to_grid"] = data_dict["point_to_grid"][idx_crop]
 
 
             if "segment" in data_dict.keys():
@@ -1480,7 +1482,8 @@ class SphereCrop(object):
                         data_crop_dict["valid_feat_mask"] = data_dict[
                             "valid_feat_mask"
                         ][idx_crop]
-
+                    if "point_to_grid" in data_dict.keys():
+                        data_crop_dict["point_to_grid"] = data_dict["point_to_grid"][idx_crop]
                     if "scale" in data_dict.keys():
                         data_crop_dict["scale"] = data_dict["scale"][idx_crop]
                     if "displacement" in data_dict.keys():
@@ -1539,7 +1542,8 @@ class SphereCrop(object):
                 data_dict["lang_feat"] = data_dict["lang_feat"][idx_crop]
             if "valid_feat_mask" in data_dict.keys():
                 data_dict["valid_feat_mask"] = data_dict["valid_feat_mask"][idx_crop]
-
+            if "point_to_grid" in data_dict.keys():
+                data_dict["point_to_grid"] = data_dict["point_to_grid"][idx_crop]
             if "segment" in data_dict.keys():
                 data_dict["segment"] = data_dict["segment"][idx_crop]
             if "instance" in data_dict.keys():
@@ -1664,6 +1668,48 @@ class InstanceParser(object):
         data_dict["instance"] = instance
         data_dict["instance_centroid"] = centroid
         data_dict["bbox"] = bbox
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class FilterValidPoints(object):
+    """Filter points based on valid_feat_mask.
+
+    This transform filters the point cloud to only include points where valid_feat_mask is True.
+    This is useful for removing points with invalid/missing language features before applying
+    transforms like GridSample.
+
+    Args:
+        key: The name of the valid mask field. Default is "valid_feat_mask".
+    """
+    def __init__(self, key="valid_feat_mask"):
+        self.key = key
+
+    def __call__(self, data_dict):
+        if self.key not in data_dict.keys():
+            # If no valid_feat_mask, return data as-is
+            return data_dict
+
+        valid_mask = data_dict[self.key]
+
+        # Find indices where mask is True
+        valid_indices = np.where(valid_mask)[0]
+
+        if len(valid_indices) == 0:
+            # No valid points, this could be an error
+            raise ValueError(
+                f"No valid points found after filtering with {self.key}. "
+                f"This may indicate all points have invalid/missing features."
+            )
+
+        # Filter all array-like keys in data_dict
+        for key in data_dict.keys():
+            value = data_dict[key]
+            if isinstance(value, np.ndarray) and len(value) == len(valid_mask):
+                data_dict[key] = value[valid_indices]
+            elif isinstance(value, list) and len(value) == len(valid_mask):
+                data_dict[key] = [value[i] for i in valid_indices]
+
         return data_dict
 
 

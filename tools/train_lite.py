@@ -22,12 +22,26 @@ Usage:
     python tools/train_lite.py \
         --config-file configs/custom/lang-pretrain-litept-ovs.py \
         --options save_path=exp_runs/litept_ovs_pretrain batch_size=8
+
+    # With density-invariant training
+    python tools/train_lite.py \
+        --config-file configs/custom/lang-pretrain-litept-ovs.py \
+        --density-invariant \
+        --options density_invariant.svd_rank=16
+
+    # Density-invariant training with specific SVD rank
+    python tools/train_lite.py \
+        --config-file configs/custom/lang-pretrain-litept-ovs.py \
+        --density-invariant \
+        --num-gpus 4 \
+        --options density_invariant.svd_rank=16 density_invariant.consistency_weight=0.1
 """
 
 import os
 import sys
 import time
 import datetime
+import argparse
 from pathlib import Path
 
 # Add project root to Python path
@@ -45,6 +59,9 @@ from pointcept.engines.train import TRAINERS
 from pointcept.engines.launch import launch
 from pointcept.utils import comm
 
+# Import DensityInvariantTrainer to ensure it's registered
+import pointcept.engines.density_invariant_trainer  # noqa: F401
+
 
 def format_time(seconds):
     """Format seconds into human-readable time string."""
@@ -59,12 +76,29 @@ def format_time(seconds):
         return f"{int(hours)}h {int(minutes)}m ({int(seconds)}s)"
 
 
-def main_worker(cfg):
+def main_worker(cfg, density_invariant=False):
     # Record start time
     start_time = time.time()
     start_datetime = datetime.datetime.now()
 
     cfg = default_setup(cfg)
+
+    # Override trainer type if density-invariant training is requested
+    if density_invariant:
+        original_trainer_type = cfg.train.type
+        cfg.train.type = "DensityInvariantTrainer"
+
+        # Log the trainer override
+        from pointcept.utils.logger import get_root_logger
+        logger = get_root_logger()
+        logger.info("=" * 80)
+        logger.info("Density-Invariant Training Mode")
+        logger.info("=" * 80)
+        logger.info(f"Original trainer type: {original_trainer_type}")
+        logger.info(f"Overridden trainer type: {cfg.train.type}")
+        logger.info(f"SVD rank: {cfg.get('density_invariant', {}).get('svd_rank', 'auto (highest available)')}")
+        logger.info("=" * 80)
+        logger.info("")
 
     # Log start time
     from pointcept.utils.logger import get_root_logger
@@ -96,7 +130,14 @@ def main_worker(cfg):
 
 
 def main():
-    args = default_argument_parser().parse_args()
+    # Create argument parser with density-invariant flag
+    parser = default_argument_parser()
+    parser.add_argument(
+        "--density-invariant",
+        action="store_true",
+        help="Enable density-invariant training with DensityInvariantTrainer"
+    )
+    args = parser.parse_args()
     cfg = default_config_parser(args.config_file, args.options)
 
     if "SLURM_PROCID" in os.environ and args.multi_node:
@@ -132,18 +173,20 @@ def main():
                 print(
                     f"Rank {rank}: Created local process group for node {i}: {ranks_on_node}"
                 )
-        main_worker(cfg)
+        main_worker(cfg, density_invariant=args.density_invariant)
     else:
         # Standard launcher for non-SLURM environments
+        # Pass density_invariant as part of cfg tuple since launch() only accepts specific parameters
         launch(
             main_worker,
             num_gpus_per_machine=args.num_gpus,
             num_machines=args.num_machines,
             machine_rank=args.machine_rank,
             dist_url=args.dist_url,
-            cfg=(cfg,),
+            cfg=(cfg, args.density_invariant),
         )
 
 # CUDA_VISIBLE_DEVICES=4 python tools/train_lite.py --config-file configs/custom/lang-pretrain-litept-ovs.py --options weight=LitePT/ckpts/model_best_ovs.pth --num-gpus 1
+# CUDA_VISIBLE_DEVICES=4 python tools/train_lite.py --config-file configs/custom/lang-pretrain-litept-ovs.py --density-invariant --options density_invariant.svd_rank=16 --num-gpus 1
 if __name__ == "__main__":
     main()

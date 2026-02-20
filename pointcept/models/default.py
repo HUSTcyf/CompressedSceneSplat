@@ -107,7 +107,7 @@ class LangPretrainer(nn.Module):
                 segment=segment,
                 epoch_progress=input_dict["epoch_progress"],
             )
-            return dict(loss=loss)
+            return dict(loss=loss, feat=point_feat["feat"])
         # test
         else:
             return dict(point_feat=point_feat)

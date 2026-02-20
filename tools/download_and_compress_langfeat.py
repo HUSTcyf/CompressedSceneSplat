@@ -481,12 +481,41 @@ class LangFeatDownloadCompressor:
         if total > 0:
             print(f"  [Progress] {completed}/{total} scenes processed")
 
-    def _collect_grid_meta_stats(self) -> Dict[str, any]:
+    def _check_metadata_completeness(self, meta_file: Path) -> Tuple[bool, List[str]]:
+        """
+        Check if grid_meta_data.json contains all required statistics.
+
+        Args:
+            meta_file: Path to grid_meta_data.json file
+
+        Returns:
+            Tuple of (is_complete, missing_keys)
+        """
+        try:
+            with open(meta_file, 'r') as f:
+                meta_data = json.load(f)
+
+            missing_keys = []
+            for r in self.ranks:
+                error_key = f'reconstruction_error_r{r}'
+                energy_key = f'rank_energy_ratio_r{r}'
+                if error_key not in meta_data:
+                    missing_keys.append(error_key)
+                if energy_key not in meta_data:
+                    missing_keys.append(energy_key)
+
+            return len(missing_keys) == 0, missing_keys
+        except Exception as e:
+            return False, ['file_read_error']
+
+    def _collect_grid_meta_stats(self) -> Tuple[Dict[str, any], List[str]]:
         """
         Collect statistics from all existing grid_meta_data.json files.
 
+        Also identifies scenes with incomplete metadata that need re-processing.
+
         Returns:
-            Dictionary containing aggregated statistics
+            Tuple of (statistics dictionary, list of scenes needing re-processing)
         """
         base_path = self.local_dir / self.target_subfolder
         stats = {
@@ -497,15 +526,30 @@ class LangFeatDownloadCompressor:
             'reconstruction_errors': {},  # r -> [error1, error2, ...]
             'rank_energy_ratios': {},  # r -> [ratio1, ratio2, ...]
         }
+        incomplete_scenes = []  # List of scene_rel_path that need re-processing
 
         if not base_path.exists():
-            return stats
+            return stats, incomplete_scenes
 
         # Find all grid_meta_data.json files
-        for meta_file in base_path.rglob("grid_meta_data.json"):
+        from tqdm import tqdm
+        for meta_file in tqdm(base_path.rglob("grid_meta_data.json"), desc="Collecting grid metadata stats"):
             try:
                 with open(meta_file, 'r') as f:
                     meta_data = json.load(f)
+
+                # Check metadata completeness
+                is_complete, missing_keys = self._check_metadata_completeness(meta_file)
+                if not is_complete:
+                    # Get relative path from local_dir
+                    scene_dir = meta_file.parent
+                    rel_path = scene_dir.relative_to(self.local_dir)
+                    scene_rel_path = str(rel_path).replace('\\', '/')
+                    incomplete_scenes.append(scene_rel_path)
+                    print(f"  [Incomplete Metadata] {scene_rel_path} missing: {missing_keys}")
+                    # Still count it and collect whatever stats we have
+                    stats['total_scenes'] += 1
+                    continue
 
                 stats['total_scenes'] += 1
 
@@ -534,7 +578,144 @@ class LangFeatDownloadCompressor:
                 print(f"  [Warning] Could not read {meta_file}: {e}")
                 continue
 
-        return stats
+        return stats, incomplete_scenes
+
+    def _reprocess_incomplete_scenes(self, incomplete_scenes: List[str]) -> Dict[str, int]:
+        """
+        Re-download and compress scenes with incomplete metadata using multi-threading.
+
+        For each incomplete scene:
+        1. Delete existing grid_meta_data.json and SVD npz files
+        2. Re-download lang_feat.npy (if not skip_download mode)
+        3. Re-compress the scene
+        4. After compression, verify JSON completeness
+        5. If still incomplete, preserve lang_feat.npy for manual inspection
+
+        Args:
+            incomplete_scenes: List of scene relative paths needing re-processing
+
+        Returns:
+            Dictionary with reprocessing statistics
+        """
+        reprocess_stats = {
+            'total': len(incomplete_scenes),
+            'reprocessed': 0,
+            'failed': 0,
+            'still_incomplete': 0,
+        }
+
+        if not incomplete_scenes:
+            print("\n  [Reprocess] No incomplete scenes found.")
+            return reprocess_stats
+
+        print(f"\n  [Reprocess] Found {len(incomplete_scenes)} scenes with incomplete metadata")
+        print(f"  [Reprocess] These scenes will be re-downloaded and re-compressed...")
+
+        # Print GPU status
+        if self.use_gpu:
+            print("\n  [Reprocess] GPU Status:")
+            self.gpu_monitor.print_status()
+
+        # Use multi-threading for reprocessing
+        print(f"  [Reprocess] Using multi-threaded processing (max {self.max_threads} threads)")
+
+        with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+            futures = {
+                executor.submit(self._reprocess_single_scene_worker, scene): scene
+                for scene in incomplete_scenes
+            }
+
+            for future in as_completed(futures):
+                scene = futures[future]
+                try:
+                    result = future.result()
+                    if result == 'success':
+                        reprocess_stats['reprocessed'] += 1
+                    elif result == 'still_incomplete':
+                        reprocess_stats['still_incomplete'] += 1
+                    else:  # failed
+                        reprocess_stats['failed'] += 1
+                except Exception as e:
+                    print(f"  [Error] Exception during reprocessing of {scene}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    reprocess_stats['failed'] += 1
+
+        return reprocess_stats
+
+    def _reprocess_single_scene_worker(self, scene_rel_path: str) -> str:
+        """
+        Worker function for reprocessing a single incomplete scene.
+
+        Args:
+            scene_rel_path: Relative path to scene directory
+
+        Returns:
+            'success' if reprocessing completed successfully
+            'still_incomplete' if metadata still incomplete after reprocessing
+            'failed' if reprocessing failed
+        """
+        scene_dir = self.local_dir / scene_rel_path
+        grid_meta_path = scene_dir / "grid_meta_data.json"
+
+        try:
+            # Step 1: Delete existing compressed files
+            print(f"\n  [Reprocess] Cleaning up: {scene_rel_path}")
+            if grid_meta_path.exists():
+                grid_meta_path.unlink()
+                print(f"    [Cleanup] Deleted grid_meta_data.json")
+
+            # Delete SVD npz files
+            for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+                svd_file.unlink()
+                print(f"    [Cleanup] Deleted {svd_file.name}")
+
+            # Step 2: Ensure lang_feat.npy exists (download if needed, unless skip_download)
+            lang_feat_path = scene_dir / "lang_feat.npy"
+
+            if not lang_feat_path.exists() and not self.skip_download:
+                print(f"    [Download] lang_feat.npy missing, re-downloading...")
+                if self._download_lang_feat_for_scene(scene_rel_path):
+                    with self.lock:
+                        self.stats['downloaded'] += 1
+                else:
+                    print(f"    [Error] Failed to download lang_feat.npy for {scene_rel_path}")
+                    return 'failed'
+            elif not lang_feat_path.exists() and self.skip_download:
+                print(f"    [Skip] lang_feat.npy missing but skip_download=True, cannot reprocess")
+                return 'failed'
+            else:
+                print(f"    [Info] lang_feat.npy exists, reusing existing file")
+
+            # Step 3: Re-compress the scene
+            print(f"    [Compress] Re-compressing scene...")
+            if self._compress_scene(scene_rel_path):
+                print(f"    [Success] Compression completed")
+
+                # Step 4: Verify JSON completeness
+                is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
+                if not is_complete:
+                    print(f"    [Warning] Metadata still incomplete after reprocessing: {missing_keys}")
+                    print(f"    [Warning] Preserving lang_feat.npy for manual inspection")
+                    return 'still_incomplete'
+                else:
+                    print(f"    [Verified] Metadata is now complete")
+                    # Delete lang_feat.npy only if metadata is complete
+                    if lang_feat_path.exists():
+                        lang_feat_path.unlink()
+                        print(f"    [Cleanup] Deleted lang_feat.npy (metadata verified complete)")
+                        with self.lock:
+                            self.stats['deleted'] += 1
+                    return 'success'
+            else:
+                print(f"    [Error] Compression failed for {scene_rel_path}")
+                return 'failed'
+
+        except Exception as e:
+            print(f"    [Error] Exception during reprocessing of {scene_rel_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 'failed'
 
     def _print_grid_meta_stats(self, stats: Dict[str, any]):
         """
@@ -666,6 +847,58 @@ class LangFeatDownloadCompressor:
 
         return False
 
+    def _retry_compression_single_threaded(
+        self,
+        scene_dir: Path,
+        cmd_str: str,
+        max_retries: int = 3
+    ) -> bool:
+        """
+        Retry compression in single-threaded mode until metadata is complete.
+
+        This function is called when normal multi-threaded compression produces
+        incomplete metadata. It uses os.system for real-time output and retries
+        until the grid_meta_data.json is complete or max retries is reached.
+
+        Args:
+            scene_dir: Path to scene directory
+            cmd_str: Command string to execute
+            max_retries: Maximum number of retry attempts
+
+        Returns:
+            True if metadata is complete after retries, False otherwise
+        """
+        grid_meta_path = scene_dir / "grid_meta_data.json"
+        lang_feat_path = scene_dir / "lang_feat.npy"
+
+        for retry in range(max_retries):
+            print(f"  [Retry] Attempt {retry + 1}/{max_retries} (single-threaded mode)...")
+            returncode = os.system(cmd_str)
+
+            if returncode == 0 and grid_meta_path.exists():
+                is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
+                if is_complete:
+                    print(f"  [Verified] Metadata complete after retry")
+                    try:
+                        lang_feat_path.unlink()
+                        print(f"  [Cleanup] Deleted lang_feat.npy (metadata verified complete)")
+                        with self.lock:
+                            self.stats['deleted'] += 1
+                    except Exception as e:
+                        print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    return True
+
+            # Cleanup incomplete files before retry
+            if grid_meta_path.exists():
+                grid_meta_path.unlink()
+            for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+                svd_file.unlink()
+
+        # All retries failed
+        print(f"  [Error] All retries failed, metadata still incomplete")
+        print(f"  [Warning] Preserving lang_feat.npy for manual inspection")
+        return False
+
     def _compress_scene(self, scene_rel_path: str) -> bool:
         """
         Compress lang_feat.npy for a single scene using compress_grid_svd.py.
@@ -735,15 +968,16 @@ class LangFeatDownloadCompressor:
             if not self.use_rpca:
                 cmd.append("--no_rpca")
 
+            cmd_str = " ".join(cmd)
+
             print(f"  [Compress] Starting: {scene_rel_path} on {device}")
 
             # Test mode: use os.system to show output directly
             if self.test_mode:
                 print(f"  [Compress] Test mode: showing real-time output")
-                cmd_str = " ".join(cmd)
                 returncode = os.system(cmd_str)
             else:
-                # Normal mode: run compression subprocess
+                # Normal mode: run compression subprocess (multi-threaded)
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -751,31 +985,56 @@ class LangFeatDownloadCompressor:
                     timeout=3600,  # 1 hour timeout per scene
                 )
                 returncode = result.returncode
+
             success = (returncode == 0)
 
-            if success:
-                print(f"  [Compress] Success: {scene_rel_path} on {device}")
-
-                # Delete original lang_feat.npy to save space
-                try:
-                    lang_feat_path.unlink()
-                    print(f"  [Cleanup] Deleted lang_feat.npy: {scene_rel_path}")
-                    with self.lock:
-                        self.stats['deleted'] += 1
-                except Exception as e:
-                    print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
-            else:
+            if not success:
                 print(f"  [Compress] Failed for {scene_rel_path}")
-                # Only show stderr in non-test mode (test mode already showed output)
                 if not self.test_mode and 'result' in locals() and result.stderr:
                     print(f"  [Compress] Error output:\n{result.stderr[:500]}")
                 return False
+
+            print(f"  [Compress] Success: {scene_rel_path} on {device}")
+
+            # Check metadata completeness
+            grid_meta_path = scene_dir / "grid_meta_data.json"
+
+            if grid_meta_path.exists():
+                is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
+
+                if is_complete:
+                    # Metadata is complete, safe to delete lang_feat.npy
+                    print(f"  [Verified] Metadata complete for {scene_rel_path}")
+                    try:
+                        lang_feat_path.unlink()
+                        print(f"  [Cleanup] Deleted lang_feat.npy: {scene_rel_path} (metadata verified complete)")
+                        with self.lock:
+                            self.stats['deleted'] += 1
+                    except Exception as e:
+                        print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    return True
+                else:
+                    # Metadata is incomplete, switch to single-threaded mode and retry
+                    print(f"  [Warning] Metadata incomplete (missing: {missing_keys})")
+                    print(f"  [Retry] Switching to single-threaded mode...")
+
+                    # Delete incomplete files before retry
+                    grid_meta_path.unlink()
+                    for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+                        svd_file.unlink()
+
+                    # Call retry function (GPU is still allocated, will be released in finally block)
+                    return self._retry_compression_single_threaded(scene_dir, cmd_str)
+            else:
+                # grid_meta_data.json doesn't exist, retry in single-threaded mode
+                print(f"  [Warning] grid_meta_data.json not found after compression")
+                print(f"  [Retry] Switching to single-threaded mode...")
+                return self._retry_compression_single_threaded(scene_dir, cmd_str)
+
         finally:
             # Release GPU when done (only in multi-GPU mode with monitor)
             if gpu_id is not None and self.single_gpu is None:
                 self.gpu_monitor.release_gpu(gpu_id)
-
-        return True
 
     def _download_and_compress_worker(self, scene_rel_path: str):
         """Worker thread: download then immediately compress a single scene."""
@@ -838,8 +1097,36 @@ class LangFeatDownloadCompressor:
         """Main execution: download and compress all scenes."""
         # Stats-only mode: just show statistics and exit
         if self.stats_only:
-            existing_stats = self._collect_grid_meta_stats()
+            existing_stats, incomplete_scenes = self._collect_grid_meta_stats()
             self._print_grid_meta_stats(existing_stats)
+
+            # If incomplete scenes found, reprocess them
+            if incomplete_scenes:
+                print("\n" + "=" * 60)
+                print("Incomplete Metadata Detected")
+                print("=" * 60)
+                print(f"Found {len(incomplete_scenes)} scenes with incomplete metadata.")
+                print("These scenes will be re-downloaded and re-compressed...")
+
+                # Reprocess incomplete scenes
+                reprocess_stats = self._reprocess_incomplete_scenes(incomplete_scenes)
+
+                # Print reprocessing summary
+                print("\n" + "=" * 60)
+                print("Reprocessing Summary")
+                print("=" * 60)
+                print(f"  Total incomplete scenes: {reprocess_stats['total']}")
+                print(f"  Successfully reprocessed: {reprocess_stats['reprocessed']}")
+                print(f"  Failed: {reprocess_stats['failed']}")
+                print(f"  Still incomplete after reprocessing: {reprocess_stats['still_incomplete']}")
+
+                # If reprocessing was successful, re-collect and print final stats
+                if reprocess_stats['reprocessed'] > 0:
+                    print("\n" + "=" * 60)
+                    print("Re-collecting statistics after reprocessing...")
+                    print("=" * 60)
+                    final_stats, _ = self._collect_grid_meta_stats()
+                    self._print_grid_meta_stats(final_stats)
             return
 
         # Print GPU status at startup

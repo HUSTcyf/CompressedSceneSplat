@@ -106,7 +106,11 @@ class InformationWriter(HookBase):
     def after_step(self):
         if "model_output_dict" in self.trainer.comm_info.keys():
             model_output_dict = self.trainer.comm_info["model_output_dict"]
-            self.model_output_keys = model_output_dict.keys()
+            # Filter to only include scalar tensor keys
+            self.model_output_keys = [
+                key for key, value in model_output_dict.items()
+                if isinstance(value, torch.Tensor) and value.numel() == 1
+            ]
             for key in self.model_output_keys:
                 self.trainer.storage.put_scalar(key, model_output_dict[key].item())
 
