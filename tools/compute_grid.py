@@ -11,8 +11,11 @@ This script demonstrates how grid coordinates are computed in LitePT:
 6. Apply Z-order Morton encoding
 7. Find unique grids using torch.unique
 8. Perform grid reassignment (single points -> multi-point grids)
-9. Compute cosine similarity: each point vs grid average feature
-10. Output detailed statistics
+9. Compute similarity metrics between each point and grid average feature:
+   - Cosine Similarity: measures angular similarity (higher = more similar)
+   - L1 Distance: Manhattan distance (lower = more similar)
+   - L2 Distance: Euclidean distance (lower = more similar)
+10. Output detailed statistics including correlations between metrics
 
 Usage (Single Scene):
     python tools/compute_grid.py --data_dir /path/to/scene --grid_size 0.01
@@ -197,6 +200,64 @@ def compute_cosine_similarity_for_grid(lang_feats_tensor):
     # Return average cosine similarity
     avg_cosine_sim = off_diagonal_sim.mean().item()
     return avg_cosine_sim
+
+
+def compute_l1_distance_for_grid(lang_feats_tensor):
+    """Compute average pairwise L1 (Manhattan) distance for features in a grid.
+
+    Args:
+        lang_feats_tensor: [K, D] - language features for K points in a grid
+
+    Returns:
+        avg_l1_distance: float - average pairwise L1 distance
+    """
+    K = lang_feats_tensor.shape[0]
+
+    if K <= 1: return 0.0
+
+    # Compute pairwise L1 distance matrix using broadcasting
+    # diff[i, j, :] = feats[i] - feats[j]
+    diff = lang_feats_tensor.unsqueeze(0) - lang_feats_tensor.unsqueeze(1)  # [K, K, D]
+    # L1 distance: sum of absolute differences along feature dimension
+    l1_dist_matrix = torch.sum(torch.abs(diff), dim=2)  # [K, K]
+
+    # Extract upper triangle (excluding diagonal) to avoid duplicate and self-comparisons
+    triu_indices = torch.triu_indices(K, K)
+    mask = triu_indices[0] != triu_indices[1]
+    off_diagonal_dist = l1_dist_matrix[triu_indices[0][mask], triu_indices[1][mask]]
+
+    # Return average L1 distance
+    avg_l1_distance = off_diagonal_dist.mean().item()
+    return avg_l1_distance
+
+
+def compute_l2_distance_for_grid(lang_feats_tensor):
+    """Compute average pairwise L2 (Euclidean) distance for features in a grid.
+
+    Args:
+        lang_feats_tensor: [K, D] - language features for K points in a grid
+
+    Returns:
+        avg_l2_distance: float - average pairwise L2 distance
+    """
+    K = lang_feats_tensor.shape[0]
+
+    if K <= 1: return 0.0
+
+    # Compute pairwise L2 distance matrix using broadcasting
+    # diff[i, j, :] = feats[i] - feats[j]
+    diff = lang_feats_tensor.unsqueeze(0) - lang_feats_tensor.unsqueeze(1)  # [K, K, D]
+    # L2 distance: sqrt of sum of squared differences
+    l2_dist_matrix = torch.sqrt(torch.sum(diff ** 2, dim=2).clamp(min=0))  # [K, K]
+
+    # Extract upper triangle (excluding diagonal) to avoid duplicate and self-comparisons
+    triu_indices = torch.triu_indices(K, K)
+    mask = triu_indices[0] != triu_indices[1]
+    off_diagonal_dist = l2_dist_matrix[triu_indices[0][mask], triu_indices[1][mask]]
+
+    # Return average L2 distance
+    avg_l2_distance = off_diagonal_dist.mean().item()
+    return avg_l2_distance
 
 
 def compute_grid_statistics(coord, feat, lang_feat, valid_mask, grid_size, device="cuda"):
@@ -524,40 +585,58 @@ def compute_grid_statistics(coord, feat, lang_feat, valid_mask, grid_size, devic
         # After reassignment, recalculate cosine similarity using new method
         # New method: compute similarity between each point and grid average feature
         if multi_point_grid_indices:
-            print("\n[Re-calculating Cosine Similarity] Computing similarity with updated grids...")
+            print("\n[Re-calculating Similarity Metrics] Computing with updated grids...")
             print("  - Method: each point vs grid average feature (not pairwise)")
-            
+
             final_grid_cosine_sims = []
+            final_grid_l1_dists = []
+            final_grid_l2_dists = []
             final_grid_counts = []
-            
-            for grid_idx in tqdm(multi_point_grid_indices, desc="final sim"):
+
+            for grid_idx in tqdm(multi_point_grid_indices, desc="final metrics"):
                 # Get all points in this grid (including reassigned ones)
                 point_indices = torch.where(cluster == grid_idx)[0]
                 grid_lang_feats = lang_feat_t[point_indices]  # [K, D]
-                
+
                 # Compute grid average feature
                 grid_avg_feat = grid_lang_feats.mean(dim=0)  # [D]
-                
+
+                # === Cosine Similarity ===
                 # Normalize grid average feature
                 grid_avg_norm = grid_avg_feat / torch.norm(grid_avg_feat)  # [D]
-                
+
                 # Normalize all point features
                 point_norms = torch.norm(grid_lang_feats, dim=1, keepdim=True)  # [K, 1]
                 point_normalized = grid_lang_feats / point_norms  # [K, D]
-                
+
                 # Compute cosine similarity between each point and grid average
                 point_sims = torch.mm(point_normalized, grid_avg_norm.unsqueeze(1)).squeeze()  # [K]
-                
+
                 # Average similarity across all points in this grid
                 avg_sim = point_sims.mean().item()
                 final_grid_cosine_sims.append(avg_sim)
+
+                # === L1 Distance ===
+                # Compute L1 distance between each point and grid average
+                point_l1_dists = torch.sum(torch.abs(grid_lang_feats - grid_avg_feat.unsqueeze(0)), dim=1)  # [K]
+                avg_l1 = point_l1_dists.mean().item()
+                final_grid_l1_dists.append(avg_l1)
+
+                # === L2 Distance ===
+                # Compute L2 distance between each point and grid average
+                point_l2_dists = torch.sqrt(torch.sum((grid_lang_feats - grid_avg_feat.unsqueeze(0)) ** 2, dim=1).clamp(min=0))  # [K]
+                avg_l2 = point_l2_dists.mean().item()
+                final_grid_l2_dists.append(avg_l2)
+
                 final_grid_counts.append(point_indices.shape[0])
-            
+
             print()  # New line after progress bar
             print("  - Re-calculated for {:,} grids".format(len(final_grid_cosine_sims)))
-            
+
             # Replace old cosine sims with new ones
             grid_cosine_sims = final_grid_cosine_sims
+            grid_l1_dists = final_grid_l1_dists
+            grid_l2_dists = final_grid_l2_dists
             grid_cosine_counts = final_grid_counts
 
         # Convert to tensor for statistics
@@ -571,28 +650,69 @@ def compute_grid_statistics(coord, feat, lang_feat, valid_mask, grid_size, devic
 
         # Step 6: Overall statistics (mean and variance only)
         print("\n" + "=" * 60)
-        print("Step 6: Overall Cosine Similarity Statistics")
+        print("Step 6: Overall Similarity and Distance Statistics")
         print("=" * 60)
 
         if len(grid_cosine_sims) > 0:
-            # Overall mean and variance
-            overall_mean = grid_cosine_sims.mean().item()
-            overall_var = grid_cosine_sims.var().item()
-            overall_std = grid_cosine_sims.std().item()
-            overall_min = grid_cosine_sims.min().item()
-            overall_max = grid_cosine_sims.max().item()
+            grid_cosine_sims = torch.tensor(grid_cosine_sims, device=device)
+            grid_l1_dists = torch.tensor(grid_l1_dists, device=device)
+            grid_l2_dists = torch.tensor(grid_l2_dists, device=device)
 
-            print("Overall cosine similarity across all grids:")
-            print("  - Mean: {:.4f}".format(overall_mean))
-            print("  - Variance: {:.4f}".format(overall_var))
-            print("  - Std Dev: {:.4f}".format(overall_std))
-            print("  - Min: {:.4f}".format(overall_min))
-            print("  - Max: {:.4f}".format(overall_max))
+            # Cosine Similarity Statistics
+            print("\n[Cosine Similarity]")
+            cosine_mean = grid_cosine_sims.mean().item()
+            cosine_var = grid_cosine_sims.var().item()
+            cosine_std = grid_cosine_sims.std().item()
+            cosine_min = grid_cosine_sims.min().item()
+            cosine_max = grid_cosine_sims.max().item()
+
+            print("  - Mean:   {:.4f}".format(cosine_mean))
+            print("  - Std:    {:.4f}".format(cosine_std))
+            print("  - Min:    {:.4f}".format(cosine_min))
+            print("  - Max:    {:.4f}".format(cosine_max))
+
+            # L1 Distance Statistics
+            print("\n[L1 Distance (Manhattan)]")
+            l1_mean = grid_l1_dists.mean().item()
+            l1_var = grid_l1_dists.var().item()
+            l1_std = grid_l1_dists.std().item()
+            l1_min = grid_l1_dists.min().item()
+            l1_max = grid_l1_dists.max().item()
+
+            print("  - Mean:   {:.4f}".format(l1_mean))
+            print("  - Std:    {:.4f}".format(l1_std))
+            print("  - Min:    {:.4f}".format(l1_min))
+            print("  - Max:    {:.4f}".format(l1_max))
+
+            # L2 Distance Statistics
+            print("\n[L2 Distance (Euclidean)]")
+            l2_mean = grid_l2_dists.mean().item()
+            l2_var = grid_l2_dists.var().item()
+            l2_std = grid_l2_dists.std().item()
+            l2_min = grid_l2_dists.min().item()
+            l2_max = grid_l2_dists.max().item()
+
+            print("  - Mean:   {:.4f}".format(l2_mean))
+            print("  - Std:    {:.4f}".format(l2_std))
+            print("  - Min:    {:.4f}".format(l2_min))
+            print("  - Max:    {:.4f}".format(l2_max))
+
+            # Correlation Analysis (if we have enough data)
+            print("\n[Correlation Analysis]")
+            print("  - Cosine vs L1: {:.4f}".format(
+                torch.corrcoef(torch.stack([grid_cosine_sims.cpu(), -grid_l1_dists.cpu()]))[0, 1].item()
+            ))
+            print("  - Cosine vs L2: {:.4f}".format(
+                torch.corrcoef(torch.stack([grid_cosine_sims.cpu(), -grid_l2_dists.cpu()]))[0, 1].item()
+            ))
+            print("  - L1 vs L2:      {:.4f}".format(
+                torch.corrcoef(torch.stack([grid_l1_dists.cpu(), grid_l2_dists.cpu()]))[0, 1].item()
+            ))
 
         # Print grid_cosine_counts statistics
         if len(grid_cosine_counts) > 0:
             grid_cosine_counts = torch.tensor(grid_cosine_counts, device=device)
-            print("\nGrid point counts (cosine similarity grids):")
+            print("\nGrid point counts:")
             print("  - Number of grids: {:,}".format(grid_cosine_counts.shape[0]))
             print("  - Mean points per grid: {:.2f}".format(grid_cosine_counts.float().mean().item()))
             print("  - Std dev: {:.2f}".format(grid_cosine_counts.float().std().item()))
@@ -600,9 +720,9 @@ def compute_grid_statistics(coord, feat, lang_feat, valid_mask, grid_size, devic
             print("  - Max: {:.0f}".format(grid_cosine_counts.max().item()))
             print("  - Median: {:.0f}".format(grid_cosine_counts.median().item()))
         else:
-            print("No grids with >1 point found, skipping cosine similarity statistics")
+            print("No grids with >1 point found, skipping similarity/distance statistics")
     else:
-        print("Lang feat not available, skipping cosine similarity computation")
+        print("Lang feat not available, skipping similarity and distance computation")
 
     # Calculate basic grid statistics
     print("\n" + "=" * 60)
@@ -658,6 +778,18 @@ def compute_grid_statistics(coord, feat, lang_feat, valid_mask, grid_size, devic
             "cosine_sim_std": grid_cosine_sims.std().item(),
             "cosine_sim_min": grid_cosine_sims.min().item(),
             "cosine_sim_max": grid_cosine_sims.max().item(),
+            # L1 Distance Statistics
+            "l1_dist_mean": grid_l1_dists.mean().item(),
+            "l1_dist_var": grid_l1_dists.var().item(),
+            "l1_dist_std": grid_l1_dists.std().item(),
+            "l1_dist_min": grid_l1_dists.min().item(),
+            "l1_dist_max": grid_l1_dists.max().item(),
+            # L2 Distance Statistics
+            "l2_dist_mean": grid_l2_dists.mean().item(),
+            "l2_dist_var": grid_l2_dists.var().item(),
+            "l2_dist_std": grid_l2_dists.std().item(),
+            "l2_dist_min": grid_l2_dists.min().item(),
+            "l2_dist_max": grid_l2_dists.max().item(),
         })
 
     return result
@@ -717,8 +849,10 @@ def aggregate_stats(all_stats):
     total_downsample_ratio = 0
     total_points_per_grid = []
 
-    if 'cosine_sim_mean' in all_stats[0]:
-        cosine_sim_values = []
+    # Similarity and distance aggregators
+    cosine_sim_values = []
+    l1_dist_values = []
+    l2_dist_values = []
 
     num_scenes = len(all_stats)
     valid_scenes = 0
@@ -733,11 +867,17 @@ def aggregate_stats(all_stats):
 
             if 'cosine_sim_mean' in stats:
                 cosine_sim_values.append(stats['cosine_sim_mean'])
+            if 'l1_dist_mean' in stats:
+                l1_dist_values.append(stats['l1_dist_mean'])
+            if 'l2_dist_mean' in stats:
+                l2_dist_values.append(stats['l2_dist_mean'])
 
     # Compute averages
     avg_points_per_grid = sum(total_points_per_grid) / len(total_points_per_grid) if total_points_per_grid else 0
     avg_downsample_ratio = total_downsample_ratio / valid_scenes if valid_scenes > 0 else 0
     avg_cosine_sim = sum(cosine_sim_values) / len(cosine_sim_values) if cosine_sim_values else None
+    avg_l1_dist = sum(l1_dist_values) / len(l1_dist_values) if l1_dist_values else None
+    avg_l2_dist = sum(l2_dist_values) / len(l2_dist_values) if l2_dist_values else None
 
     result = {
         'num_scenes': num_scenes,
@@ -754,6 +894,18 @@ def aggregate_stats(all_stats):
         result['cosine_sim_std'] = np.std(cosine_sim_values).item()
         result['cosine_sim_min'] = min(cosine_sim_values)
         result['cosine_sim_max'] = max(cosine_sim_values)
+
+    if avg_l1_dist is not None:
+        result['l1_dist_mean'] = avg_l1_dist
+        result['l1_dist_std'] = np.std(l1_dist_values).item()
+        result['l1_dist_min'] = min(l1_dist_values)
+        result['l1_dist_max'] = max(l1_dist_values)
+
+    if avg_l2_dist is not None:
+        result['l2_dist_mean'] = avg_l2_dist
+        result['l2_dist_std'] = np.std(l2_dist_values).item()
+        result['l2_dist_min'] = min(l2_dist_values)
+        result['l2_dist_max'] = max(l2_dist_values)
 
     return result
 
@@ -833,25 +985,62 @@ def process_batch(data_root, dataset, scenes, split, grid_size, device, load_lan
     print("Average downsampling ratio: {:.2f}%".format(agg_stats['avg_downsample_ratio'] * 100))
 
     if 'cosine_sim_mean' in agg_stats:
-        print("\nCosine Similarity Summary (aggregated):")
+        print("\nSimilarity and Distance Summary (aggregated):")
+        print("\n[Cosine Similarity]")
         print("  - Mean: {:.4f}".format(agg_stats['cosine_sim_mean']))
-        print("  - Std: {:.4f}".format(agg_stats['cosine_sim_std']))
-        print("  - Min: {:.4f}".format(agg_stats['cosine_sim_min']))
-        print("  - Max: {:.4f}".format(agg_stats['cosine_sim_max']))
+        print("  - Std:  {:.4f}".format(agg_stats['cosine_sim_std']))
+        print("  - Min:  {:.4f}".format(agg_stats['cosine_sim_min']))
+        print("  - Max:  {:.4f}".format(agg_stats['cosine_sim_max']))
+
+    if 'l1_dist_mean' in agg_stats:
+        print("\n[L1 Distance (Manhattan)]")
+        print("  - Mean: {:.4f}".format(agg_stats['l1_dist_mean']))
+        print("  - Std:  {:.4f}".format(agg_stats['l1_dist_std']))
+        print("  - Min:  {:.4f}".format(agg_stats['l1_dist_min']))
+        print("  - Max:  {:.4f}".format(agg_stats['l1_dist_max']))
+
+    if 'l2_dist_mean' in agg_stats:
+        print("\n[L2 Distance (Euclidean)]")
+        print("  - Mean: {:.4f}".format(agg_stats['l2_dist_mean']))
+        print("  - Std:  {:.4f}".format(agg_stats['l2_dist_std']))
+        print("  - Min:  {:.4f}".format(agg_stats['l2_dist_min']))
+        print("  - Max:  {:.4f}".format(agg_stats['l2_dist_max']))
 
     # Per-scene summary
     print("\nPer-Scene Summary:")
-    print("-" * 90)
+    print("-" * 140)
+
+    # Header
+    header = ("Scene".ljust(30) +
+              "Points".rjust(12) +
+              "Grids".rjust(10) +
+              "Downsample".rjust(12) +
+              "Cosine Sim".rjust(12) +
+              "L1 Dist".rjust(12) +
+              "L2 Dist".rjust(12))
+    print(header)
+    print("-" * 140)
 
     for stats in all_stats:
         scene_name = stats.get('scene_name', 'N/A')
         num_points = stats.get('num_points', 0)
         num_grids = stats.get('num_grids', 0)
         downsample = stats.get('downsampling_ratio', 0)
-        cosine_sim = stats.get('cosine_sim_mean', -1)
+        cosine_sim = stats.get('cosine_sim_mean', None)
+        l1_dist = stats.get('l1_dist_mean', None)
+        l2_dist = stats.get('l2_dist_mean', None)
 
-        cos_str = "{:.4f}".format(cosine_sim) if cosine_sim >= 0 else "N/A"
-        print(scene_name.ljust(30) + "{:,}".format(num_points).rjust(15) + "{:,}".format(num_grids).rjust(15) + "{:.2f}%".format(downsample * 100).rjust(12) + cos_str.rjust(10))
+        cos_str = "{:.4f}".format(cosine_sim) if cosine_sim is not None else "N/A"
+        l1_str = "{:.4f}".format(l1_dist) if l1_dist is not None else "N/A"
+        l2_str = "{:.4f}".format(l2_dist) if l2_dist is not None else "N/A"
+
+        print(scene_name.ljust(30) +
+              "{:,}".format(num_points).rjust(12) +
+              "{:,}".format(num_grids).rjust(10) +
+              "{:.2f}%".format(downsample * 100).rjust(12) +
+              cos_str.rjust(12) +
+              l1_str.rjust(12) +
+              l2_str.rjust(12))
 
     return agg_stats, all_stats
 
@@ -974,12 +1163,27 @@ def main():
         print("Morton codes shape: " + str(stats['morton_codes']))
 
         if 'cosine_sim_mean' in stats:
-            print("\nCosine Similarity Summary:")
+            print("\nSimilarity and Distance Summary:")
+
+            print("\n[Cosine Similarity]")
             print("  - Mean: " + "{:.4f}".format(stats['cosine_sim_mean']))
-            print("  - Std: " + "{:.4f}".format(stats['cosine_sim_std']))
-            print("  - Min: " + "{:.4f}".format(stats['cosine_sim_min']))
-            print("  - Max: " + "{:.4f}".format(stats['cosine_sim_max']))
-            print("  - Median: " + "{:.4f}".format(stats['cosine_sim_median']))
+            print("  - Std:  " + "{:.4f}".format(stats['cosine_sim_std']))
+            print("  - Min:  " + "{:.4f}".format(stats['cosine_sim_min']))
+            print("  - Max:  " + "{:.4f}".format(stats['cosine_sim_max']))
+
+        if 'l1_dist_mean' in stats:
+            print("\n[L1 Distance (Manhattan)]")
+            print("  - Mean: " + "{:.4f}".format(stats['l1_dist_mean']))
+            print("  - Std:  " + "{:.4f}".format(stats['l1_dist_std']))
+            print("  - Min:  " + "{:.4f}".format(stats['l1_dist_min']))
+            print("  - Max:  " + "{:.4f}".format(stats['l1_dist_max']))
+
+        if 'l2_dist_mean' in stats:
+            print("\n[L2 Distance (Euclidean)]")
+            print("  - Mean: " + "{:.4f}".format(stats['l2_dist_mean']))
+            print("  - Std:  " + "{:.4f}".format(stats['l2_dist_std']))
+            print("  - Min:  " + "{:.4f}".format(stats['l2_dist_min']))
+            print("  - Max:  " + "{:.4f}".format(stats['l2_dist_max']))
 
         # Save to JSON if requested
         if args.output_json is not None:
