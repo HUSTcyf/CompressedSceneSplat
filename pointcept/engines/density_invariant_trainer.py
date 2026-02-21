@@ -1087,8 +1087,10 @@ class DensityInvariantTrainer(TrainerBase):
         if self.cfg.empty_cache:
             torch.cuda.empty_cache()
 
-        # Store outputs
-        self.comm_info["model_output_dict"] = scenario_outputs[0]
+        # Store outputs - use total_loss (including consistency_loss) for logging
+        output_dict = scenario_outputs[0].copy()
+        output_dict["loss"] = total_loss
+        self.comm_info["model_output_dict"] = output_dict
         self.comm_info["scenario_outputs"] = {
             scenario: output for scenario, output in zip(scenarios_to_use, scenario_outputs)
         }

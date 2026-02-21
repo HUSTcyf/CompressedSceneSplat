@@ -619,27 +619,36 @@ class LangFeatDownloadCompressor:
         # Use multi-threading for reprocessing
         print(f"  [Reprocess] Using multi-threaded processing (max {self.max_threads} threads)")
 
+        from tqdm import tqdm
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
             futures = {
                 executor.submit(self._reprocess_single_scene_worker, scene): scene
                 for scene in incomplete_scenes
             }
 
-            for future in as_completed(futures):
-                scene = futures[future]
-                try:
-                    result = future.result()
-                    if result == 'success':
-                        reprocess_stats['reprocessed'] += 1
-                    elif result == 'still_incomplete':
-                        reprocess_stats['still_incomplete'] += 1
-                    else:  # failed
+            # Track progress with tqdm
+            completed = 0
+            with tqdm(total=len(incomplete_scenes), desc="Reprocessing incomplete scenes", unit="scene") as pbar:
+                for future in as_completed(futures):
+                    scene = futures[future]
+                    completed += 1
+                    try:
+                        result = future.result()
+                        if result == 'success':
+                            reprocess_stats['reprocessed'] += 1
+                            pbar.set_postfix({'success': reprocess_stats['reprocessed'], 'failed': reprocess_stats['failed']})
+                        elif result == 'still_incomplete':
+                            reprocess_stats['still_incomplete'] += 1
+                            pbar.set_postfix({'still_incomplete': reprocess_stats['still_incomplete'], 'failed': reprocess_stats['failed']})
+                        else:  # failed
+                            reprocess_stats['failed'] += 1
+                            pbar.set_postfix({'success': reprocess_stats['reprocessed'], 'failed': reprocess_stats['failed']})
+                    except Exception as e:
+                        print(f"\n  [Error] Exception during reprocessing of {scene}: {e}")
+                        import traceback
+                        traceback.print_exc()
                         reprocess_stats['failed'] += 1
-                except Exception as e:
-                    print(f"  [Error] Exception during reprocessing of {scene}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    reprocess_stats['failed'] += 1
+                    pbar.update(1)
 
         return reprocess_stats
 
@@ -655,66 +664,58 @@ class LangFeatDownloadCompressor:
             'still_incomplete' if metadata still incomplete after reprocessing
             'failed' if reprocessing failed
         """
+        from tqdm import tqdm
+
         scene_dir = self.local_dir / scene_rel_path
         grid_meta_path = scene_dir / "grid_meta_data.json"
 
         try:
             # Step 1: Delete existing compressed files
-            print(f"\n  [Reprocess] Cleaning up: {scene_rel_path}")
+            tqdm.write(f"  [Reprocess] Cleaning up: {scene_rel_path}")
             if grid_meta_path.exists():
                 grid_meta_path.unlink()
-                print(f"    [Cleanup] Deleted grid_meta_data.json")
 
             # Delete SVD npz files
             for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
                 svd_file.unlink()
-                print(f"    [Cleanup] Deleted {svd_file.name}")
 
             # Step 2: Ensure lang_feat.npy exists (download if needed, unless skip_download)
             lang_feat_path = scene_dir / "lang_feat.npy"
 
             if not lang_feat_path.exists() and not self.skip_download:
-                print(f"    [Download] lang_feat.npy missing, re-downloading...")
+                tqdm.write(f"    [Download] Re-downloading lang_feat.npy for {scene_rel_path}")
                 if self._download_lang_feat_for_scene(scene_rel_path):
                     with self.lock:
                         self.stats['downloaded'] += 1
                 else:
-                    print(f"    [Error] Failed to download lang_feat.npy for {scene_rel_path}")
+                    tqdm.write(f"    [Error] Failed to download lang_feat.npy for {scene_rel_path}")
                     return 'failed'
             elif not lang_feat_path.exists() and self.skip_download:
-                print(f"    [Skip] lang_feat.npy missing but skip_download=True, cannot reprocess")
+                tqdm.write(f"    [Skip] lang_feat.npy missing but skip_download=True")
                 return 'failed'
-            else:
-                print(f"    [Info] lang_feat.npy exists, reusing existing file")
 
             # Step 3: Re-compress the scene
-            print(f"    [Compress] Re-compressing scene...")
+            tqdm.write(f"    [Compress] Re-compressing {scene_rel_path}")
             if self._compress_scene(scene_rel_path):
-                print(f"    [Success] Compression completed")
-
                 # Step 4: Verify JSON completeness
                 is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
                 if not is_complete:
-                    print(f"    [Warning] Metadata still incomplete after reprocessing: {missing_keys}")
-                    print(f"    [Warning] Preserving lang_feat.npy for manual inspection")
+                    tqdm.write(f"    [Warning] Metadata still incomplete: {missing_keys}")
                     return 'still_incomplete'
                 else:
-                    print(f"    [Verified] Metadata is now complete")
+                    tqdm.write(f"    [Success] {scene_rel_path} reprocessed successfully")
                     # Delete lang_feat.npy only if metadata is complete
                     if lang_feat_path.exists():
                         lang_feat_path.unlink()
-                        print(f"    [Cleanup] Deleted lang_feat.npy (metadata verified complete)")
                         with self.lock:
                             self.stats['deleted'] += 1
                     return 'success'
             else:
-                print(f"    [Error] Compression failed for {scene_rel_path}")
+                tqdm.write(f"    [Error] Compression failed for {scene_rel_path}")
                 return 'failed'
 
         except Exception as e:
-            print(f"    [Error] Exception during reprocessing of {scene_rel_path}: {e}")
-            import traceback
-            traceback.print_exc()
+            tqdm.write(f"    [Error] Exception during reprocessing of {scene_rel_path}: {e}")
             return 'failed'
 
     def _print_grid_meta_stats(self, stats: Dict[str, any]):
@@ -1097,34 +1098,36 @@ class LangFeatDownloadCompressor:
         """Main execution: download and compress all scenes."""
         # Stats-only mode: just show statistics and exit
         if self.stats_only:
+            from tqdm import tqdm
+
             existing_stats, incomplete_scenes = self._collect_grid_meta_stats()
             self._print_grid_meta_stats(existing_stats)
 
             # If incomplete scenes found, reprocess them
             if incomplete_scenes:
-                print("\n" + "=" * 60)
-                print("Incomplete Metadata Detected")
-                print("=" * 60)
-                print(f"Found {len(incomplete_scenes)} scenes with incomplete metadata.")
-                print("These scenes will be re-downloaded and re-compressed...")
+                tqdm.write("\n" + "=" * 60)
+                tqdm.write("Incomplete Metadata Detected")
+                tqdm.write("=" * 60)
+                tqdm.write(f"Found {len(incomplete_scenes)} scenes with incomplete metadata.")
+                tqdm.write("These scenes will be re-downloaded and re-compressed...")
 
                 # Reprocess incomplete scenes
                 reprocess_stats = self._reprocess_incomplete_scenes(incomplete_scenes)
 
                 # Print reprocessing summary
-                print("\n" + "=" * 60)
-                print("Reprocessing Summary")
-                print("=" * 60)
-                print(f"  Total incomplete scenes: {reprocess_stats['total']}")
-                print(f"  Successfully reprocessed: {reprocess_stats['reprocessed']}")
-                print(f"  Failed: {reprocess_stats['failed']}")
-                print(f"  Still incomplete after reprocessing: {reprocess_stats['still_incomplete']}")
+                tqdm.write("\n" + "=" * 60)
+                tqdm.write("Reprocessing Summary")
+                tqdm.write("=" * 60)
+                tqdm.write(f"  Total incomplete scenes: {reprocess_stats['total']}")
+                tqdm.write(f"  Successfully reprocessed: {reprocess_stats['reprocessed']}")
+                tqdm.write(f"  Failed: {reprocess_stats['failed']}")
+                tqdm.write(f"  Still incomplete after reprocessing: {reprocess_stats['still_incomplete']}")
 
                 # If reprocessing was successful, re-collect and print final stats
                 if reprocess_stats['reprocessed'] > 0:
-                    print("\n" + "=" * 60)
-                    print("Re-collecting statistics after reprocessing...")
-                    print("=" * 60)
+                    tqdm.write("\n" + "=" * 60)
+                    tqdm.write("Re-collecting statistics after reprocessing...")
+                    tqdm.write("=" * 60)
                     final_stats, _ = self._collect_grid_meta_stats()
                     self._print_grid_meta_stats(final_stats)
             return

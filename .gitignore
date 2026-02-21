@@ -42,3 +42,4 @@ LitePT/ckpts
 *.whl
 *.ply
 *.pth
+*.png

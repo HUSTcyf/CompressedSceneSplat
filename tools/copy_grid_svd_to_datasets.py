@@ -1,36 +1,48 @@
 #!/usr/bin/env python3
 """
-Copy or move SVD files and metadata from grid_svd_output to corresponding dataset scene directories.
+Copy or move SVD files and metadata from a source directory to corresponding dataset scene directories.
 
 This script copies or moves:
 - lang_feat_grid_svd_r*.npz files (all ranks)
 - grid_meta_data.json file
 
-From: /new_data/cyf/projects/SceneSplat/grid_svd_output/{scene_name}/
-To:   /new_data/cyf/projects/SceneSplat/gaussian_train/{dataset}/train/{scene_name}/
+Modes:
+1. Direct mode (--direct):
+   Direct scene-to-scene mapping without dataset subdirectories.
+   From: {source_root}/{scene_name}/
+   To:   {destination_root}/{scene_name}/
 
-Scene-to-dataset mapping:
-- 3DOVS: bed, bench, lawn, room, sofa
-- lerf_ovs: figurines, ramen, teatime, waldo_kitchen
+   Example (ScanNetPP):
+   From: /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2_train/{scene_name}/
+   To:   /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3/{scene_name}/
+
+2. OVS mode (default):
+   Scene-to-dataset mapping with {dataset}/train/ subdirectories.
+   From: /new_data/cyf/projects/SceneSplat/grid_svd_output/{scene_name}/
+   To:   /new_data/cyf/projects/SceneSplat/gaussian_train/{dataset}/train/{scene_name}/
+   Scene-to-dataset mapping:
+   - 3DOVS: bed, bench, lawn, room, sofa
+   - lerf_ovs: figurines, ramen, teatime, waldo_kitchen
 
 Usage:
-    # Dry run (show what would be copied without actually copying)
+    # Direct mode: Dry run (show what would be moved without actually moving)
+    python tools/copy_grid_svd_to_datasets.py --direct --dry-run
+
+    # Direct mode: Move all SVD files to scene folders
+    python tools/copy_grid_svd_to_datasets.py --direct --move
+
+    # Direct mode: Copy only specific rank
+    python tools/copy_grid_svd_to_datasets.py --direct --rank 16
+
+    # Direct mode: Copy specific scenes
+    python tools/copy_grid_svd_to_datasets.py --direct --scenes 00777c41d4_0 00777c41d4_1
+
+    # Direct mode: Verbose output
+    python tools/copy_grid_svd_to_datasets.py --direct --verbose
+
+    # OVS mode (original functionality)
     python tools/copy_grid_svd_to_datasets.py --dry-run
-
-    # Copy all SVD files
-    python tools/copy_grid_svd_to_datasets.py
-
-    # Move all SVD files (removes source files after copying)
-    python tools/copy_grid_svd_to_datasets.py --move
-
-    # Copy only specific rank
-    python tools/copy_grid_svd_to_datasets.py --rank 16
-
-    # Copy specific scenes
-    python tools/copy_grid_svd_to_datasets.py --scenes bed figurines
-
-    # Verbose output
-    python tools/copy_grid_svd_to_datasets.py --verbose
+    python tools/copy_grid_svd_to_datasets.py --scenes bed figurines --move
 """
 
 import sys
@@ -108,22 +120,40 @@ def transfer_file(
 
 def transfer_scene_svd_files(
     scene_name: str,
-    dataset: str,
+    dataset: Optional[str],
     grid_svd_root: Path,
     data_root: Path,
     rank_filter: Optional[int] = None,
     move: bool = False,
     dry_run: bool = False,
     verbose: bool = False,
+    direct_mode: bool = False,
 ) -> Tuple[int, int]:
     """
     Copy or move SVD files for a single scene.
+
+    Args:
+        scene_name: Name of the scene folder
+        dataset: Dataset name (only used in OVS mode)
+        grid_svd_root: Source root directory
+        data_root: Destination root directory
+        rank_filter: Optional rank filter
+        move: Move files instead of copying
+        dry_run: Dry run mode
+        verbose: Verbose output
+        direct_mode: Direct scene-to-scene mapping (no dataset subdirectory)
 
     Returns:
         (num_transferred, num_skipped)
     """
     src_dir = grid_svd_root / scene_name
-    dst_dir = data_root / dataset / "train" / scene_name
+
+    if direct_mode:
+        # Direct mode: source/{scene}/ -> destination/{scene}/
+        dst_dir = data_root / scene_name
+    else:
+        # OVS mode: source/{scene}/ -> destination/{dataset}/train/{scene}/
+        dst_dir = data_root / dataset / "train" / scene_name
 
     # Check if source directory exists
     if not src_dir.exists():
@@ -169,20 +199,25 @@ def transfer_scene_svd_files(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Copy or move SVD files from grid_svd_output to dataset directories",
+        description="Copy or move SVD files from source to dataset directories",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Direct mode: scene-to-scene mapping without dataset subdirectories",
     )
     parser.add_argument(
         "--grid-svd-root",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/grid_svd_output",
-        help="Path to grid_svd_output directory",
+        default=None,
+        help="Path to source directory (auto-detected based on mode if not specified)",
     )
     parser.add_argument(
         "--data-root",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/gaussian_train",
-        help="Path to gaussian_train directory",
+        default=None,
+        help="Path to destination directory (auto-detected based on mode if not specified)",
     )
     parser.add_argument(
         "--rank",
@@ -195,7 +230,7 @@ def main():
         type=str,
         nargs="+",
         default=None,
-        help="Specific scenes to copy (default: all scenes)",
+        help="Specific scenes to copy (default: all scenes in source directory)",
     )
     parser.add_argument(
         "--datasets",
@@ -203,7 +238,7 @@ def main():
         nargs="+",
         default=None,
         choices=["3DOVS", "lerf_ovs"],
-        help="Specific datasets to process (default: all)",
+        help="Specific datasets to process (OVS mode only, default: all)",
     )
     parser.add_argument(
         "--move",
@@ -223,34 +258,56 @@ def main():
 
     args = parser.parse_args()
 
-    grid_svd_root = Path(args.grid_svd_root)
-    data_root = Path(args.data_root)
+    # Set default paths based on mode
+    if args.direct:
+        # Direct mode: default to ScanNetPP paths
+        default_grid_svd_root = "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2_train"
+        default_data_root = "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3"
+        grid_svd_root = Path(args.grid_svd_root) if args.grid_svd_root else Path(default_grid_svd_root)
+        data_root = Path(args.data_root) if args.data_root else Path(default_data_root)
+    else:
+        # OVS mode: use original paths
+        default_grid_svd_root = "/new_data/cyf/projects/SceneSplat/grid_svd_output"
+        default_data_root = "/new_data/cyf/projects/SceneSplat/gaussian_train"
+        grid_svd_root = Path(args.grid_svd_root) if args.grid_svd_root else Path(default_grid_svd_root)
+        data_root = Path(args.data_root) if args.data_root else Path(default_data_root)
 
     # Validate directories
     if not grid_svd_root.exists():
-        print(f"[ERROR] grid_svd_root not found: {grid_svd_root}")
+        print(f"[ERROR] Source directory not found: {grid_svd_root}")
         return 1
 
     if not data_root.exists():
-        print(f"[ERROR] data_root not found: {data_root}")
+        print(f"[ERROR] Destination directory not found: {data_root}")
         return 1
 
     # Determine which scenes to process
-    if args.scenes:
-        # Filter to specific scenes
-        scenes_to_process = {s for s in args.scenes if s in SCENE_DATASET_MAPPING}
-        if not scenes_to_process:
-            print(f"[ERROR] No valid scenes found in: {args.scenes}")
-            return 1
-    elif args.datasets:
-        # Filter to specific datasets
-        scenes_to_process = set()
-        for dataset in args.datasets:
-            if dataset in DATASET_SCENES:
-                scenes_to_process.update(DATASET_SCENES[dataset])
+    if args.direct:
+        # Direct mode: get all scene folders from source directory
+        if args.scenes:
+            scenes_to_process = set(args.scenes)
+        else:
+            scenes_to_process = {
+                d.name for d in grid_svd_root.iterdir()
+                if d.is_dir() and not d.name.startswith('.')
+            }
     else:
-        # Process all scenes
-        scenes_to_process = set(SCENE_DATASET_MAPPING.keys())
+        # OVS mode: use scene-to-dataset mapping
+        if args.scenes:
+            # Filter to specific scenes
+            scenes_to_process = {s for s in args.scenes if s in SCENE_DATASET_MAPPING}
+            if not scenes_to_process:
+                print(f"[ERROR] No valid scenes found in: {args.scenes}")
+                return 1
+        elif args.datasets:
+            # Filter to specific datasets
+            scenes_to_process = set()
+            for dataset in args.datasets:
+                if dataset in DATASET_SCENES:
+                    scenes_to_process.update(DATASET_SCENES[dataset])
+        else:
+            # Process all scenes
+            scenes_to_process = set(SCENE_DATASET_MAPPING.keys())
 
     # Sort scenes for consistent output
     scenes_sorted = sorted(scenes_to_process)
@@ -258,10 +315,11 @@ def main():
     # Summary
     print("=" * 80)
     action = "Move" if args.move else "Copy"
-    print(f"Grid SVD File {action} Tool")
+    mode = "Direct" if args.direct else "OVS"
+    print(f"Grid SVD File {action} Tool ({mode} mode)")
     print("=" * 80)
-    print(f"Grid SVD root: {grid_svd_root}")
-    print(f"Data root: {data_root}")
+    print(f"Source root: {grid_svd_root}")
+    print(f"Destination root: {data_root}")
     print(f"Scenes to process: {len(scenes_sorted)}")
     if args.rank:
         print(f"Rank filter: r{args.rank}")
@@ -276,8 +334,14 @@ def main():
     total_skipped = 0
 
     for scene_name in scenes_sorted:
-        dataset = SCENE_DATASET_MAPPING[scene_name]
-        print(f"Processing: {scene_name} -> {dataset}")
+        if args.direct:
+            # Direct mode: direct scene-to-scene mapping
+            print(f"Processing: {scene_name}")
+            dataset = None
+        else:
+            # OVS mode: use scene-to-dataset mapping
+            dataset = SCENE_DATASET_MAPPING[scene_name]
+            print(f"Processing: {scene_name} -> {dataset}")
 
         transferred, skipped = transfer_scene_svd_files(
             scene_name=scene_name,
@@ -288,6 +352,7 @@ def main():
             move=args.move,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            direct_mode=args.direct,
         )
 
         total_transferred += transferred
@@ -304,10 +369,10 @@ def main():
         print("  [DRY RUN] No files were actually transferred")
     else:
         if args.move:
-            print(f"  Files successfully moved to dataset directories")
-            print(f"  Source files were removed from grid_svd_output")
+            print(f"  Files successfully moved to destination directories")
+            print(f"  Source files were removed from {grid_svd_root}")
         else:
-            print(f"  Files successfully copied to dataset directories")
+            print(f"  Files successfully copied to destination directories")
     print("=" * 80)
 
     return 0
