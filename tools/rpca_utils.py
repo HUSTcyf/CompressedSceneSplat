@@ -995,6 +995,9 @@ class StructuredRPCA_GPU:
 
         SVT(M, tau) = U * diag(shrink(s, tau)) * V^T
         where shrink(s, tau) = max(s - tau, 0)
+
+        Note: Returns a CPU tensor to avoid immediate GPU memory allocation.
+        The caller is responsible for moving the result back to GPU when safe.
         """
         # Move tensor to CPU for SVD computation
         M_cpu = M.cpu()
@@ -1005,11 +1008,11 @@ class StructuredRPCA_GPU:
         # Threshold singular values
         s_thresholded = torch.clamp(s - tau, min=0)
 
-        # Reconstruction on CPU
+        # Reconstruction on CPU - keep result on CPU
         L = U @ torch.diag(s_thresholded) @ Vt
 
-        # Move result back to GPU
-        return L.to(self.device)
+        # Return CPU tensor - caller decides when to move back to GPU
+        return L
 
     def map_to_full(self, mat_origin: torch.Tensor):
         if not isinstance(self.indices, torch.Tensor):
