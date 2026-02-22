@@ -844,15 +844,18 @@ class StructuredRPCA_GPU:
             # Step 1: Update L_u using weighted SVT
             t_svt = time.time() if enable_timing else 0
 
-            # Prepare computation tensors - move to CPU if in CPU mode
+            # If in CPU mode from previous iteration, ensure ALL tensors are on CPU
             if use_cpu_mode:
                 L_u = L_u.cpu() if L_u.device.type == 'cuda' else L_u
                 E_u = E_u.cpu() if E_u.device.type == 'cuda' else E_u
                 Y = Y.cpu() if Y.device.type == 'cuda' else Y
                 d_sqrt = d_sqrt.cpu() if d_sqrt.device.type == 'cuda' else d_sqrt
                 d_inv_sqrt = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
-                self.A_u = self.A_u.cpu() if self.A_u.device.type == 'cuda' else self.A_u
-                self.d = self.d.cpu() if self.d.device.type == 'cuda' else self.d
+                # CRITICAL: Also move self.A_u and self.d to CPU to avoid mixed device operations
+                self.A_u = self.A_u.cpu() if hasattr(self.A_u, 'device') and self.A_u.device.type == 'cuda' else self.A_u
+                self.d = self.d.cpu() if hasattr(self.d, 'device') and self.d.device.type == 'cuda' else self.d
+                # Force delete GPU references to free memory immediately
+                torch.cuda.empty_cache()
 
             M = L_u - E_u + Y / mu
             L_u_origin = L_u
@@ -878,23 +881,30 @@ class StructuredRPCA_GPU:
                         import gc
                         gc.collect()
 
-                        # Move all state variables to CPU
+                        # Use CPU for SVT
                         L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
-                        L_u = L_u.cpu() if L_u.device.type == 'cuda' else L_u
-                        E_u = E_u.cpu() if E_u.device.type == 'cuda' else E_u
-                        Y = Y.cpu() if Y.device.type == 'cuda' else Y
-                        d_sqrt = d_sqrt.cpu() if d_sqrt.device.type == 'cuda' else d_sqrt
-                        d_inv_sqrt = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
-                        self.A_u = self.A_u.cpu() if self.A_u.device.type == 'cuda' else self.A_u
-                        self.d = self.d.cpu() if self.d.device.type == 'cuda' else self.d
-                        L_u_origin = L_u_origin.cpu() if L_u_origin.device.type == 'cuda' else L_u_origin
+
+                        # Move ALL state variables to CPU immediately
+                        L_u = L_u.cpu() if hasattr(L_u, 'device') and L_u.device.type == 'cuda' else L_u
+                        E_u = E_u.cpu() if hasattr(E_u, 'device') and E_u.device.type == 'cuda' else E_u
+                        Y = Y.cpu() if hasattr(Y, 'device') and Y.device.type == 'cuda' else Y
+                        d_sqrt = d_sqrt.cpu() if hasattr(d_sqrt, 'device') and d_sqrt.device.type == 'cuda' else d_sqrt
+                        d_inv_sqrt = d_inv_sqrt.cpu() if hasattr(d_inv_sqrt, 'device') and d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
+                        self.A_u = self.A_u.cpu() if hasattr(self.A_u, 'device') and self.A_u.device.type == 'cuda' else self.A_u
+                        self.d = self.d.cpu() if hasattr(self.d, 'device') and self.d.device.type == 'cuda' else self.d
+                        L_u_origin = L_u_origin.cpu() if hasattr(L_u_origin, 'device') and L_u_origin.device.type == 'cuda' else L_u_origin
+                        M_weighted = M_weighted.cpu() if hasattr(M_weighted, 'device') and M_weighted.device.type == 'cuda' else M_weighted
+
+                        # Force cleanup
+                        torch.cuda.empty_cache()
+                        gc.collect()
 
                         use_cpu_mode = True  # Stay on CPU for all remaining iterations
                         cpu_note = " (CPU fallback)"
                     else:
                         raise
 
-            # Map back using broadcasting
+            # Map back using broadcasting (all tensors should be on same device now)
             L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
             s_u = mu * (L_u - L_u_origin)  # Dual Residual
 
