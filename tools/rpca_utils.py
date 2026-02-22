@@ -832,7 +832,6 @@ class StructuredRPCA_GPU:
 
         # IALM algorithm
         i, err = 0, float('inf')
-        use_cpu_fallback = False  # Track if we've fallen back to CPU for this iteration
 
         print(f"\nStructured RPCA iterations:")
         while err > _tol and i < max_iter:
@@ -862,7 +861,11 @@ class StructuredRPCA_GPU:
                     # Use CPU for SVT
                     L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
                     iteration_used_cpu = True
-                    use_cpu_fallback = True
+                    self.device = "cpu"
+                    self.A_u = self.A_u.to(self.device)
+                    self.d = self.d.to(self.device)
+                    M = M.cpu()
+                    Y = Y.cpu()
                 else:
                     raise
 
@@ -873,9 +876,6 @@ class StructuredRPCA_GPU:
                 d_inv_sqrt_cpu = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
                 L_u = (L_u_weighted * d_inv_sqrt_cpu.unsqueeze(-1))
                 s_u = mu * (L_u - L_u_origin.cpu())  # Dual Residual
-                # Move back to GPU at end of iteration
-                L_u = L_u.to(self.device)
-                s_u = s_u.to(self.device)
             else:
                 L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
                 s_u = mu * (L_u - L_u_origin) # Dual Residual
