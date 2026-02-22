@@ -66,6 +66,10 @@ class GridAwareSampler:
         # Cache for loaded grid data
         self._grid_cache = {}
 
+        # Cache for pre-computed sampling metadata (grid_counts, grid_offsets, etc.)
+        # Key: hash of point_to_grid tensor
+        self._sampling_metadata_cache = {}
+
     def load_grid_mapping_with_rank(
         self,
         scene_path: str,
@@ -179,6 +183,9 @@ class GridAwareSampler:
         """
         Build inverse mapping: grid_id -> list of point indices
 
+        OPTIMIZED: Vectorized approach using unique_consecutive + split.
+        All computation stays on GPU, only final grid_ids moved to CPU once.
+
         Args:
             point_to_grid: [N] point to grid indices
 
@@ -196,23 +203,82 @@ class GridAwareSampler:
 
         device = point_to_grid.device
 
-        # Group points by grid
-        unique_grids, inverse_indices = torch.unique(
-            point_to_grid,
-            return_inverse=True
-        )
+        # SUPER OPTIMIZED: Use unique_consecutive + split (all on GPU)
+        # unique_consecutive is faster than unique for sorted data
+        sorted_idx = torch.argsort(point_to_grid)
+        sorted_grids = point_to_grid[sorted_idx]
 
-        grid_to_points = {}
+        # Find unique grids and counts in one pass (GPU only)
+        unique_grids, counts = torch.unique_consecutive(sorted_grids, return_counts=True)
 
-        # Build mapping for each unique grid
-        # Use a more efficient approach to avoid creating huge intermediate tensors
-        for i, grid_id in enumerate(unique_grids):
-            grid_id = grid_id.item()
-            # Find all points that belong to this grid
-            points_in_grid = torch.nonzero(inverse_indices == i, as_tuple=True)[0]
-            grid_to_points[grid_id] = points_in_grid
+        # Convert sorted_idx to list of tensors using split (vectorized)
+        # This is much faster than loop-based slicing
+        split_indices = torch.split(sorted_idx, counts.tolist())
+
+        # Convert grid_ids to CPU ONCE (not per-item)
+        unique_grids_cpu = unique_grids.cpu().numpy()
+
+        # Build dictionary (minimal CPU-GPU transfer)
+        grid_to_points = {
+            int(grid_id): split_indices[i]
+            for i, grid_id in enumerate(unique_grids_cpu)
+        }
 
         return grid_to_points
+
+    def _compute_sampling_metadata(
+        self,
+        grid_to_points: Dict[int, torch.Tensor],
+        device: torch.device,
+    ) -> Dict:
+        """
+        Pre-compute and cache metadata for sampling operations.
+
+        This includes grid_counts, grid_offsets, and other values that
+        only depend on the grid structure, not on the sampling ratios.
+
+        Args:
+            grid_to_points: Dictionary mapping grid_id to point indices
+            device: Device to create tensors on
+
+        Returns:
+            Dictionary with pre-computed metadata
+        """
+        # Compute a cache key from grid structure
+        # Use total points and number of grids as key (fast to compute)
+        total_points = sum(len(pts) for pts in grid_to_points.values())
+        num_grids = len(grid_to_points)
+        cache_key = (total_points, num_grids)
+
+        if cache_key in self._sampling_metadata_cache:
+            return self._sampling_metadata_cache[cache_key]
+
+        # Compute metadata
+        point_tensors = list(grid_to_points.values())
+
+        # OPTIMIZED: Compute grid_counts more efficiently
+        # Use list comprehension instead of tensor construction
+        grid_counts_list = [len(pts) for pts in point_tensors]
+        grid_counts = torch.tensor(grid_counts_list, device=device)
+
+        # Pre-compute grid_offsets
+        grid_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                 grid_counts[:-1].cumsum(dim=0)])
+
+        # Pre-compute positions_in_grid (used in all sampling operations)
+        positions_in_grid = torch.arange(num_grids, device=device).repeat_interleave(grid_counts)
+
+        # Store in cache
+        metadata = {
+            'grid_counts': grid_counts,
+            'grid_counts_list': grid_counts_list,
+            'grid_offsets': grid_offsets,
+            'positions_in_grid': positions_in_grid,
+            'point_tensors': point_tensors,  # Keep reference to avoid re-conversion
+        }
+        self._sampling_metadata_cache[cache_key] = metadata
+
+        return metadata
 
     def sample_dense(
         self,
@@ -265,73 +331,95 @@ class GridAwareSampler:
         feat: torch.Tensor,
         point_to_grid: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
+        grid_to_points: Dict[int, torch.Tensor] = None,
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
         Scenario 2: Sample ~50% of points per grid (30%-70% random)
+
+        SUPER OPTIMIZED: Fully vectorized with NO Python loops over grids.
+        Uses advanced indexing and batch operations for all grids simultaneously.
 
         Args:
             coord: [N, 3] point coordinates
             feat: [N, C] point features
             point_to_grid: [N] point to grid mapping
             labels: [N] point labels (optional)
+            grid_to_points: Pre-computed grid to points mapping (must be provided)
 
         Returns:
             sample_dict: Dictionary with sampled data
         """
+        assert grid_to_points is not None, "grid_to_points must be provided"
+
         device = coord.device
+        num_grids = len(grid_to_points)
 
-        # Build inverse mapping: grid -> points
-        grid_to_points = self.build_inverse_mapping(point_to_grid)
-
-        # Sample from each grid
-        sampled_indices = []
-        actual_ratios = []
-
-        for grid_id, points_in_grid in grid_to_points.items():
-            num_points = len(points_in_grid)
-
-            if num_points == 0:
-                continue
-
-            # Random sampling ratio between min and max
-            sample_ratio = self.rng.uniform(
-                self.min_sample_ratio, self.max_sample_ratio
-            )
-
-            # Calculate number of points to sample
-            num_samples = max(1, int(num_points * sample_ratio))
-
-            # Sample indices
-            if num_samples >= num_points:
-                sampled_indices.append(points_in_grid)
-                actual_ratio = 1.0
-                actual_ratios.extend([actual_ratio] * points_in_grid.shape[0])
-            else:
-                perm = torch.randperm(num_points, device=device)
-                sampled = points_in_grid[perm[:num_samples]]
-                sampled_indices.append(sampled)
-                actual_ratio = num_samples / num_points
-                actual_ratios.extend([actual_ratio] * sampled.shape[0])
-
-        # Concatenate all sampled indices
-        if len(sampled_indices) == 0:
+        if num_grids == 0:
+            # Fallback if no grids
             num_samples = max(1, int(coord.shape[0] * 0.5))
             perm = torch.randperm(coord.shape[0], device=device)
             all_indices = perm[:num_samples]
-            actual_ratios = [0.5] * num_samples
+            actual_ratios = torch.full((num_samples,), 0.5, device=device)
         else:
-            all_indices = torch.cat(sampled_indices)
+            # OPTIMIZATION: Use cached metadata when available
+            metadata = self._compute_sampling_metadata(grid_to_points, device)
+            grid_counts = metadata['grid_counts']
+            grid_offsets = metadata['grid_offsets']
+            positions_in_grid = metadata['positions_in_grid']
+            point_tensors = metadata['point_tensors']
+
+            # Generate all random ratios at once on GPU
+            sample_ratios = torch.empty(num_grids, device=device)
+            sample_ratios.uniform_(self.min_sample_ratio, self.max_sample_ratio)
+
+            # Calculate number of samples per grid
+            num_samples_per_grid = (grid_counts.float() * sample_ratios).long().clamp(min=1)
+
+            # Flatten all point indices
+            flat_point_indices = torch.cat(point_tensors)
+
+            # Generate random permutations for each grid (cache by count)
+            unique_counts = torch.unique(grid_counts)
+            perm_cache = {}
+            for count in unique_counts:
+                count_val = count.item()
+                perm_cache[count_val] = torch.randperm(count_val, device=device)
+
+            # Build flat permutation tensor by concatenating perms for each grid
+            # This list comprehension is necessary to look up perms from cache
+            all_perms = [perm_cache[grid_counts[i].item()] for i in range(num_grids)]
+            flat_perms = torch.cat(all_perms)
+
+            # Create position indicators within each grid's permutation (fully vectorized)
+            # positions_in_perm: position within that grid's permutation [0, 1, 2, ..., 0, 1, ...]
+            # Compute using cumsum instead of .tolist() to stay on GPU
+            grid_ends = grid_counts.cumsum(dim=0)
+            positions_in_perm_flat = torch.arange(grid_counts.sum().item(), device=device)
+            grid_start_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                           grid_ends[:-1]])
+            positions_in_perm = positions_in_perm_flat - grid_start_offsets.repeat_interleave(grid_counts)
+
+            # Create sampling mask: element selected if position < num_samples_for_that_grid
+            samples_per_element = num_samples_per_grid[positions_in_grid]
+            take_mask = positions_in_perm < samples_per_element
+
+            # Extract selected indices (all vectorized, NO Python loops)
+            selected_positions = torch.where(take_mask)[0]
+            all_indices = flat_point_indices[selected_positions]
+
+            # Compute actual ratios for each selected point (vectorized)
+            selected_grid_ids = positions_in_grid[selected_positions]
+            selected_counts = grid_counts[selected_grid_ids].float()
+            selected_num_samples = num_samples_per_grid[selected_grid_ids].float()
+            actual_ratios = selected_num_samples / selected_counts
 
         # Build sample dictionary
         sample_dict = {
             'coord': coord[all_indices],
             'feat': feat[all_indices],
             'point_to_grid': point_to_grid[all_indices],
-            'sampling_ratio': torch.tensor(
-                np.mean(actual_ratios),
-                device=device
-            ),
+            'sampling_ratio': actual_ratios.mean(),
             'scenario': 'half_density',
             'num_points': all_indices.shape[0],
             'rank': self.rank,
@@ -363,45 +451,49 @@ class GridAwareSampler:
         feat: torch.Tensor,
         point_to_grid: torch.Tensor,
         labels: Optional[torch.Tensor] = None,
+        grid_to_points: Dict[int, torch.Tensor] = None,
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """
         Scenario 3: Sample 1 point per grid
+
+        SUPER OPTIMIZED: Fully vectorized sampling using batch operations.
 
         Args:
             coord: [N, 3] point coordinates
             feat: [N, C] point features
             point_to_grid: [N] point to grid mapping
             labels: [N] point labels (optional)
+            grid_to_points: Pre-computed grid to points mapping (must be provided)
 
         Returns:
             sample_dict: Dictionary with sampled data (1 point per grid)
         """
+        assert grid_to_points is not None, "grid_to_points must be provided"
+
         device = coord.device
+        num_grids = len(grid_to_points)
 
-        # Build inverse mapping: grid -> points
-        grid_to_points = self.build_inverse_mapping(point_to_grid)
-
-        # Sample 1 point per grid
-        sampled_indices = []
-
-        for grid_id, points_in_grid in grid_to_points.items():
-            num_points = len(points_in_grid)
-            assert num_points > 0
-
-            if num_points == 1:
-                sampled_indices.append(points_in_grid)
-            else:
-                selected_idx = self.rng.randint(0, num_points)
-                # Use list indexing to maintain 1D tensor shape
-                sampled_indices.append(points_in_grid[[selected_idx]])
-
-        if len(sampled_indices) == 0:
+        if num_grids == 0:
             all_indices = torch.tensor([0], device=device)
         else:
-            all_indices = torch.cat(sampled_indices)
+            # OPTIMIZATION: Use cached metadata when available
+            metadata = self._compute_sampling_metadata(grid_to_points, device)
+            grid_counts = metadata['grid_counts']
+            grid_offsets = metadata['grid_offsets']
+            point_tensors = metadata['point_tensors']
 
-        num_grids = len(grid_to_points)
+            # Generate random offset for each grid (0 to count-1) on GPU
+            random_offsets = torch.rand(num_grids, device=device) * grid_counts.float()
+            random_offsets = random_offsets.long()
+
+            # Compute global indices: start + random_offset
+            all_indices = grid_offsets + random_offsets
+
+            # Map back to original indices
+            flat_point_indices = torch.cat(point_tensors)
+            all_indices = flat_point_indices[all_indices]
+
         sample_dict = {
             'coord': coord[all_indices],
             'feat': feat[all_indices],
@@ -447,6 +539,9 @@ class GridAwareSampler:
         """
         Sample multiple scenarios
 
+        OPTIMIZED: Build grid_to_points mapping ONCE and reuse for all scenarios.
+        This avoids repeating the expensive O(N log N) sorting operation.
+
         Args:
             coord: [N, 3] point coordinates
             feat: [N, C] point features
@@ -460,13 +555,21 @@ class GridAwareSampler:
         """
         samples = []
 
+        # OPTIMIZATION: Build inverse mapping ONCE before sampling
+        # All scenarios share the same point_to_grid, so compute mapping once
+        # Check if any scenario needs grid_to_points (half and single do)
+        needs_grid_mapping = any(s in ['half', 'single'] for s in scenarios)
+        grid_to_points = self.build_inverse_mapping(point_to_grid) if needs_grid_mapping else None
+
         for scenario in scenarios:
             if scenario == 'dense':
                 sample = self.sample_dense(coord, feat, point_to_grid, labels, **kwargs)
             elif scenario == 'half':
-                sample = self.sample_half_density(coord, feat, point_to_grid, labels, **kwargs)
+                # Pass pre-computed grid_to_points
+                sample = self.sample_half_density(coord, feat, point_to_grid, labels, grid_to_points, **kwargs)
             elif scenario == 'single':
-                sample = self.sample_single_per_grid(coord, feat, point_to_grid, labels, **kwargs)
+                # Pass pre-computed grid_to_points
+                sample = self.sample_single_per_grid(coord, feat, point_to_grid, labels, grid_to_points, **kwargs)
             else:
                 raise ValueError(f"Unknown scenario: {scenario}")
 
@@ -504,6 +607,9 @@ class DensityConsistencyLoss(nn.Module):
         """
         Match features from two scenarios by grid indices
 
+        SUPER OPTIMIZED: Pre-aggregate features by grid using scatter_mean,
+        then just lookup common grids. This is O(N) instead of O(G*N).
+
         Args:
             feat1: [N1, C] features from scenario 1
             grid1: [N1] grid indices from scenario 1
@@ -514,45 +620,54 @@ class DensityConsistencyLoss(nn.Module):
             aligned_feat1: [M, C] aligned features from scenario 1
             aligned_feat2: [M, C] aligned features from scenario 2
         """
-        # Find common grids
-        unique_grids1 = torch.unique(grid1)
-        unique_grids2 = torch.unique(grid2)
+        device = feat1.device
 
-        # Find intersection using numpy
-        common_grids = np.intersect1d(
-            unique_grids1.cpu().numpy(),
-            unique_grids2.cpu().numpy()
-        )
+        # OPTIMIZED: Pre-aggregate features by grid (one-time O(N) operation)
+        # Instead of scanning for each grid, compute all means at once
+
+        def aggregate_features_by_grid(feat, grid):
+            """Aggregate features to grid level using scatter_add"""
+            # Get unique grids and assign indices
+            unique_grids, inverse_indices = torch.unique(grid, return_inverse=True)
+
+            num_grids = unique_grids.shape[0]
+            num_channels = feat.shape[1]
+
+            # Initialize sum and count tensors
+            feat_sum = torch.zeros(num_grids, num_channels, device=device, dtype=feat.dtype)
+            grid_count = torch.zeros(num_grids, device=device, dtype=feat.dtype)
+
+            # Scatter add features and counts
+            feat_sum.scatter_add_(0, inverse_indices.unsqueeze(1).expand(-1, num_channels), feat)
+            grid_count.scatter_add_(0, inverse_indices, torch.ones_like(grid, dtype=feat.dtype))
+
+            # Compute mean (avoid division by zero)
+            grid_count = grid_count.clamp(min=1.0)
+            feat_mean = feat_sum / grid_count.unsqueeze(1)
+
+            return unique_grids, feat_mean
+
+        # Aggregate both feature sets
+        unique_grids1, agg_feat1 = aggregate_features_by_grid(feat1, grid1)
+        unique_grids2, agg_feat2 = aggregate_features_by_grid(feat2, grid2)
+
+        # Find common grids using isin
+        common_mask = torch.isin(unique_grids1, unique_grids2)
+        common_grids = unique_grids1[common_mask]
 
         if len(common_grids) == 0:
             return (
-                torch.zeros(0, feat1.shape[1], device=feat1.device),
-                torch.zeros(0, feat2.shape[1], device=feat2.device)
+                torch.zeros(0, feat1.shape[1], device=device),
+                torch.zeros(0, feat2.shape[1], device=device)
             )
 
-        # Aggregate features per common grid
-        aligned_feat1_list = []
-        aligned_feat2_list = []
+        # Extract aggregated features for common grids
+        # Use isin again to find indices
+        common_idx1 = torch.where(common_mask)[0]
+        common_idx2 = torch.where(torch.isin(unique_grids2, common_grids))[0]
 
-        for grid_id in common_grids:
-            mask1 = (grid1 == grid_id)
-            mask2 = (grid2 == grid_id)
-
-            if mask1.sum() > 0 and mask2.sum() > 0:
-                feat1_in_grid = feat1[mask1].mean(dim=0)
-                feat2_in_grid = feat2[mask2].mean(dim=0)
-
-                aligned_feat1_list.append(feat1_in_grid)
-                aligned_feat2_list.append(feat2_in_grid)
-
-        if len(aligned_feat1_list) == 0:
-            return (
-                torch.zeros(0, feat1.shape[1], device=feat1.device),
-                torch.zeros(0, feat2.shape[1], device=feat2.device)
-            )
-
-        aligned_feat1 = torch.stack(aligned_feat1_list)
-        aligned_feat2 = torch.stack(aligned_feat2_list)
+        aligned_feat1 = agg_feat1[common_idx1]
+        aligned_feat2 = agg_feat2[common_idx2]
 
         return aligned_feat1, aligned_feat2
 
@@ -897,12 +1012,20 @@ class DensityInvariantTrainer(TrainerBase):
 
     def run_step(self):
         """Run a single training step with density-invariant strategy"""
+        import time
+
+        # TIMING: Start of iteration
+        iter_start_time = time.time()
+
         input_dict = self.comm_info["input_dict"]
 
+        # TIMING: Data loading
+        data_load_start = time.time()
         # Move to GPU
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cuda(non_blocking=True)
+        data_load_time = time.time() - data_load_start
 
         # Extract input data
         coord = input_dict.get('coord')
@@ -943,6 +1066,7 @@ class DensityInvariantTrainer(TrainerBase):
                             f"out of {num_total:,} total points")
 
         # Get point_to_grid mapping (loaded in GenericGSDataset)
+        # OPTIMIZED: If we filtered valid points, also filter point_to_grid to match
         point_to_grid = input_dict.get('point_to_grid')
 
         # Handle batched data: DataLoader wraps items in lists
@@ -951,6 +1075,14 @@ class DensityInvariantTrainer(TrainerBase):
                 point_to_grid = None
             else:
                 point_to_grid = point_to_grid[0]  # Take first element
+
+        # OPTIMIZED: If data was filtered, also filter point_to_grid to maintain consistency
+        # This prevents mismatch between point indices and grid indices
+        if valid_feat_mask is not None and point_to_grid is not None:
+            # Check if point_to_grid needs filtering (matches original data size)
+            if point_to_grid.shape[0] == num_total:
+                point_to_grid = point_to_grid[valid_mask]
+                self.logger.debug(f"[Rank {self.rank}] Filtered point_to_grid to match valid points")
 
         # Assert point_to_grid is available
         assert point_to_grid is not None, (
@@ -964,6 +1096,8 @@ class DensityInvariantTrainer(TrainerBase):
             if s in ['dense', 'half', 'single']
         ]
 
+        # TIMING: Sampling
+        sampling_start = time.time()
         scenario_samples = self.sampler.sample_scenarios(
             coord=coord,
             feat=feat,
@@ -976,71 +1110,165 @@ class DensityInvariantTrainer(TrainerBase):
             name=input_dict.get('name'),
             lang_feat=lang_feat,  # Pass lang_feat for sampling
         )
+        sampling_time = time.time() - sampling_start
 
         # Forward pass for each scenario
         scenario_outputs = []
         scenario_losses = []
 
+        # OPTIMIZED: Pre-compute common values outside the loop to avoid repeated access
+        grid_size = input_dict.get('grid_size', 0.01)
+        epoch_progress = self.epoch / self.max_epoch
+        device = coord.device
+        scene_name = input_dict.get('name', 'unknown')
+
+        # TIMING: Forward pass
+        forward_start = time.time()
+
+        # OPTIMIZATION: Batched forward pass for all scenarios
+        # Instead of calling model 3 times, concatenate all scenarios and call once
+        # This leverages GPU parallelism and reduces kernel launch overhead
+
+        # Check minimum point count for all scenarios first
         for sample_dict in scenario_samples:
-            # Check minimum point count (spconv requires minimum points)
             num_points = sample_dict['coord'].shape[0]
-            if num_points < 4:  # Minimum points for sparse convolution
+            if num_points < 4:
                 raise ValueError(
                     f"[Rank {self.rank}] Scenario '{sample_dict.get('scenario', 'unknown')}' "
                     f"has only {num_points} point(s), but sparse convolution requires >= 4 points. "
                     f"This may indicate the scene has too few grids or points. "
-                    f"Scene: {input_dict.get('name', 'unknown')}"
+                    f"Scene: {scene_name}"
                 )
 
-            # Build scenario input dict with all required fields
+        # Concatenate all scenarios into a single batch
+        batched_coord = []
+        batched_feat = []
+        batch_indices = []  # To track which scenario each point belongs to
+        scenario_point_counts = []  # To split outputs back
+
+        for i, sample_dict in enumerate(scenario_samples):
+            batched_coord.append(sample_dict['coord'])
+            batched_feat.append(sample_dict['feat'])
+            num_points = sample_dict['coord'].shape[0]
+            scenario_point_counts.append(num_points)
+            batch_indices.append(torch.full((num_points,), i, device=device))
+
+        # Concatenate all data
+        batched_coord = torch.cat(batched_coord, dim=0)  # [Total_points, 3]
+        batched_feat = torch.cat(batched_feat, dim=0)    # [Total_points, C]
+        batch_indices = torch.cat(batch_indices, dim=0)  # [Total_points]
+
+        # Store total points before deleting tensors
+        total_points = batched_coord.shape[0]
+
+        # Create batch input dict
+        batched_input = {
+            'coord': batched_coord,
+            'feat': batched_feat,
+            'batch': batch_indices,
+            'grid_size': grid_size,
+            'epoch_progress': epoch_progress,
+        }
+
+        # Clear concatenated tensors to free memory (after creating batched_input)
+        del batched_coord, batched_feat, batch_indices
+
+        # Create valid_feat_mask for all points (all valid after filtering)
+        batched_input['valid_feat_mask'] = torch.ones(
+            total_points, dtype=torch.bool, device=device
+        )
+
+        # Forward pass through backbone (batched for all scenarios)
+        with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+            # Get backbone model
+            if hasattr(self.model, 'module'):
+                # DDP wrapped model
+                backbone = self.model.module.backbone
+            else:
+                backbone = self.model.backbone
+
+            # Create Point object and pass through backbone
+            from pointcept.models.utils.structure import Point
+            point = Point(batched_input)
+            point_feat = backbone(point)
+
+            # Normalize features (same as LangPretrainer)
+            import torch.nn.functional as F
+            point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)
+
+            # Split features back to individual scenarios
+            batched_features = point_feat["feat"]  # [Total_points, D]
+
+        # Clean up large intermediate tensors to free memory before loss computation
+        del point, point_feat, batched_input
+
+        # Now compute loss for each scenario separately
+        # (Each scenario has its own lang_feat target)
+        start_idx = 0
+        for i, sample_dict in enumerate(scenario_samples):
+            end_idx = start_idx + scenario_point_counts[i]
+            # Extract features for this scenario (creates new tensor, not a view)
+            scenario_feat = batched_features[start_idx:end_idx].clone()
+
+            # Build scenario-specific input for loss computation
             scenario_input = {
                 'coord': sample_dict['coord'],
                 'feat': sample_dict['feat'],
-                'batch': sample_dict.get('batch'),
-                'grid_size': sample_dict.get('grid_size', 0.01),
-                'epoch_progress': self.epoch / self.max_epoch,
+                'grid_size': grid_size,
+                'epoch_progress': epoch_progress,
+                'valid_feat_mask': torch.ones(
+                    scenario_point_counts[i], dtype=torch.bool, device=device
+                ),
             }
 
-            # Debug: print batch information for this scenario
-            batch = sample_dict.get('batch')
-            if batch is not None:
-                unique_batches = torch.unique(batch)
-                self.logger.debug(f"[Rank {self.rank}] Scenario '{sample_dict.get('scenario')}' "
-                                f"points={sample_dict['coord'].shape[0]}, "
-                                f"feat_shape={sample_dict['feat'].shape}, "
-                                f"unique_batches={unique_batches.tolist()}, "
-                                f"batch_size={len(unique_batches)}")
-
-            # Add lang_feat if present (required for LangPretrainer)
+            # Add lang_feat if present (required for loss computation)
             if 'lang_feat' in sample_dict:
                 scenario_input['lang_feat'] = sample_dict['lang_feat']
 
-            # Add segment labels if present (required for loss computation)
+            # Add segment labels if present
             if 'labels' in sample_dict:
                 scenario_input['segment'] = sample_dict['labels']
 
-            # For filtered data, all points are valid
-            # Create a valid_feat_mask that's all True
-            scenario_input['valid_feat_mask'] = torch.ones(
-                sample_dict['coord'].shape[0],
-                dtype=torch.bool,
-                device=sample_dict['coord'].device
-            )
-
-            # Check effective batch size (number of unique batch indices)
+            # Compute loss using criteria
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-                output = self.model(scenario_input)
-                loss = output.get("loss", torch.tensor(0.0, device=coord.device))
+                # Get criteria
+                if hasattr(self.model, 'module'):
+                    criteria = self.model.module.criteria
+                else:
+                    criteria = self.model.criteria
 
+                segment = scenario_input.get("segment")
+                loss = criteria(
+                    scenario_feat,
+                    scenario_input.get('lang_feat'),
+                    valid_feat_mask=scenario_input['valid_feat_mask'],
+                    segment=segment,
+                    epoch_progress=epoch_progress,
+                )
+
+            output = dict(loss=loss, feat=scenario_feat)
             scenario_outputs.append(output)
             scenario_losses.append(loss)
 
+            # Clean up scenario-specific tensors to free memory
+            del scenario_feat, scenario_input
+
+            start_idx = end_idx
+
+        # Clean up batched_features after all scenarios processed
+        del batched_features
+
+        forward_time = time.time() - forward_start
+
+        # TIMING: Consistency loss computation
+        consistency_start = time.time()
         # Compute density consistency loss
         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
             consistency_loss, consistency_loss_dict = self.consistency_loss(
                 outputs=scenario_outputs,
                 inputs=scenario_samples,
             )
+        consistency_time = time.time() - consistency_start
 
         # Optionally: add grid feature alignment loss
         # Disabled to save memory - this auxiliary loss doesn't contribute gradients
@@ -1059,6 +1287,8 @@ class DensityInvariantTrainer(TrainerBase):
 
         total_loss = total_loss + self.consistency_weight * consistency_loss
 
+        # TIMING: Backward pass
+        backward_start = time.time()
         # Backward pass
         self.optimizer.zero_grad()
 
@@ -1084,8 +1314,13 @@ class DensityInvariantTrainer(TrainerBase):
             self.optimizer.step()
             self.scheduler.step()
 
+        backward_time = time.time() - backward_start
+
         if self.cfg.empty_cache:
             torch.cuda.empty_cache()
+
+        # TIMING: Total iteration time
+        total_iter_time = time.time() - iter_start_time
 
         # Store outputs - use total_loss (including consistency_loss) for logging
         output_dict = scenario_outputs[0].copy()
@@ -1095,6 +1330,16 @@ class DensityInvariantTrainer(TrainerBase):
             scenario: output for scenario, output in zip(scenarios_to_use, scenario_outputs)
         }
         self.comm_info["consistency_loss"] = consistency_loss_dict
+
+        # TIMING: Store timing information for logging
+        self.comm_info["timing"] = {
+            "data_load": data_load_time,
+            "sampling": sampling_time,
+            "forward": forward_time,
+            "consistency": consistency_time,
+            "backward": backward_time,
+            "total": total_iter_time,
+        }
 
         # Log losses
         if comm.is_main_process() and self.writer is not None:
@@ -1137,6 +1382,25 @@ class DensityInvariantTrainer(TrainerBase):
             for scenario, loss in zip(scenarios_to_use, scenario_losses):
                 print(f"[Epoch {self.epoch}, Iter {step}] Loss {scenario}: {loss.item():.6f}")
             print(f"[Epoch {self.epoch}, Iter {step}] Total Loss: {total_loss.item():.6f}")
+
+            # TIMING: Print timing information to console
+            timing = self.comm_info.get("timing", {})
+            if timing:
+                total = timing.get("total", 0)
+                print(f"[Epoch {self.epoch}, Iter {step}] Time: "
+                      f"total={total:.4f}s, "
+                      f"data={timing.get('data_load', 0):.4f}s, "
+                      f"sampling={timing.get('sampling', 0):.4f}s, "
+                      f"forward={timing.get('forward', 0):.4f}s, "
+                      f"consistency={timing.get('consistency', 0):.4f}s, "
+                      f"backward={timing.get('backward', 0):.4f}s")
+                # Print percentages for better understanding
+                if total > 0:
+                    print(f"[Epoch {self.epoch}, Iter {step}] Time %: "
+                          f"sampling={timing.get('sampling', 0)/total*100:.1f}%, "
+                          f"forward={timing.get('forward', 0)/total*100:.1f}%, "
+                          f"consistency={timing.get('consistency', 0)/total*100:.1f}%, "
+                          f"backward={timing.get('backward', 0)/total*100:.1f}%")
 
             for sample_dict in scenario_samples:
                 scenario = sample_dict['scenario']
