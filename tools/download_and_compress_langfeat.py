@@ -977,7 +977,7 @@ class LangFeatDownloadCompressor:
         self,
         scene_dir: Path,
         cmd_str: str,
-        max_retries: int = 3
+        max_retries: int = 1
     ) -> bool:
         """
         Retry compression in single-threaded mode until metadata is complete.
