@@ -26,10 +26,28 @@ except ImportError:
     CUDA_AVAILABLE = False
     NUM_GPUS = 0
 
+# Try to import pynvml for more reliable GPU memory queries
+NVML_AVAILABLE = False
+nvml_handle = None
+try:
+    import pynvml
+    pynvml.nvmlInit()
+    nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Just check if it works
+    NVML_AVAILABLE = True
+    print(f"    [GPU] Using pynvml for GPU memory monitoring")
+except (ImportError, Exception) as e:
+    print(f"    [GPU] pynvml not available: {e}")
+    print(f"    [GPU] Will use nvidia-smi/torch fallback for GPU memory monitoring")
+
 
 def get_gpu_memory_info(gpu_id: int, process_allocated_memory: Dict[int, int] = None) -> Dict[str, float]:
     """
-    Get GPU memory information for a specific GPU using nvidia-smi for accurate per-process tracking.
+    Get GPU memory information for a specific GPU.
+
+    Tries multiple methods in order of reliability:
+    1. pynvml (NVIDIA management library) - most reliable
+    2. nvidia-smi command - system-wide info but may fail
+    3. torch.cuda - current process only
 
     Args:
         gpu_id: GPU device ID
@@ -41,8 +59,28 @@ def get_gpu_memory_info(gpu_id: int, process_allocated_memory: Dict[int, int] = 
     if not CUDA_AVAILABLE:
         return {'total': 0, 'used': 0, 'free': 0, 'free_percent': 0}
 
+    # Method 1: Try pynvml (most reliable)
+    if NVML_AVAILABLE:
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+
+            total_memory = mem_info.total / (1024 ** 3)  # Convert to GB
+            used_memory = mem_info.used / (1024 ** 3)
+            free_memory = mem_info.free / (1024 ** 3)
+            free_percent = (free_memory / total_memory) * 100 if total_memory > 0 else 0
+
+            return {
+                'total': total_memory,
+                'used': used_memory,
+                'free': free_memory,
+                'free_percent': free_percent,
+            }
+        except Exception as e:
+            print(f"    [GPU Warning] pynvml query failed for GPU {gpu_id}: {e}")
+
+    # Method 2: Try nvidia-smi
     try:
-        # First try to get memory info using nvidia-smi for accurate per-process tracking
         result = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.total,memory.used,memory.free',
              '--format=csv,noheader,nounits', f'--id={gpu_id}'],
@@ -74,7 +112,7 @@ def get_gpu_memory_info(gpu_id: int, process_allocated_memory: Dict[int, int] = 
     except Exception as e:
         print(f"    [GPU Warning] nvidia-smi query failed for GPU {gpu_id}: {e}")
 
-    # Fallback to torch-based memory info
+    # Method 3: Fallback to torch-based memory info (current process only)
     try:
         props = torch.cuda.get_device_properties(gpu_id)
         total_memory = props.total_memory / (1024 ** 3)  # Convert to GB
@@ -123,20 +161,28 @@ def print_gpu_status():
 
 
 class GPUMemoryMonitor:
-    """Monitor and manage GPU allocation based on available VRAM."""
+    """Monitor and manage GPU allocation based on available VRAM.
 
-    def __init__(self, min_vram_gb: float = 8.0, min_free_percent: float = 10.0):
+    Allocation Strategy:
+    - If GPUs >= threads: Each thread gets a unique GPU (round-robin)
+    - If GPUs < threads: Multiple threads can share GPUs, balanced evenly
+    """
+
+    def __init__(self, min_vram_gb: float = 8.0, min_free_percent: float = 10.0, max_threads: int = 2):
         """
         Initialize GPU memory monitor.
 
         Args:
             min_vram_gb: Minimum required VRAM in GB
             min_free_percent: Minimum free VRAM percentage
+            max_threads: Maximum number of threads for GPU allocation
         """
         self.min_vram_gb = min_vram_gb
         self.min_free_percent = min_free_percent
+        self.max_threads = max_threads
         self.alloc_lock = threading.Lock()
-        self.reserved_gpus: Set[int] = set()  # Track reserved GPUs
+        # Track thread count per GPU instead of just reserved status
+        self.gpu_thread_count: Dict[int, int] = {i: 0 for i in range(NUM_GPUS)}
         self.process_allocated_memory: Dict[int, int] = {}  # Track memory allocated by each process (in bytes)
         self.subprocess_pids: Set[int] = set()  # Track PIDs of spawned subprocesses
 
@@ -145,23 +191,39 @@ class GPUMemoryMonitor:
         for gpu_id in range(NUM_GPUS):
             self.gpu_status[gpu_id] = get_gpu_memory_info(gpu_id, self.process_allocated_memory)
 
+        # Pre-assign GPUs in round-robin fashion when GPUs >= threads
+        self.round_robin_assignments: List[int] = []
+        if NUM_GPUS >= max_threads:
+            self.round_robin_assignments = list(range(max_threads))
+            print(f"    [GPU] Round-robin mode: {max_threads} threads -> {max_threads} unique GPUs")
+        else:
+            print(f"    [GPU] Shared mode: {max_threads} threads -> {NUM_GPUS} GPUs")
+
     def is_available(self, gpu_id: int) -> bool:
         """
-        Check if a GPU has sufficient memory available and is not reserved.
+        Check if a GPU has sufficient memory available and can accept more threads.
 
         Args:
             gpu_id: GPU ID to check
 
         Returns:
-            True if GPU has sufficient memory and is not reserved
+            True if GPU has sufficient memory and can accept more threads
         """
         if not CUDA_AVAILABLE or gpu_id >= NUM_GPUS:
             return False
 
-        # Check if GPU is already reserved
         with self.alloc_lock:
-            if gpu_id in self.reserved_gpus:
-                return False  # GPU is reserved by another thread
+            current_threads = self.gpu_thread_count.get(gpu_id, 0)
+
+        # In round-robin mode (GPUs >= threads), each GPU gets at most 1 thread
+        if NUM_GPUS >= self.max_threads:
+            if current_threads >= 1:
+                return False
+        # In shared mode (GPUs < threads), limit threads per GPU
+        else:
+            max_threads_per_gpu = (self.max_threads + NUM_GPUS - 1) // NUM_GPUS
+            if current_threads >= max_threads_per_gpu:
+                return False
 
         info = get_gpu_memory_info(gpu_id, self.process_allocated_memory)
 
@@ -171,7 +233,61 @@ class GPUMemoryMonitor:
 
         return has_enough_gb and has_enough_percent
 
-    def get_best_available_gpu(self) -> Optional[int]:
+    def allocate_gpu_for_thread(self, thread_id: int, timeout: int = 300, check_interval: int = 5) -> Optional[int]:
+        """
+        Allocate a GPU for a specific thread using the new allocation strategy.
+
+        Strategy:
+        - If GPUs >= threads: Use round-robin, each thread gets a unique GPU
+        - If GPUs < threads: Assign to GPU with most free memory
+
+        Args:
+            thread_id: Thread ID (0-indexed) for round-robin assignment
+            timeout: Maximum wait time in seconds
+            check_interval: Check interval in seconds
+
+        Returns:
+            GPU ID or None if timeout reached
+        """
+        start_time = time.time()
+        last_update_time = 0
+
+        while time.time() - start_time < timeout:
+            # Update subprocess memory tracking periodically (every 10 seconds)
+            if time.time() - last_update_time > 10:
+                self.update_subprocess_memory()
+                last_update_time = time.time()
+
+            # Round-robin mode: GPUs >= threads
+            if NUM_GPUS >= self.max_threads:
+                assigned_gpu = self.round_robin_assignments[thread_id % len(self.round_robin_assignments)]
+                if self.is_available(assigned_gpu):
+                    # Reserve this GPU for this thread
+                    with self.alloc_lock:
+                        self.gpu_thread_count[assigned_gpu] += 1
+                    print(f"    [GPU] Thread {thread_id} assigned to GPU {assigned_gpu} (round-robin)")
+                    return assigned_gpu
+                else:
+                    print(f"    [GPU] Thread {thread_id} waiting for GPU {assigned_gpu}...")
+            # Shared mode: GPUs < threads, find best available GPU
+            else:
+                best_gpu = self._get_best_available_gpu()
+                if best_gpu is not None:
+                    with self.alloc_lock:
+                        self.gpu_thread_count[best_gpu] += 1
+                    print(f"    [GPU] Thread {thread_id} assigned to GPU {best_gpu} (shared, {self.gpu_thread_count[best_gpu]} threads)")
+                    return best_gpu
+                else:
+                    print(f"    [GPU] Thread {thread_id} waiting for available GPU...")
+
+            wait_time = min(check_interval, timeout - int(time.time() - start_time))
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        print(f"    [GPU] Thread {thread_id} timeout waiting for available GPU")
+        return None
+
+    def _get_best_available_gpu(self) -> Optional[int]:
         """
         Get the GPU with the most free memory that meets requirements.
 
@@ -197,7 +313,8 @@ class GPUMemoryMonitor:
         """
         Wait for a GPU to become available with sufficient memory.
 
-        Immediately reserve the GPU when found to prevent other threads from taking it.
+        This method is deprecated in favor of allocate_gpu_for_thread,
+        but kept for backward compatibility.
 
         Args:
             timeout: Maximum wait time in seconds
@@ -206,44 +323,27 @@ class GPUMemoryMonitor:
         Returns:
             GPU ID or None if timeout reached
         """
-        start_time = time.time()
-        last_update_time = 0
-        while time.time() - start_time < timeout:
-            # Update subprocess memory tracking periodically (every 10 seconds)
-            if time.time() - last_update_time > 10:
-                self.update_subprocess_memory()
-                last_update_time = time.time()
-
-            gpu_id = self.get_best_available_gpu()
-            if gpu_id is not None:
-                # Immediately reserve this GPU for this thread
-                with self.alloc_lock:
-                    self.reserved_gpus.add(gpu_id)
-                return gpu_id
-
-            wait_time = min(check_interval, timeout - int(time.time() - start_time))
-            if wait_time > 0:
-                print(f"    [GPU] Waiting for available GPU... ({timeout - int(time.time() - start_time)}s remaining)")
-                time.sleep(wait_time)
-
-        print(f"    [GPU] Timeout waiting for available GPU")
-        return None
+        return self._get_best_available_gpu()
 
     def release_gpu(self, gpu_id: int):
         """
-        Release a previously reserved GPU.
+        Release a previously allocated GPU (decrement thread count).
 
         Args:
             gpu_id: GPU ID to release
         """
         with self.alloc_lock:
-            if gpu_id in self.reserved_gpus:
-                self.reserved_gpus.remove(gpu_id)
-                print(f"    [GPU] Released GPU {gpu_id}")
+            if gpu_id in self.gpu_thread_count and self.gpu_thread_count[gpu_id] > 0:
+                self.gpu_thread_count[gpu_id] -= 1
+                print(f"    [GPU] Released GPU {gpu_id} ({self.gpu_thread_count[gpu_id]} threads remaining)")
 
     def update_subprocess_memory(self):
         """
-        Update subprocess memory tracking by querying nvidia-smi for current GPU usage.
+        Update subprocess memory tracking by querying GPU usage.
+
+        Tries multiple methods in order:
+        1. pynvml (NVIDIA management library) - most reliable
+        2. nvidia-smi command - may fail in some environments
         This queries each GPU separately and stores per-GPU process memory.
         """
         try:
@@ -251,7 +351,22 @@ class GPUMemoryMonitor:
             with self.alloc_lock:
                 self.process_allocated_memory.clear()
 
-            # Query each GPU separately
+            # Method 1: Try pynvml
+            if NVML_AVAILABLE:
+                for gpu_id in range(NUM_GPUS):
+                    try:
+                        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
+                        procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+
+                        with self.alloc_lock:
+                            for proc in procs:
+                                # Store with GPU-specific key: (gpu_id, pid) -> memory_bytes
+                                self.process_allocated_memory[(gpu_id, proc.pid)] = proc.usedGpuMemory
+                        return  # Success, skip nvidia-smi
+                    except Exception:
+                        continue
+
+            # Method 2: Fallback to nvidia-smi
             for gpu_id in range(NUM_GPUS):
                 result = subprocess.run(
                     ['nvidia-smi', '--query-compute-apps=pid,used_memory',
@@ -271,16 +386,16 @@ class GPUMemoryMonitor:
                                     try:
                                         pid = int(parts[0].strip())
                                         memory_mb = int(parts[1].strip())
-                                        # Store with GPU-specific key: (gpu_id, pid) -> memory_mb
+                                        # Store with GPU-specific key: (gpu_id, pid) -> memory_bytes
                                         self.process_allocated_memory[(gpu_id, pid)] = memory_mb * 1024 * 1024
                                     except ValueError:
                                         continue
         except Exception:
-            # Silently fail if nvidia-smi query fails
+            # Silently fail if both methods fail
             pass
 
     def print_status(self):
-        """Print current GPU status including subprocess memory tracking."""
+        """Print current GPU status including thread count tracking."""
         if not CUDA_AVAILABLE or NUM_GPUS == 0:
             print("    [GPU Status] No CUDA GPUs available")
             return
@@ -292,8 +407,10 @@ class GPUMemoryMonitor:
         for gpu_id in range(NUM_GPUS):
             info = get_gpu_memory_info(gpu_id, self.process_allocated_memory)
             gpu_name = torch.cuda.get_device_name(gpu_id)
-            reserved_mark = " [RESERVED]" if gpu_id in self.reserved_gpus else ""
-            print(f"      GPU {gpu_id}: {gpu_name}{reserved_mark}")
+            with self.alloc_lock:
+                thread_count = self.gpu_thread_count.get(gpu_id, 0)
+            thread_mark = f" [{thread_count} thread(s)]" if thread_count > 0 else ""
+            print(f"      GPU {gpu_id}: {gpu_name}{thread_mark}")
             print(f"        Total: {info['total']:.2f} GB | "
                   f"Used: {info['used']:.2f} GB | "
                   f"Free: {info['free']:.2f} GB ({info['free_percent']:.1f}%)")
@@ -325,6 +442,7 @@ class LangFeatDownloadCompressor:
         force_reprocess: bool = False,
         stats_only: bool = False,
         skip_download: bool = False,
+        delete_after_compress: bool = False,
     ):
         """
         Initialize the downloader and compressor.
@@ -342,7 +460,8 @@ class LangFeatDownloadCompressor:
             test_mode: If True, only process the first scene for testing
             force_reprocess: If True, force reprocess all scenes including already compressed ones
             stats_only: If True, only show statistics of existing compressed scenes without downloading/compressing
-            skip_download: If True, skip download and only compress existing lang_feat.npy files
+            skip_download: If True, skip download and only compress scenes with existing lang_feat.npy files
+            delete_after_compress: If True, delete lang_feat.npy after successful compression (for training data)
         """
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
@@ -353,6 +472,7 @@ class LangFeatDownloadCompressor:
         self.force_reprocess = force_reprocess
         self.stats_only = stats_only
         self.skip_download = skip_download
+        self.delete_after_compress = delete_after_compress
 
         # Single GPU mode: force single thread
         if single_gpu is not None:
@@ -381,14 +501,15 @@ class LangFeatDownloadCompressor:
         if compression_device.startswith("cuda") and CUDA_AVAILABLE and NUM_GPUS > 0:
             self.gpu_monitor = GPUMemoryMonitor(
                 min_vram_gb=min_vram_gb,
-                min_free_percent=min_free_percent
+                min_free_percent=min_free_percent,
+                max_threads=max_threads
             )
             self.use_gpu = True
         else:
             self.gpu_monitor = None
             self.use_gpu = False
 
-        # Thread-safe sets
+        # Thread-safe sets and thread ID tracking
         self.processed_scenes: Set[str] = set()
         self.failed_scenes: List[Tuple[str, str]] = []
         self.lock = threading.Lock()
@@ -399,6 +520,7 @@ class LangFeatDownloadCompressor:
             'failed': 0,
         }
         self.total_scenes = 0
+        self.worker_thread_counter = 0  # Track worker thread IDs
 
         # Determine output directory for compression (same as download path)
         self.compression_output_dir = str(self.local_dir)
@@ -621,16 +743,18 @@ class LangFeatDownloadCompressor:
 
         from tqdm import tqdm
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            futures = {
-                executor.submit(self._reprocess_single_scene_worker, scene): scene
-                for scene in incomplete_scenes
-            }
+            # Assign thread_id to each worker (round-robin based on submission order)
+            futures = {}
+            for i, scene in enumerate(incomplete_scenes):
+                thread_id = i % self.max_threads
+                future = executor.submit(self._reprocess_single_scene_worker, scene, thread_id)
+                futures[future] = (scene, thread_id)
 
             # Track progress with tqdm
             completed = 0
             with tqdm(total=len(incomplete_scenes), desc="Reprocessing incomplete scenes", unit="scene") as pbar:
                 for future in as_completed(futures):
-                    scene = futures[future]
+                    scene, thread_id = futures[future]
                     completed += 1
                     try:
                         result = future.result()
@@ -652,12 +776,13 @@ class LangFeatDownloadCompressor:
 
         return reprocess_stats
 
-    def _reprocess_single_scene_worker(self, scene_rel_path: str) -> str:
+    def _reprocess_single_scene_worker(self, scene_rel_path: str, thread_id: int = 0) -> str:
         """
         Worker function for reprocessing a single incomplete scene.
 
         Args:
             scene_rel_path: Relative path to scene directory
+            thread_id: Thread ID (0-indexed) for GPU allocation
 
         Returns:
             'success' if reprocessing completed successfully
@@ -696,7 +821,7 @@ class LangFeatDownloadCompressor:
 
             # Step 3: Re-compress the scene
             tqdm.write(f"    [Compress] Re-compressing {scene_rel_path}")
-            if self._compress_scene(scene_rel_path):
+            if self._compress_scene(scene_rel_path, thread_id=thread_id):
                 # Step 4: Verify JSON completeness
                 is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
                 if not is_complete:
@@ -704,8 +829,8 @@ class LangFeatDownloadCompressor:
                     return 'still_incomplete'
                 else:
                     tqdm.write(f"    [Success] {scene_rel_path} reprocessed successfully")
-                    # Delete lang_feat.npy only if metadata is complete
-                    if lang_feat_path.exists():
+                    # Delete lang_feat.npy only if metadata is complete AND delete_after_compress is True
+                    if self.delete_after_compress and lang_feat_path.exists():
                         lang_feat_path.unlink()
                         with self.lock:
                             self.stats['deleted'] += 1
@@ -880,13 +1005,17 @@ class LangFeatDownloadCompressor:
                 is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
                 if is_complete:
                     print(f"  [Verified] Metadata complete after retry")
-                    try:
-                        lang_feat_path.unlink()
-                        print(f"  [Cleanup] Deleted lang_feat.npy (metadata verified complete)")
-                        with self.lock:
-                            self.stats['deleted'] += 1
-                    except Exception as e:
-                        print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    # Only delete lang_feat.npy if delete_after_compress is True
+                    if self.delete_after_compress:
+                        try:
+                            lang_feat_path.unlink()
+                            print(f"  [Cleanup] Deleted lang_feat.npy (metadata verified complete)")
+                            with self.lock:
+                                self.stats['deleted'] += 1
+                        except Exception as e:
+                            print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    else:
+                        print(f"  [Keep] lang_feat.npy preserved after retry")
                     return True
 
             # Cleanup incomplete files before retry
@@ -900,7 +1029,7 @@ class LangFeatDownloadCompressor:
         print(f"  [Warning] Preserving lang_feat.npy for manual inspection")
         return False
 
-    def _compress_scene(self, scene_rel_path: str) -> bool:
+    def _compress_scene(self, scene_rel_path: str, thread_id: int = 0) -> bool:
         """
         Compress lang_feat.npy for a single scene using compress_grid_svd.py.
 
@@ -908,6 +1037,7 @@ class LangFeatDownloadCompressor:
 
         Args:
             scene_rel_path: Relative path to scene directory
+            thread_id: Thread ID (0-indexed) for GPU allocation
 
         Returns:
             True if compression successful, False otherwise
@@ -939,8 +1069,11 @@ class LangFeatDownloadCompressor:
                 gpu_name = torch.cuda.get_device_name(gpu_id)
                 print(f"  [GPU] Using fixed GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
             else:
-                # Multi-GPU mode: wait for available GPU
-                gpu_id = self.gpu_monitor.wait_for_available_gpu(timeout=self.gpu_wait_timeout)
+                # Multi-GPU mode: use new allocation strategy
+                gpu_id = self.gpu_monitor.allocate_gpu_for_thread(
+                    thread_id=thread_id,
+                    timeout=self.gpu_wait_timeout
+                )
 
                 if gpu_id is None:
                     print(f"  [GPU] No available GPU for {scene_rel_path}, skipping...")
@@ -948,7 +1081,7 @@ class LangFeatDownloadCompressor:
 
                 device = f"cuda:{gpu_id}"
                 gpu_name = torch.cuda.get_device_name(gpu_id)
-                print(f"  [GPU] Allocated GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
+                # print(f"  [GPU] Allocated GPU {gpu_id} ({gpu_name}) for {scene_rel_path}")
 
         try:
             # Build command for compress_grid_svd.py
@@ -1004,15 +1137,19 @@ class LangFeatDownloadCompressor:
                 is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
 
                 if is_complete:
-                    # Metadata is complete, safe to delete lang_feat.npy
+                    # Metadata is complete
                     print(f"  [Verified] Metadata complete for {scene_rel_path}")
-                    try:
-                        lang_feat_path.unlink()
-                        print(f"  [Cleanup] Deleted lang_feat.npy: {scene_rel_path} (metadata verified complete)")
-                        with self.lock:
-                            self.stats['deleted'] += 1
-                    except Exception as e:
-                        print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    # Only delete lang_feat.npy if delete_after_compress is True
+                    if self.delete_after_compress:
+                        try:
+                            lang_feat_path.unlink()
+                            print(f"  [Cleanup] Deleted lang_feat.npy: {scene_rel_path} (metadata verified complete)")
+                            with self.lock:
+                                self.stats['deleted'] += 1
+                        except Exception as e:
+                            print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
+                    else:
+                        print(f"  [Keep] lang_feat.npy preserved: {scene_rel_path}")
                     return True
                 else:
                     # Metadata is incomplete, switch to single-threaded mode and retry
@@ -1037,14 +1174,19 @@ class LangFeatDownloadCompressor:
             if gpu_id is not None and self.single_gpu is None:
                 self.gpu_monitor.release_gpu(gpu_id)
 
-    def _download_and_compress_worker(self, scene_rel_path: str):
-        """Worker thread: download then immediately compress a single scene."""
+    def _download_and_compress_worker(self, scene_rel_path: str, thread_id: int):
+        """Worker thread: download then immediately compress a single scene.
+
+        Args:
+            scene_rel_path: Relative path to scene directory
+            thread_id: Thread ID (0-indexed) for GPU allocation
+        """
         scene_name = Path(scene_rel_path).name
 
         # Skip download mode: directly compress
         if self.skip_download:
             self._print_progress()
-            if self._compress_scene(scene_rel_path):
+            if self._compress_scene(scene_rel_path, thread_id=thread_id):
                 with self.lock:
                     self.stats['compressed'] += 1
                     self.processed_scenes.add(scene_name)
@@ -1062,7 +1204,7 @@ class LangFeatDownloadCompressor:
                 self.stats['downloaded'] += 1
 
             # Step 2: Immediately compress
-            if self._compress_scene(scene_rel_path):
+            if self._compress_scene(scene_rel_path, thread_id=thread_id):
                 with self.lock:
                     self.stats['compressed'] += 1
                     self.processed_scenes.add(scene_name)
@@ -1177,12 +1319,17 @@ class LangFeatDownloadCompressor:
         print(f"  Max compression threads: {self.max_threads}")
         print(f"  Compression device: {self.compression_device}")
         print(f"  RPCA enabled: {self.use_rpca}")
+        print(f"  Skip download: {self.skip_download}")
+        print(f"  Delete lang_feat after compress: {self.delete_after_compress}")
 
         if self.use_gpu:
             if self.single_gpu is not None:
                 print(f"  GPU allocation: Single-GPU mode (GPU {self.single_gpu}, single-threaded)")
             else:
-                print(f"  GPU allocation: Multi-GPU mode (min {self.gpu_monitor.min_vram_gb} GB VRAM)")
+                if NUM_GPUS >= self.max_threads:
+                    print(f"  GPU allocation: Round-robin mode ({self.max_threads} threads -> {self.max_threads} unique GPUs)")
+                else:
+                    print(f"  GPU allocation: Shared mode ({self.max_threads} threads -> {NUM_GPUS} GPUs)")
 
         # Process scenes with threading
         print("\n" + "=" * 60)
@@ -1190,13 +1337,15 @@ class LangFeatDownloadCompressor:
         print("=" * 60)
 
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
-            futures = {
-                executor.submit(self._download_and_compress_worker, scene): scene
-                for scene in scenes
-            }
+            # Assign thread_id to each worker (round-robin based on submission order)
+            futures = {}
+            for i, scene in enumerate(scenes):
+                thread_id = i % self.max_threads
+                future = executor.submit(self._download_and_compress_worker, scene, thread_id)
+                futures[future] = (scene, thread_id)
 
             for future in as_completed(futures):
-                scene = futures[future]
+                scene, thread_id = futures[future]
                 try:
                     future.result()
                 except Exception as e:
@@ -1229,6 +1378,11 @@ Examples:
     #   --skip_download:     Skip download, only compress existing lang_feat.npy files
     #   --force_reprocess:   Force reprocess all scenes (delete existing compressed files)
     #   --test_mode:         Only process the first scene for testing
+
+    # Lang feat file management:
+    #   --delete_after_compress:  Delete lang_feat.npy after successful compression
+    #                           (useful for training data to save disk space)
+    #                           Default: keep lang_feat.npy (for test/val datasets)
 
     # Optional parameters:
     #   --token:             HuggingFace access token (for private repos)
@@ -1360,6 +1514,11 @@ Examples:
         action="store_true",
         help="Skip download and only compress existing lang_feat.npy files (useful for val/test datasets)",
     )
+    parser.add_argument(
+        "--delete_after_compress",
+        action="store_true",
+        help="Delete lang_feat.npy after successful compression (useful for training data to save disk space)",
+    )
 
     args = parser.parse_args()
 
@@ -1386,7 +1545,15 @@ Examples:
         force_reprocess=args.force_reprocess,
         stats_only=args.stats_only,
         skip_download=args.skip_download,
+        delete_after_compress=args.delete_after_compress,
     )
 
     # Run processing
-    processor.run()
+    try:
+        processor.run()
+    finally:
+        # Cleanup pynvml
+        if NVML_AVAILABLE:
+            pynvml.nvmlShutdown()
+            print("    [GPU] pynvml shutdown complete")
+
