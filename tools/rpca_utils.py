@@ -1082,6 +1082,13 @@ def auto_rpca(D: np.ndarray, use_gpu: Optional[bool] = None,
 
         print("Using StructuredRPCA_GPU (weighted SVD with row repetition)")
 
+        # Clear GPU cache before allocating large tensors for RPCA
+        if device and device.startswith('cuda'):
+            torch.cuda.empty_cache()
+            # Optional: Force synchronization to ensure all operations are complete
+            if hasattr(torch.cuda, 'synchronize'):
+                torch.cuda.synchronize()
+
         # Separate init kwargs from fit kwargs
         init_kwargs = {}
         fit_kwargs = {}

@@ -457,6 +457,11 @@ def compute_grid_average_features(
     # Map each point to its final grid index
     for grid_idx, indices in enumerate(grid_to_point_indices):
         point_to_grid_indices[indices] = grid_idx
+
+    # Clean up GPU cache before returning (releases intermediate tensors)
+    if device.startswith('cuda'):
+        torch.cuda.empty_cache()
+
     return grid_avg_feats.cpu().numpy(), point_to_grid_indices, grid_point_counts.cpu().numpy()
 
 
@@ -505,6 +510,12 @@ def perform_svd_decomposition(
     # Apply RPCA if requested
     # feat_matrix = torch.from_numpy(grid_avg_feats).to(device)
     if use_rpca:
+        # Clean up GPU cache before RPCA to free up memory
+        if device.startswith('cuda'):
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'synchronize'):
+                torch.cuda.synchronize()
+        
         print(f"    Applying RPCA preprocessing...")
         rpca_results = apply_rpca(grid_avg_feats, max_iter=rpca_max_iter, tol=rpca_tol, device=device, structured=True, indices=point_to_grid_indices, d=grid_point_counts, return_tensors=True)
         L_matrix = rpca_results['L']  # L is now a GPU tensor directly
