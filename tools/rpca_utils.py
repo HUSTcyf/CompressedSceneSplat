@@ -847,8 +847,16 @@ class StructuredRPCA_GPU:
             # This is memory-efficient: [M, N] * [M, 1] instead of [M, M] @ [M, N]
             M_weighted = M * d_sqrt.unsqueeze(-1)
 
-            # Perform SVT on weighted matrix (GPU)
-            L_u_weighted = self._svt_gpu(M_weighted, self.lambda_structured / mu)
+            # Perform SVT on weighted matrix (try GPU first, fallback to CPU on OOM)
+            try:
+                L_u_weighted = self._svt_gpu(M_weighted, self.lambda_structured / mu)
+            except RuntimeError as e:
+                if 'out of memory' in str(e) or 'CUDA driver error' in str(e):
+                    print(f'    [Warning] GPU OOM in SVT, falling back to CPU (iteration {i})')
+                    torch.cuda.empty_cache()
+                    L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
+                else:
+                    raise
 
             # Map back using broadcasting: L_u = L_u_weighted * d_inv_sqrt.unsqueeze(1)
             # This is memory-efficient: [M, N] * [M, 1] instead of [M, M] @ [M, N]
@@ -961,6 +969,28 @@ class StructuredRPCA_GPU:
         L = U @ torch.diag(s_thresholded) @ Vt
 
         return L
+
+    def _svt_cpu(self, M: torch.Tensor, tau: float) -> torch.Tensor:
+        """
+        Perform SVT on CPU as fallback when GPU OOM occurs.
+
+        SVT(M, tau) = U * diag(shrink(s, tau)) * V^T
+        where shrink(s, tau) = max(s - tau, 0)
+        """
+        # Move tensor to CPU for SVD computation
+        M_cpu = M.cpu()
+
+        # SVD on CPU
+        U, s, Vt = torch.linalg.svd(M_cpu, full_matrices=False)
+
+        # Threshold singular values
+        s_thresholded = torch.clamp(s - tau, min=0)
+
+        # Reconstruction on CPU
+        L = U @ torch.diag(s_thresholded) @ Vt
+
+        # Move result back to GPU
+        return L.to(self.device)
 
     def map_to_full(self, mat_origin: torch.Tensor):
         if not isinstance(self.indices, torch.Tensor):
