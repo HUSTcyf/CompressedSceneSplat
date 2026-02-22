@@ -824,6 +824,9 @@ class StructuredRPCA_GPU:
         d_sqrt = torch.sqrt(self.d)  # [M] - sqrt of grid point counts
         d_inv_sqrt = 1.0 / d_sqrt  # [M] - inverse sqrt of grid point counts
 
+        # Save original device for moving results back at the end
+        original_device = self.device
+
         if enable_timing:
             timings['init'] = time.time() - t_start
 
@@ -832,6 +835,7 @@ class StructuredRPCA_GPU:
 
         # IALM algorithm
         i, err = 0, float('inf')
+        use_cpu_mode = False  # Once True, stay on CPU for all remaining iterations
 
         print(f"\nStructured RPCA iterations:")
         while err > _tol and i < max_iter:
@@ -839,6 +843,16 @@ class StructuredRPCA_GPU:
 
             # Step 1: Update L_u using weighted SVT
             t_svt = time.time() if enable_timing else 0
+
+            # Prepare computation tensors - move to CPU if in CPU mode
+            if use_cpu_mode:
+                L_u = L_u.cpu() if L_u.device.type == 'cuda' else L_u
+                E_u = E_u.cpu() if E_u.device.type == 'cuda' else E_u
+                Y = Y.cpu() if Y.device.type == 'cuda' else Y
+                d_sqrt = d_sqrt.cpu() if d_sqrt.device.type == 'cuda' else d_sqrt
+                d_inv_sqrt = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
+                self.A_u = self.A_u.cpu() if self.A_u.device.type == 'cuda' else self.A_u
+                self.d = self.d.cpu() if self.d.device.type == 'cuda' else self.d
 
             M = L_u - E_u + Y / mu
             L_u_origin = L_u
@@ -848,42 +862,49 @@ class StructuredRPCA_GPU:
             M_weighted = M * d_sqrt.unsqueeze(-1)
 
             # Perform SVT on weighted matrix (try GPU first, fallback to CPU on OOM)
-            iteration_used_cpu = False
-            try:
-                L_u_weighted = self._svt_gpu(M_weighted, self.lambda_structured / mu)
-            except RuntimeError as e:
-                if 'out of memory' in str(e) or 'CUDA driver error' in str(e) or 'INTERNAL ASSERT FAILED' in str(e):
-                    print(f'    [Warning] GPU error in SVT, falling back to CPU (iteration {i})')
-                    torch.cuda.empty_cache()
-                    # Force garbage collection to free up memory
-                    import gc
-                    gc.collect()
-                    # Use CPU for SVT
-                    L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
-                    iteration_used_cpu = True
-                    self.device = "cpu"
-                    self.A_u = self.A_u.to(self.device)
-                    self.d = self.d.to(self.device)
-                    M = M.cpu()
-                    Y = Y.cpu()
-                else:
-                    raise
-
-            # Map back using broadcasting: L_u = L_u_weighted * d_inv_sqrt.unsqueeze(1)
-            # If we fell back to CPU, keep the computation on CPU for this iteration
-            if iteration_used_cpu:
-                # Everything stays on CPU for this iteration
-                d_inv_sqrt_cpu = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
-                L_u = (L_u_weighted * d_inv_sqrt_cpu.unsqueeze(-1))
-                s_u = mu * (L_u - L_u_origin.cpu())  # Dual Residual
+            if use_cpu_mode:
+                # Already in CPU mode from previous iteration
+                L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
+                cpu_note = " (CPU mode)"
             else:
-                L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
-                s_u = mu * (L_u - L_u_origin) # Dual Residual
+                # Try GPU first
+                try:
+                    L_u_weighted = self._svt_gpu(M_weighted, self.lambda_structured / mu)
+                    cpu_note = ""
+                except RuntimeError as e:
+                    if 'out of memory' in str(e) or 'CUDA driver error' in str(e) or 'INTERNAL ASSERT FAILED' in str(e):
+                        print(f'    [Warning] GPU error in SVT, switching to CPU mode for remaining iterations')
+                        torch.cuda.empty_cache()
+                        import gc
+                        gc.collect()
+
+                        # Move all state variables to CPU
+                        L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
+                        L_u = L_u.cpu() if L_u.device.type == 'cuda' else L_u
+                        E_u = E_u.cpu() if E_u.device.type == 'cuda' else E_u
+                        Y = Y.cpu() if Y.device.type == 'cuda' else Y
+                        d_sqrt = d_sqrt.cpu() if d_sqrt.device.type == 'cuda' else d_sqrt
+                        d_inv_sqrt = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
+                        self.A_u = self.A_u.cpu() if self.A_u.device.type == 'cuda' else self.A_u
+                        self.d = self.d.cpu() if self.d.device.type == 'cuda' else self.d
+                        L_u_origin = L_u_origin.cpu() if L_u_origin.device.type == 'cuda' else L_u_origin
+
+                        use_cpu_mode = True  # Stay on CPU for all remaining iterations
+                        cpu_note = " (CPU fallback)"
+                    else:
+                        raise
+
+            # Map back using broadcasting
+            L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
+            s_u = mu * (L_u - L_u_origin)  # Dual Residual
 
             # print("L_u", float(L_u.min()), float(L_u.max()))
             # print("s_u", float(s_u.min()), float(s_u.max()))
 
-            torch.cuda.synchronize()
+            # Only synchronize if using GPU
+            if not use_cpu_mode:
+                torch.cuda.synchronize()
+
             if enable_timing:
                 iter_svt = time.time() - t_svt
                 timings['svt'] += iter_svt
@@ -900,7 +921,10 @@ class StructuredRPCA_GPU:
             # Tensor shapes: M [r, n], thresholds [r], thresholds.unsqueeze(-1) [r, 1], E_u [r, n]
             E_u = torch.sign(M) * torch.clamp(torch.abs(M) - thresholds.unsqueeze(-1), min=0)
 
-            torch.cuda.synchronize()
+            # Only synchronize if using GPU
+            if not use_cpu_mode:
+                torch.cuda.synchronize()
+
             if enable_timing:
                 iter_shrink = time.time() - t_shrink
                 timings['shrink'] += iter_shrink
@@ -911,7 +935,10 @@ class StructuredRPCA_GPU:
             err = torch.linalg.norm(residual, ord='fro') / torch.linalg.norm(self.A_u, ord='fro')
             err = err.item()
 
-            torch.cuda.synchronize()
+            # Only synchronize if using GPU
+            if not use_cpu_mode:
+                torch.cuda.synchronize()
+
             if enable_timing:
                 iter_error = time.time() - t_error
                 timings['error'] += iter_error
@@ -922,7 +949,10 @@ class StructuredRPCA_GPU:
             # mu = min(mu * self.rho, self.mu_upper_bound)
             mu = self.update_mu_safely(residual.abs().mean(), s_u.abs().mean(), mu)
 
-            torch.cuda.synchronize()
+            # Only synchronize if using GPU
+            if not use_cpu_mode:
+                torch.cuda.synchronize()
+
             if enable_timing:
                 iter_dual = time.time() - t_dual
                 timings['dual_update'] += iter_dual
@@ -933,7 +963,6 @@ class StructuredRPCA_GPU:
                 if enable_timing:
                     iter_total = iter_svt + iter_shrink + iter_error + iter_dual
                     timing_info = f" | SVT: {iter_svt:.4f}s | Shrink: {iter_shrink:.4f}s | Error: {iter_error:.4f}s | Dual: {iter_dual:.4f}s | Total: {iter_total:.4f}s"
-                cpu_note = " (CPU fallback)" if iteration_used_cpu else ""
                 print(f'  Iteration: {i:4d}; Error: {err:0.4e}; mu: {mu:0.6e}{timing_info}{cpu_note}')
 
             # Check convergence
@@ -944,9 +973,15 @@ class StructuredRPCA_GPU:
         if i >= max_iter:
             print(f'  Finished optimization. Max iterations reached.')
 
-        # Keep L and E as tensors on GPU for efficient subsequent operations
-        self.L = L_u
-        self.E = E_u
+        # Keep L and E as tensors (move to original device if on CPU)
+        if use_cpu_mode:
+            print("  Moving results back to GPU...")
+            torch.cuda.empty_cache()
+            self.L = L_u.to(original_device)
+            self.E = E_u.to(original_device)
+        else:
+            self.L = L_u
+            self.E = E_u
 
         print(f"\nStructured RPCA fitting completed:")
         print(f"  Final iterations: {i}")
