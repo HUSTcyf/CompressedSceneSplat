@@ -832,12 +832,13 @@ class StructuredRPCA_GPU:
 
         # IALM algorithm
         i, err = 0, float('inf')
+        use_cpu_fallback = False  # Track if we've fallen back to CPU for this iteration
 
         print(f"\nStructured RPCA iterations:")
         while err > _tol and i < max_iter:
             i += 1
 
-            # Step 1: Update L_u using weighted SVT (all on GPU)
+            # Step 1: Update L_u using weighted SVT
             t_svt = time.time() if enable_timing else 0
 
             M = L_u - E_u + Y / mu
@@ -848,20 +849,37 @@ class StructuredRPCA_GPU:
             M_weighted = M * d_sqrt.unsqueeze(-1)
 
             # Perform SVT on weighted matrix (try GPU first, fallback to CPU on OOM)
+            iteration_used_cpu = False
             try:
                 L_u_weighted = self._svt_gpu(M_weighted, self.lambda_structured / mu)
             except RuntimeError as e:
-                if 'out of memory' in str(e) or 'CUDA driver error' in str(e):
-                    print(f'    [Warning] GPU OOM in SVT, falling back to CPU (iteration {i})')
+                if 'out of memory' in str(e) or 'CUDA driver error' in str(e) or 'INTERNAL ASSERT FAILED' in str(e):
+                    print(f'    [Warning] GPU error in SVT, falling back to CPU (iteration {i})')
                     torch.cuda.empty_cache()
+                    # Force garbage collection to free up memory
+                    import gc
+                    gc.collect()
+                    # Use CPU for SVT
                     L_u_weighted = self._svt_cpu(M_weighted, self.lambda_structured / mu)
+                    iteration_used_cpu = True
+                    use_cpu_fallback = True
                 else:
                     raise
 
             # Map back using broadcasting: L_u = L_u_weighted * d_inv_sqrt.unsqueeze(1)
-            # This is memory-efficient: [M, N] * [M, 1] instead of [M, M] @ [M, N]
-            L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
-            s_u = mu * (L_u - L_u_origin) # Dual Residual
+            # If we fell back to CPU, keep the computation on CPU for this iteration
+            if iteration_used_cpu:
+                # Everything stays on CPU for this iteration
+                d_inv_sqrt_cpu = d_inv_sqrt.cpu() if d_inv_sqrt.device.type == 'cuda' else d_inv_sqrt
+                L_u = (L_u_weighted * d_inv_sqrt_cpu.unsqueeze(-1))
+                s_u = mu * (L_u - L_u_origin.cpu())  # Dual Residual
+                # Move back to GPU at end of iteration
+                L_u = L_u.to(self.device)
+                s_u = s_u.to(self.device)
+            else:
+                L_u = L_u_weighted * d_inv_sqrt.unsqueeze(-1)
+                s_u = mu * (L_u - L_u_origin) # Dual Residual
+
             # print("L_u", float(L_u.min()), float(L_u.max()))
             # print("s_u", float(s_u.min()), float(s_u.max()))
 
@@ -870,7 +888,7 @@ class StructuredRPCA_GPU:
                 iter_svt = time.time() - t_svt
                 timings['svt'] += iter_svt
 
-            # Step 2: Update E_u using weighted soft thresholding (all on GPU)
+            # Step 2: Update E_u using weighted soft thresholding
             t_shrink = time.time() if enable_timing else 0
             M = self.A_u - L_u + Y / mu
 
@@ -887,7 +905,7 @@ class StructuredRPCA_GPU:
                 iter_shrink = time.time() - t_shrink
                 timings['shrink'] += iter_shrink
 
-            # Step 3: Compute error (on GPU)
+            # Step 3: Compute error
             t_error = time.time() if enable_timing else 0
             residual = self.A_u - L_u - E_u
             err = torch.linalg.norm(residual, ord='fro') / torch.linalg.norm(self.A_u, ord='fro')
@@ -898,7 +916,7 @@ class StructuredRPCA_GPU:
                 iter_error = time.time() - t_error
                 timings['error'] += iter_error
 
-            # Step 4: Update Lagrange multiplier (on GPU)
+            # Step 4: Update Lagrange multiplier
             t_dual = time.time() if enable_timing else 0
             Y = Y + mu * residual
             # mu = min(mu * self.rho, self.mu_upper_bound)
@@ -915,7 +933,8 @@ class StructuredRPCA_GPU:
                 if enable_timing:
                     iter_total = iter_svt + iter_shrink + iter_error + iter_dual
                     timing_info = f" | SVT: {iter_svt:.4f}s | Shrink: {iter_shrink:.4f}s | Error: {iter_error:.4f}s | Dual: {iter_dual:.4f}s | Total: {iter_total:.4f}s"
-                print(f'  Iteration: {i:4d}; Error: {err:0.4e}; mu: {mu:0.6e}{timing_info}')
+                cpu_note = " (CPU fallback)" if iteration_used_cpu else ""
+                print(f'  Iteration: {i:4d}; Error: {err:0.4e}; mu: {mu:0.6e}{timing_info}{cpu_note}')
 
             # Check convergence
             if err < _tol:
