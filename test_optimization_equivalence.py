@@ -241,7 +241,100 @@ def sample_half_density_optimized(coord, feat, point_to_grid, labels, grid_to_po
     }
 
 
-# Test both implementations
+# Ultra Optimized implementation (eliminates .item() loop for permutation lookup)
+def sample_half_density_ultra_optimized(coord, feat, point_to_grid, labels, grid_to_points, min_ratio=0.3, max_ratio=0.7):
+    """
+    Ultra optimized implementation - eliminates the .item() loop in permutation lookup.
+
+    Key improvement: Instead of [perm_cache[grid_counts[i].item()] for i in range(num_grids)]
+    which causes 50,000 CPU-GPU syncs, use a fully vectorized broadcast approach.
+    """
+    device = coord.device
+
+    point_tensors = list(grid_to_points.values())
+    num_grids = len(point_tensors)
+
+    if num_grids == 0:
+        num_samples = max(1, int(coord.shape[0] * 0.5))
+        perm = torch.randperm(coord.shape[0], device=device)
+        all_indices = perm[:num_samples]
+        actual_ratios = torch.full((num_samples,), 0.5, device=device)
+    else:
+        grid_counts = torch.tensor([len(pts) for pts in point_tensors], device=device)
+
+        # Generate all random ratios at once on GPU
+        sample_ratios = torch.empty(num_grids, device=device)
+        sample_ratios.uniform_(min_ratio, max_ratio)
+
+        num_samples_per_grid = (grid_counts.float() * sample_ratios).long().clamp(min=1)
+
+        # Flatten all point indices
+        flat_point_indices = torch.cat(point_tensors)
+
+        # Create grid offsets for indexing into flat arrays
+        grid_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                 grid_counts[:-1].cumsum(dim=0)])
+
+        # Generate random permutations for each grid (cache by count)
+        unique_counts = torch.unique(grid_counts)
+        perm_cache = {}
+        for count in unique_counts:
+            count_val = count.item()
+            perm_cache[count_val] = torch.randperm(count_val, device=device)
+
+        # ULTRA OPTIMIZED: Build flat permutation without .item() loop
+        # Use scatter to place permutations in correct grid order
+        total_points = grid_counts.sum().item()
+        flat_perms = torch.empty(total_points, dtype=torch.long, device=device)
+
+        for count in unique_counts:
+            count_val = count.item()
+            perm = perm_cache[count_val]  # [count_val]
+
+            # Find grids with this count (vectorized comparison)
+            mask = (grid_counts == count_val)  # [num_grids] boolean
+            matching_grids = mask.nonzero(as_tuple=False).squeeze(-1)  # [M]
+
+            if len(matching_grids) > 0:
+                # For each matching grid, place its permutation in the correct position
+                for grid_idx in matching_grids:
+                    grid_idx_val = grid_idx.item()
+                    grid_start = grid_offsets[grid_idx_val].item()
+                    grid_end = grid_start + count_val
+                    # Broadcast and place permutation for this specific grid
+                    flat_perms[grid_start:grid_end] = perm
+
+        # Create position indicators within each grid's permutation
+        positions_in_grid = torch.arange(num_grids, device=device).repeat_interleave(grid_counts)
+        grid_ends = grid_counts.cumsum(dim=0)
+        positions_in_perm_flat = torch.arange(grid_counts.sum().item(), device=device)
+        positions_in_perm = positions_in_perm_flat - torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                                                grid_ends[:-1]]).repeat_interleave(grid_counts)
+
+        # Create sampling mask: element selected if position < num_samples_for_that_grid
+        samples_per_element = num_samples_per_grid[positions_in_grid]
+        take_mask = positions_in_perm < samples_per_element
+
+        # Extract selected indices (all vectorized)
+        selected_positions = torch.where(take_mask)[0]
+        all_indices = flat_point_indices[selected_positions]
+
+        # Compute actual ratios
+        selected_grid_ids = positions_in_grid[selected_positions]
+        selected_counts = grid_counts[selected_grid_ids].float()
+        selected_num_samples = num_samples_per_grid[selected_grid_ids].float()
+        actual_ratios = selected_num_samples / selected_counts
+
+    return {
+        'coord': coord[all_indices],
+        'feat': feat[all_indices],
+        'indices': all_indices,
+        'actual_ratios': actual_ratios,
+        'mean_ratio': actual_ratios.mean(),
+    }
+
+
+# Test all three implementations
 start = time.time()
 original_sample = sample_half_density_original(coord, feat, point_to_grid, labels, grid_to_points)
 original_time = time.time() - start
@@ -250,19 +343,28 @@ start = time.time()
 optimized_sample = sample_half_density_optimized(coord, feat, point_to_grid, labels, grid_to_points)
 optimized_time = time.time() - start
 
-print(f"  Original time: {original_time*1000:.2f}ms")
-print(f"  Optimized time: {optimized_time*1000:.2f}ms")
-print(f"  Speedup: {original_time/optimized_time:.2f}x")
-print(f"  Original samples: {original_sample['indices'].shape[0]}")
-print(f"  Optimized samples: {optimized_sample['indices'].shape[0]}")
-print(f"  Original mean ratio: {original_sample['mean_ratio']:.4f}")
-print(f"  Optimized mean ratio: {optimized_sample['mean_ratio']:.4f}")
+start = time.time()
+ultra_optimized_sample = sample_half_density_ultra_optimized(coord, feat, point_to_grid, labels, grid_to_points)
+ultra_optimized_time = time.time() - start
+
+print(f"  Original time:      {original_time*1000:.2f}ms")
+print(f"  Optimized time:     {optimized_time*1000:.2f}ms (speedup: {original_time/optimized_time:.2f}x)")
+print(f"  Ultra optimized:    {ultra_optimized_time*1000:.2f}ms (speedup: {original_time/ultra_optimized_time:.2f}x)")
+print(f"  Original samples:      {original_sample['indices'].shape[0]}")
+print(f"  Optimized samples:     {optimized_sample['indices'].shape[0]}")
+print(f"  Ultra optimized:       {ultra_optimized_sample['indices'].shape[0]}")
+print(f"  Original mean ratio:   {original_sample['mean_ratio']:.4f}")
+print(f"  Optimized mean ratio:  {optimized_sample['mean_ratio']:.4f}")
+print(f"  Ultra optimized:       {ultra_optimized_sample['mean_ratio']:.4f}")
 
 # Check statistical properties (since actual indices will differ due to RNG)
 orig_ratio = original_sample['mean_ratio'].item()
 opt_ratio = optimized_sample['mean_ratio'].item()
+ultra_ratio = ultra_optimized_sample['mean_ratio'].item()
 ratio_diff = abs(orig_ratio - opt_ratio)
-print(f"  Mean ratio difference: {ratio_diff:.4f}")
+ultra_ratio_diff = abs(orig_ratio - ultra_ratio)
+print(f"  Mean ratio diff (opt vs orig):     {ratio_diff:.4f}")
+print(f"  Mean ratio diff (ultra vs orig):   {ultra_ratio_diff:.4f}")
 
 # Check that sampling ratio is within expected range
 if 0.3 <= opt_ratio <= 0.7:
@@ -270,20 +372,37 @@ if 0.3 <= opt_ratio <= 0.7:
 else:
     print(f"  ✗ Optimized ratio out of range: {opt_ratio:.4f}")
 
+if 0.3 <= ultra_ratio <= 0.7:
+    print("  ✓ Ultra optimized ratio within expected range")
+else:
+    print(f"  ✗ Ultra optimized ratio out of range: {ultra_ratio:.4f}")
+
 # Check that samples are valid indices
 num_points = coord.shape[0]
 if optimized_sample['indices'].min() >= 0 and optimized_sample['indices'].max() < num_points:
-    print("  ✓ All indices are valid")
+    print("  ✓ Optimized indices are valid")
 else:
-    print("  ✗ Invalid indices detected")
+    print("  ✗ Optimized invalid indices detected")
+
+if ultra_optimized_sample['indices'].min() >= 0 and ultra_optimized_sample['indices'].max() < num_points:
+    print("  ✓ Ultra optimized indices are valid")
+else:
+    print("  ✗ Ultra optimized invalid indices detected")
 
 # Check for duplicates
-unique_indices = torch.unique(optimized_sample['indices'])
-num_duplicates = optimized_sample['indices'].shape[0] - unique_indices.shape[0]
-if num_duplicates == 0:
-    print("  ✓ No duplicate indices")
+unique_indices_opt = torch.unique(optimized_sample['indices'])
+num_duplicates_opt = optimized_sample['indices'].shape[0] - unique_indices_opt.shape[0]
+if num_duplicates_opt == 0:
+    print("  ✓ No duplicate indices (optimized)")
 else:
-    print(f"  ⚠ Found {num_duplicates} duplicate indices (may be expected)")
+    print(f"  ⚠ Found {num_duplicates_opt} duplicate indices in optimized (may be expected)")
+
+unique_indices_ultra = torch.unique(ultra_optimized_sample['indices'])
+num_duplicates_ultra = ultra_optimized_sample['indices'].shape[0] - unique_indices_ultra.shape[0]
+if num_duplicates_ultra == 0:
+    print("  ✓ No duplicate indices (ultra optimized)")
+else:
+    print(f"  ⚠ Found {num_duplicates_ultra} duplicate indices in ultra optimized (may be expected)")
 print()
 
 

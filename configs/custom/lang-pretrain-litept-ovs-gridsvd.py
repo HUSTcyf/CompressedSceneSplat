@@ -119,15 +119,16 @@ density_invariant = dict(
     max_sample_ratio=0.7,  # Maximum sampling ratio (70%)
 
     # Consistency loss settings
-    consistency_weight=10,  # Weight for density consistency loss
+    consistency_weight=100,  # Weight for density consistency loss
     consistency_type="mse",  # Options: "mse", "cosine", "kl"
 
     # Training scenarios to use
-    scenarios=["dense", "half", "single"],  # All three scenarios
+    # Temporarily removed "half" scenario to reduce memory pressure and improve speed
+    scenarios=["dense", "single"],  # Two scenarios (half removed for optimization)
     # Weight for each scenario's loss
     scenario_weights=dict(
         dense=1.0,    # Dense input (all valid points)
-        half=1.0,    # Half density (30-70% sampling)
+        # half=1.0,   # Half density (30-70% sampling) - TEMPORARILY DISABLED
         single=1.0,  # Single point per grid
     ),
 
@@ -138,7 +139,7 @@ density_invariant = dict(
 # ============================================================================
 # Scheduler settings
 # ============================================================================
-eval_epoch = 10  # total eval & checkpoint epoch
+eval_epoch = 50  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (100 epochs for pretraining)
 optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
 scheduler = dict(

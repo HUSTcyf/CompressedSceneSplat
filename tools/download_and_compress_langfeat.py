@@ -532,6 +532,11 @@ class LangFeatDownloadCompressor:
         If grid_meta_data.json doesn't exist, delete lang_feat.npy to force re-download.
         If force_reprocess=True, delete both grid_meta_data.json and lang_feat.npy to force full reprocessing.
         If skip_download=True, find scenes with lang_feat.npy that need compression.
+
+        When both skip_download=True and force_reprocess=True:
+        - Find all scenes with lang_feat.npy (regardless of grid_meta_data.json)
+        - Delete compressed files (grid_meta_data.json and SVD files) but keep lang_feat.npy
+        - Reprocess all scenes with existing lang_feat.npy
         """
         lang_feat_files = []
         base_path = self.local_dir / self.target_subfolder
@@ -547,9 +552,29 @@ class LangFeatDownloadCompressor:
                     lang_feat_path = item / "lang_feat.npy"
                     grid_meta_path = item / "grid_meta_data.json"
 
-                    # Need both coord.npy and lang_feat.npy, but not compressed yet
-                    if coord_path.exists() and lang_feat_path.exists() and not grid_meta_path.exists():
+                    # Need both coord.npy and lang_feat.npy
+                    if coord_path.exists() and lang_feat_path.exists():
                         rel_path = item.relative_to(self.local_dir)
+
+                        # Force reprocess mode in skip_download: delete compressed files but keep lang_feat.npy
+                        if self.force_reprocess and grid_meta_path.exists():
+                            print(f"  [Force Reprocess] Deleting compressed files (keeping lang_feat.npy): {rel_path}")
+                            try:
+                                # Delete grid_meta_data.json
+                                grid_meta_path.unlink()
+                                # Delete compressed SVD files
+                                for svd_file in item.glob("lang_feat_grid_svd_r*.npz"):
+                                    svd_file.unlink()
+                                print(f"  [Force Reprocess] Deleted compressed files for: {rel_path}")
+                            except Exception as e:
+                                print(f"  [Force Reprocess] Warning: Could not delete compressed files for {rel_path}: {e}")
+
+                        # Skip if already compressed and NOT force_reprocess
+                        if grid_meta_path.exists() and not self.force_reprocess:
+                            print(f"  [Skip] Already compressed: {rel_path}")
+                            continue
+
+                        # Add scene to processing list
                         lang_feat_files.append(str(rel_path).replace('\\', '/'))
             return sorted(lang_feat_files)
 
@@ -1502,7 +1527,8 @@ Examples:
     parser.add_argument(
         "--force_reprocess",
         action="store_true",
-        help="Force reprocess all scenes, including those already compressed (deletes grid_meta_data.json and SVD files)",
+        help="Force reprocess all scenes, including those already compressed (deletes grid_meta_data.json and SVD files). "
+             "With --skip_download: keeps lang_feat.npy and only re-compresses. Without --skip_download: deletes lang_feat.npy and re-downloads.",
     )
     parser.add_argument(
         "--stats_only",

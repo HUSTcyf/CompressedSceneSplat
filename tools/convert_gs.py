@@ -34,6 +34,8 @@ from pathlib import Path
 from plyfile import PlyData
 from tqdm import tqdm
 
+import torch
+
 
 def np_sigmoid(x):
     """Sigmoid function."""
@@ -122,7 +124,84 @@ def read_gsplat_ply(ply_path):
     return data
 
 
-def save_scenesplat_format(data, output_dir, scene_name=""):
+def find_and_load_lang_feat_checkpoint(scene_dir, checkpoint_dir=None):
+    """
+    Find and load language features from a checkpoint file.
+
+    Looks for checkpoint files with pattern: {scene_name}_langfeat_*.pth
+    e.g., occam-chkpnt30000_langfeat_0.pth
+
+    The checkpoint structure is: ( (..., lang_feat, ...), step_count )
+    where lang_feat is at index 7 in the inner tuple.
+
+    Args:
+        scene_dir: Path to the scene directory (used to derive scene name)
+        checkpoint_dir: Directory to search for checkpoint files
+                       If None, searches in scene_dir/ckpts/
+
+    Returns:
+        numpy array of language features [N, D] or None if not found
+    """
+    if checkpoint_dir is None:
+        checkpoint_dir = scene_dir / "ckpts"
+    else:
+        checkpoint_dir = Path(checkpoint_dir)
+
+    if not checkpoint_dir.exists():
+        return None
+
+    scene_name = scene_dir.name
+
+    # Look for checkpoint files matching the pattern
+    # Pattern: {scene_name}_langfeat_*.pth or occam-chkpnt*_langfeat_*.pth
+    checkpoint_files = list(checkpoint_dir.glob(f"{scene_name}_langfeat_*.pth"))
+    if not checkpoint_files:
+        # Try alternative pattern: occam-chkpnt*_langfeat_*.pth
+        checkpoint_files = list(checkpoint_dir.glob("occam-chkpnt*_langfeat_*.pth"))
+
+    if not checkpoint_files:
+        return None
+
+    # Sort and use the latest checkpoint (highest iteration)
+    checkpoint_files = sorted(checkpoint_files, key=lambda x: x.name)
+    checkpoint_path = checkpoint_files[-1]
+    print(f"Found language feature checkpoint: {checkpoint_path}")
+
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+        # Extract language features from checkpoint tuple structure
+        # Structure: ((..., lang_feat, ...), step_count)
+        # lang_feat is at index 7 in the inner tuple
+        if isinstance(checkpoint, tuple) and len(checkpoint) >= 1:
+            inner_tuple = checkpoint[0]
+            if isinstance(inner_tuple, tuple) and len(inner_tuple) >= 8:
+                lang_feat = inner_tuple[7]
+            else:
+                print(f"Warning: Inner tuple length {len(inner_tuple)} < 8")
+                return None
+        else:
+            print(f"Warning: Checkpoint is not a tuple or length < 1")
+            return None
+
+        # Convert to numpy if needed
+        if isinstance(lang_feat, torch.Tensor):
+            lang_feat = lang_feat.cpu().numpy()
+        elif not isinstance(lang_feat, np.ndarray):
+            print(f"Warning: lang_feat is not a Tensor or ndarray: {type(lang_feat)}")
+            return None
+
+        print(f"Loaded language features: shape={lang_feat.shape}, dtype={lang_feat.dtype}")
+        return lang_feat
+
+    except Exception as e:
+        print(f"Error loading checkpoint {checkpoint_path}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def save_scenesplat_format(data, output_dir, scene_name="", lang_feat=None):
     """
     Save Gaussian data in SceneSplat NPY format.
 
@@ -130,6 +209,7 @@ def save_scenesplat_format(data, output_dir, scene_name=""):
         data: Dictionary with Gaussian attributes
         output_dir: Output directory path
         scene_name: Scene name (for logging)
+        lang_feat: Optional language features to save [N, D]
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -141,8 +221,10 @@ def save_scenesplat_format(data, output_dir, scene_name=""):
     np.save(output_dir / "scale.npy", data["scale"])
     np.save(output_dir / "quat.npy", data["quat"])
 
-    # Create placeholder files for optional attributes
-    # These would need to be generated separately
+    # Save language features if provided
+    if lang_feat is not None:
+        np.save(output_dir / "lang_feat.npy", lang_feat)
+        print(f"  - lang_feat: {lang_feat.shape}, {lang_feat.dtype}")
 
     print(f"Saved to: {output_dir}")
     print(f"  - coord: {data['coord'].shape}, {data['coord'].dtype}")
@@ -152,8 +234,9 @@ def save_scenesplat_format(data, output_dir, scene_name=""):
     print(f"  - quat: {data['quat'].shape}, {data['quat'].dtype}")
     print(f"  - Total Gaussians: {len(data['coord'])}")
 
-    # Note: lang_feat.npy needs to be generated separately using SAM2/SigLIP
-    print(f"  Note: lang_feat.npy needs to be generated separately (e.g., using SAM2/SigLIP)")
+    if lang_feat is None:
+        # Note: lang_feat.npy needs to be generated separately using SAM2/SigLIP
+        print(f"  Note: lang_feat.npy needs to be generated separately (e.g., using SAM2/SigLIP)")
 
 
 def process_ply_file(ply_path, output_dir, relative_path):
@@ -175,6 +258,157 @@ def process_ply_file(ply_path, output_dir, relative_path):
         return True
     except Exception as e:
         print(f"Error processing {ply_path}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def find_ckpt_files(input_path, recursive=False):
+    """
+    Find all language feature checkpoint files in the input path.
+    Looks for files matching pattern: {scene_name}/ckpts/*_langfeat_*.pth
+
+    Args:
+        input_path: Input file or directory path
+        recursive: Whether to search recursively across all scene directories
+
+    Returns:
+        List of tuples: (scene_dir, checkpoint_path)
+    """
+    ckpt_files = []
+
+    if input_path.is_file():
+        if input_path.suffix == ".pth" and "langfeat" in input_path.name:
+            # Single checkpoint file, infer scene_dir from parent
+            # If checkpoint is directly in scene directory (e.g., figurines/occam-chkpnt30000_langfeat_0.pth)
+            # use parent as scene_dir
+            scene_dir = input_path.parent
+            ckpt_files.append((scene_dir, input_path))
+        else:
+            print(f"Error: {input_path} is not a language feature checkpoint file")
+            return []
+    elif input_path.is_dir():
+        import re
+
+        def find_in_directory(scene_dir):
+            """Find checkpoint files in a single scene's ckpts directory."""
+            ckpts_dir = scene_dir / "ckpts"
+            ckpts_dir = scene_dir
+            if not ckpts_dir.exists():
+                return None
+
+            # Look for checkpoint files matching patterns
+            checkpoint_patterns = [
+                f"{scene_dir.name}_langfeat_*.pth",
+                "occam-chkpnt*_langfeat_*.pth",
+            ]
+
+            latest_ckpt = None
+            latest_iter = -1
+
+            for pattern in checkpoint_patterns:
+                for ckpt_file in ckpts_dir.glob(pattern):
+                    # Extract iteration number from filename
+                    # occam-chkpnt30000_langfeat_0.pth -> 30000
+                    match = re.search(r'chkpnt(\d+)', ckpt_file.name)
+                    if match:
+                        iter_num = int(match.group(1))
+                        if iter_num > latest_iter:
+                            latest_iter = iter_num
+                            latest_ckpt = ckpt_file
+                    elif latest_ckpt is None:
+                        latest_ckpt = ckpt_file
+
+            return latest_ckpt
+
+        if recursive:
+            # Traverse all subdirectories to find scenes
+            for scene_dir in sorted(os.listdir(input_path)):
+                scene_dir = input_path / scene_dir
+                if scene_dir.is_dir():
+                    ckpt_file = find_in_directory(scene_dir)
+                    if ckpt_file is not None:
+                        ckpt_files.append((scene_dir, ckpt_file))
+                        print(f"  Found: {ckpt_file}")
+        else:
+            # Single directory mode
+            ckpt_file = find_in_directory(input_path)
+            if ckpt_file is not None:
+                ckpt_files.append((input_path, ckpt_file))
+                print(f"Found checkpoint: {ckpt_file}")
+            else:
+                print(f"Error: No language feature checkpoint found in {input_path}/ckpts/")
+                return []
+
+    return ckpt_files
+
+
+def process_ckpt_file(scene_dir, ckpt_path, output_dir, filter_zeros=False):
+    """
+    Process a language feature checkpoint file and save lang_feat.npy.
+
+    This function extracts language features from a checkpoint file and saves
+    them as lang_feat.npy in the output directory.
+
+    Args:
+        scene_dir: Path to the scene directory (for determining scene name)
+        ckpt_path: Path to the checkpoint file
+        output_dir: Output directory for NPY files
+        filter_zeros: If True, remove rows that are all zeros from lang_feat
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Load language features directly from the checkpoint file
+        print(f"Loading checkpoint: {ckpt_path}")
+        checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+
+        # Extract language features from checkpoint tuple structure
+        # Structure: ((..., lang_feat, ...), step_count)
+        # lang_feat is at index 7 in the inner tuple
+        if isinstance(checkpoint, tuple) and len(checkpoint) >= 1:
+            inner_tuple = checkpoint[0]
+            if isinstance(inner_tuple, tuple) and len(inner_tuple) >= 8:
+                lang_feat = inner_tuple[7]
+            else:
+                print(f"Warning: Inner tuple length {len(inner_tuple)} < 8")
+                return False
+        else:
+            print(f"Warning: Checkpoint is not a tuple or length < 1")
+            return False
+
+        # Convert to numpy if needed
+        if isinstance(lang_feat, torch.Tensor):
+            lang_feat = lang_feat.cpu().numpy()
+        elif not isinstance(lang_feat, np.ndarray):
+            print(f"Warning: lang_feat is not a Tensor or ndarray: {type(lang_feat)}")
+            return False
+
+        print(f"Loaded language features: shape={lang_feat.shape}, dtype={lang_feat.dtype}")
+
+        # Filter out all-zero rows if requested
+        if filter_zeros:
+            original_count = lang_feat.shape[0]
+            # Find rows that are NOT all zeros
+            non_zero_mask = np.any(lang_feat != 0, axis=1)
+            zero_count = np.sum(~non_zero_mask)
+            lang_feat = lang_feat[non_zero_mask]
+            print(f"Filtered out {zero_count} all-zero rows: {original_count} -> {lang_feat.shape[0]}")
+
+        # Determine output subdirectory
+        scene_name = scene_dir.name
+        output_subdir = output_dir / scene_name
+        output_subdir.mkdir(parents=True, exist_ok=True)
+
+        # Save lang_feat.npy
+        np.save(output_subdir / "lang_feat.npy", lang_feat)
+        print(f"Saved language features to: {output_subdir / 'lang_feat.npy'}")
+        print(f"  - lang_feat: {lang_feat.shape}, {lang_feat.dtype}")
+
+        return True
+    except Exception as e:
+        print(f"Error processing checkpoint {ckpt_path}: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -277,7 +511,7 @@ def find_ply_files(input_path, recursive=False, iteration=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert gsplat PLY files to SceneSplat NPY format",
+        description="Convert gsplat PLY files to SceneSplat NPY format, or extract language features from checkpoint files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -292,6 +526,15 @@ Examples:
 
   # Convert all datasets (recursive)
   python tools/convert_gs.py --input gaussian_results --output gaussian_train --recursive --iteration 30000
+
+  # Extract language features from checkpoint files (recursive)
+  python tools/convert_gs.py --input gaussian_results/lerf_ovs --output gaussian_train/lerf_ovs --lang_feat_checkpoint --recursive
+
+  # Extract language features from specific scene checkpoint
+  python tools/convert_gs.py --input gaussian_results/lerf_ovs/figurines/occam-chkpnt30000_langfeat_0.pth --lang_feat_checkpoint
+
+  # Extract language features and remove all-zero rows
+  python tools/convert_gs.py --input gaussian_results/lerf_ovs --output gaussian_train/lerf_ovs --lang_feat_checkpoint --recursive --filter_zeros
         """
     )
 
@@ -299,7 +542,7 @@ Examples:
         "-i", "--input",
         required=True,
         type=Path,
-        help="Input PLY file or directory containing gsplat trained models",
+        help="Input PLY file, checkpoint file, or directory containing gsplat trained models",
     )
     parser.add_argument(
         "-o", "--output",
@@ -310,13 +553,23 @@ Examples:
     parser.add_argument(
         "-r", "--recursive",
         action="store_true",
-        help="Recursively search for PLY files in subdirectories",
+        help="Recursively search for files in subdirectories",
     )
     parser.add_argument(
         "--iteration",
         type=int,
         default=None,
         help="Specific training iteration to convert (e.g., 30000 for point_cloud_30000.ply)",
+    )
+    parser.add_argument(
+        "--lang_feat_checkpoint",
+        action="store_true",
+        help="Extract language features from checkpoint files (*.pth) instead of converting PLY files",
+    )
+    parser.add_argument(
+        "--filter_zeros",
+        action="store_true",
+        help="Remove all-zero rows from lang_feat before saving (only applicable with --lang_feat_checkpoint)",
     )
 
     args = parser.parse_args()
@@ -334,16 +587,49 @@ Examples:
     args.output = args.output.resolve()
 
     print("=" * 60)
-    print("gsplat PLY to SceneSplat NPY Converter")
+    if args.lang_feat_checkpoint:
+        print("Language Feature Checkpoint Extractor")
+    else:
+        print("gsplat PLY to SceneSplat NPY Converter")
     print("=" * 60)
     print(f"Input: {args.input}")
     print(f"Output: {args.output}")
     print(f"Recursive: {args.recursive}")
     if args.iteration is not None:
         print(f"Iteration: {args.iteration}")
+    if args.filter_zeros:
+        print(f"Filter zeros: True")
     print("=" * 60)
 
-    # Find PLY files
+    # Process checkpoint files mode
+    if args.lang_feat_checkpoint:
+        ckpt_files = find_ckpt_files(args.input, args.recursive)
+
+        if not ckpt_files:
+            print("No language feature checkpoint files found!")
+            print("\nHint: Look for files matching pattern: *langfeat*.pth")
+            print("Example path: gaussian_results/lerf_ovs/figurines/occam-chkpnt30000_langfeat_0.pth")
+            return 1
+
+        print(f"Found {len(ckpt_files)} checkpoint file(s) to process:")
+        for scene_dir, ckpt_path in ckpt_files[:5]:  # Show first 5
+            print(f"  - {ckpt_path}")
+        if len(ckpt_files) > 5:
+            print(f"  ... and {len(ckpt_files) - 5} more")
+        print("=" * 60)
+
+        # Process each checkpoint file
+        success_count = 0
+        for scene_dir, ckpt_path in tqdm(ckpt_files, desc="Extracting lang_feat"):
+            if process_ckpt_file(scene_dir, ckpt_path, args.output, args.filter_zeros):
+                success_count += 1
+
+        print("=" * 60)
+        print(f"Extraction complete: {success_count}/{len(ckpt_files)} successful")
+        print("=" * 60)
+        return 0 if success_count == len(ckpt_files) else 1
+
+    # Normal PLY conversion mode
     ply_files = find_ply_files(args.input, args.recursive, args.iteration)
 
     if not ply_files:

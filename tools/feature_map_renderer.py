@@ -25,7 +25,7 @@ from sklearn.decomposition import PCA
 import torch.utils.dlpack
 import matplotlib.pyplot as plt
             
-def render_set(model_path, name, iteration, source_path, views, gaussians, pipeline, background, feature_level, src_dim=-1, visualize=False):
+def render_set(model_path, name, iteration, source_path, views, gaussians, pipeline, background, feature_level, src_dim=-1, use_siglip_sam2_format=False, visualize=False):
     
     save_path = os.path.join(model_path, name, "ours_{}_langfeat_{}".format(iteration, feature_level))
     render_path = os.path.join(save_path, "renders")
@@ -51,10 +51,10 @@ def render_set(model_path, name, iteration, source_path, views, gaussians, pipel
         rendering = rendering.cpu()
         torch.cuda.empty_cache()
         # Determine language feature directory based on src_dim
-        if src_dim == -1 or src_dim == 512:
-            language_feature_dir = f"{source_path}/language_features"
-        elif src_dim == 768:
+        if use_siglip_sam2_format:
             language_feature_dir = f"{source_path}/language_features_siglip2_sam2"
+        elif src_dim == -1 or src_dim == 512:
+            language_feature_dir = f"{source_path}/language_features"
         else:
             language_feature_dir = f"{source_path}/language_features_dim{src_dim}"
 
@@ -64,29 +64,46 @@ def render_set(model_path, name, iteration, source_path, views, gaussians, pipel
 
         np.save(os.path.join(render_npy_path, view.image_name.split('.')[0] + ".npy"), rendering.permute(1,2,0).numpy())
         np.save(os.path.join(gts_npy_path, view.image_name.split('.')[0] + ".npy"), gt.permute(1,2,0).numpy())
-        
+
         if visualize:
-            feature_dim, H, W = gt.shape
-            gt = gt.reshape(feature_dim, -1).T.cpu().numpy()
-            rendering = rendering.reshape(feature_dim, -1).T.cpu().numpy() # (H*W, feature_dim)
-            
-            pca = PCA(n_components=3)
+            # Get dimensions from both tensors
+            gt_feat_dim, gt_H, gt_W = gt.shape
+            render_feat_dim, H, W = rendering.shape
 
-            combined_np = np.concatenate((gt, rendering), axis=0)
-            combined_features = pca.fit_transform(combined_np) # ((n+m)*H*W, 3)
-            normalized_features = (combined_features - combined_features.min(axis=0)) / (combined_features.max(axis=0) - combined_features.min(axis=0))
-            reshaped_combined_features = normalized_features.reshape(2, H, W, 3)
-            
-            reduced_rendering = reshaped_combined_features[1]
-            reduced_gt = reshaped_combined_features[0]
-            
-            rendering = torch.tensor(reduced_rendering).permute(2, 0, 1)
-            gt = torch.tensor(reduced_gt).permute(2, 0, 1)
-            
-            torchvision.utils.save_image(rendering, os.path.join(render_path, view.image_name + ".jpg"))
-            torchvision.utils.save_image(gt, os.path.join(gts_path, view.image_name + ".jpg"))
+            # Check if dimensions match
+            if gt_feat_dim != render_feat_dim:
+                print(f"Warning: Feature dimensions differ (gt={gt_feat_dim}, render={render_feat_dim}), skipping gt visualization")
+                # Only visualize rendering using its own dimension
+                rendering_reshaped = rendering.reshape(render_feat_dim, -1).T.cpu().numpy()  # (H*W, render_feat_dim)
 
-def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, feature_level : int, src_dim: int = -1, lang_checkpoint_path: str = "", visualize: bool = False):
+                pca = PCA(n_components=3)
+                render_features = pca.fit_transform(rendering_reshaped)  # (H*W, 3)
+                render_normalized = (render_features - render_features.min(axis=0)) / (render_features.max(axis=0) - render_features.min(axis=0))
+                reduced_rendering = render_normalized.reshape(H, W, 3)
+
+                rendering_vis = torch.tensor(reduced_rendering).permute(2, 0, 1)
+                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name + ".jpg"))
+            else:
+                # Same dimension: use combined PCA
+                gt = gt.reshape(gt_feat_dim, -1).T.cpu().numpy()
+                rendering = rendering.reshape(render_feat_dim, -1).T.cpu().numpy()
+
+                pca = PCA(n_components=3)
+                combined_np = np.concatenate((gt, rendering), axis=0)
+                combined_features = pca.fit_transform(combined_np)
+                normalized_features = (combined_features - combined_features.min(axis=0)) / (combined_features.max(axis=0) - combined_features.min(axis=0))
+                reshaped_combined_features = normalized_features.reshape(2, H, W, 3)
+
+                reduced_rendering = reshaped_combined_features[1]
+                reduced_gt = reshaped_combined_features[0]
+
+                rendering_vis = torch.tensor(reduced_rendering).permute(2, 0, 1)
+                gt_vis = torch.tensor(reduced_gt).permute(2, 0, 1)
+
+                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name + ".jpg"))
+                torchvision.utils.save_image(gt_vis, os.path.join(gts_path, view.image_name + ".jpg"))
+
+def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, feature_level : int, src_dim: int = -1, use_siglip_sam2_format: bool = False, lang_checkpoint_path: str = "", visualize: bool = False):
 
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
@@ -96,8 +113,8 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
         if len(lang_checkpoint_path) > 0:
             # Use user-specified checkpoint path
             lang_checkpoint = lang_checkpoint_path
-        elif src_dim == -1 or src_dim == 512 or src_dim == 768:
-            # Load default language feature checkpoint
+        elif src_dim == -1 or src_dim == 512 or use_siglip_sam2_format:
+            # Load default language feature checkpoint (for siglip2_sam2 format or default dimensions)
             lang_checkpoint = os.path.join(dataset.model_path, f'chkpnt{iteration}_langfeat_{feature_level}.pth')
         else:
             # Load language feature checkpoint with specified dimension
@@ -110,6 +127,10 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
 
         print(f"Loading language features from: {lang_checkpoint}")
         (model_params, first_iter) = torch.load(lang_checkpoint)
+
+        # model_params should be a 13-element tuple in capture_language_feature() format
+        print(f"Loaded checkpoint with iteration: {first_iter}")
+        print(f"Model params type: {type(model_params)}")
 
         # Extract all Gaussian state from the language checkpoint (which includes pruned state)
         (active_sh_degree, xyz, features_dc, features_rest,
@@ -149,10 +170,10 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(args.model_path, "train", scene.loaded_iter, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, src_dim, visualize)
+             render_set(args.model_path, "train", scene.loaded_iter, dataset.source_path, scene.getTrainCameras(), gaussians, pipeline, background, feature_level, src_dim, use_siglip_sam2_format, visualize)
 
         if not skip_test:
-             render_set(args.model_path, "test", scene.loaded_iter, dataset.source_path, scene.getTestCameras(), gaussians, pipeline, background, feature_level, src_dim, visualize)
+             render_set(args.model_path, "test", scene.loaded_iter, dataset.source_path, scene.getTestCameras(), gaussians, pipeline, background, feature_level, src_dim, use_siglip_sam2_format, visualize)
 
 
 if __name__ == "__main__":
@@ -165,7 +186,8 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true")
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--src_dim", type=int, default=-1, help="Source dimension of language features to load (e.g., 32, 64, 128). Use -1 for default.")
+    parser.add_argument("--src_dim", type=int, default=-1, help="Source dimension of language features to load (e.g., 16, 32, 64, 128). Use -1 for default.")
+    parser.add_argument("--use_siglip_sam2_format", action="store_true", help="Use siglip2_sam2 format for language features (language_features_siglip2_sam2 directory and default checkpoint naming)")
     parser.add_argument("--lang_checkpoint", type=str, default="", help="Path to language feature checkpoint (overrides automatic path generation)")
     parser.add_argument("--visualize", action="store_true")
     args = get_combined_args_from_yaml(parser, param_groups=[model, pipeline, opt])
@@ -173,4 +195,4 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(args.quiet)
 
-    render_sets(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.feature_level, args.src_dim, args.lang_checkpoint, args.visualize)
+    render_sets(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.skip_train, args.skip_test, args.feature_level, args.src_dim, args.use_siglip_sam2_format, args.lang_checkpoint, args.visualize)

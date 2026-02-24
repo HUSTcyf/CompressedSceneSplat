@@ -30,6 +30,12 @@ Usage:
     # Exclude specific file patterns
     python tools/analyze_disk_usage.py --exclude-files "grid_meta_data.json" "lang_feat_grid_svd_r*.npz"
 
+    # Show detailed grid SVD file statistics
+    python tools/analyze_disk_usage.py --grid-svd-stats
+
+    # Show grid SVD stats for specific dataset
+    python tools/analyze_disk_usage.py --dataset scannetpp --grid-svd-stats
+
     # Save visualization as image
     python tools/analyze_disk_usage.py --dataset scannetpp --merge-splits --save-plot scannetpp_disk_usage.png
 
@@ -44,6 +50,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 import argparse
 import fnmatch
+import re
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
@@ -730,6 +737,111 @@ def print_split_stats(
             print(f"{group_name:<30} {count:>10} {format_size(size, base10=False):>18} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
 
 
+def print_grid_svd_stats(
+    split_name: str,
+    file_sizes: Dict[str, int],
+    file_counts: Dict[str, int],
+    total_size: int,
+) -> None:
+    """
+    Print detailed statistics for grid SVD related files only.
+
+    Grid SVD related files include:
+    - lang_feat_grid_svd*.npz (compressed features)
+    - grid_meta_data.json (metadata)
+    - lang_feat_index.npy (index file)
+
+    Args:
+        split_name: Name of the split (e.g., "train", "test")
+        file_sizes: Dictionary mapping file names to sizes in bytes
+        file_counts: Dictionary mapping file names to counts
+        total_size: Total size of all files in the split
+    """
+    # Filter grid SVD related files
+    grid_svd_files = {}
+    grid_svd_total_size = 0
+    grid_svd_total_count = 0
+
+    # Patterns for grid SVD files
+    for file_name, size in file_sizes.items():
+        is_grid_svd = (
+            file_name.startswith("lang_feat_grid_svd") or
+            file_name == "grid_meta_data.json" or
+            file_name == "lang_feat_index.npy"
+        )
+        if is_grid_svd:
+            count = file_counts.get(file_name, 0)
+            grid_svd_files[file_name] = {
+                "size": size,
+                "count": count,
+            }
+            grid_svd_total_size += size
+            grid_svd_total_count += count
+
+    if not grid_svd_files:
+        print(f"\n[Grid SVD Stats] No grid SVD files found in {split_name.upper()} set")
+        return
+
+    print(f"\n{'=' * 80}")
+    print(f"GRID SVD FILES - {split_name.upper()} SET")
+    print(f"{'=' * 80}")
+
+    # Summary
+    percentage_of_total = (grid_svd_total_size / total_size * 100) if total_size > 0 else 0
+    print(f"Grid SVD total size: {format_size(grid_svd_total_size, base10=False)} ({format_size(grid_svd_total_size, base10=True)})")
+    print(f"                     ({grid_svd_total_size:,} bytes)")
+    print(f"Grid SVD files: {grid_svd_total_count:,}")
+    print(f"Percentage of total: {percentage_of_total:.2f}%")
+
+    # Detailed breakdown
+    print(f"\n{'-' * 80}")
+    print(f"{'File Name':<40} {'Count':>10} {'Size (GiB/TiB)':>18} {'Size (GB/TB)':>15} {'% of SVD':>12}")
+    print(f"{'-' * 80}")
+
+    # Sort by size (descending)
+    sorted_files = sorted(grid_svd_files.items(), key=lambda x: x[1]["size"], reverse=True)
+
+    for file_name, data in sorted_files:
+        size = data["size"]
+        count = data["count"]
+        percentage = (size / grid_svd_total_size * 100) if grid_svd_total_size > 0 else 0
+        print(f"{file_name:<40} {count:>10} {format_size(size, base10=False):>18} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
+
+    print(f"{'-' * 80}")
+    print(f"{'TOTAL':<40} {grid_svd_total_count:>10} {format_size(grid_svd_total_size, base10=False):>18} {format_size(grid_svd_total_size, base10=True):>15} {100.0:>11.2f}%")
+    print(f"{'-' * 80}")
+
+    # Group lang_feat_grid_svd by rank
+    svd_npz_files = {k: v for k, v in grid_svd_files.items() if k.startswith("lang_feat_grid_svd") and k.endswith(".npz")}
+    if svd_npz_files:
+        print(f"\n{'-' * 80}")
+        print(f"{'Rank':<10} {'File Count':>12} {'Total Size':>35} {'Avg Size':>25}")
+        print(f"{'':>10} {'':>12} {'(GiB/TiB)':>18} {'(GB/TB)':>15} {'(MiB/GiB)':>13} {'(MB/GB)':>10}")
+        print(f"{'-' * 80}")
+
+        # Group by rank
+        rank_groups = {}
+        for file_name, data in svd_npz_files.items():
+            # Extract rank from filename like lang_feat_grid_svd_r16.npz
+            match = re.search(r'_r(\d+)\.npz$', file_name)
+            if match:
+                rank = int(match.group(1))
+                if rank not in rank_groups:
+                    rank_groups[rank] = {"size": 0, "count": 0}
+                rank_groups[rank]["size"] += data["size"]
+                rank_groups[rank]["count"] += data["count"]
+
+        # Sort by rank (ascending)
+        for rank in sorted(rank_groups.keys()):
+            group = rank_groups[rank]
+            total_size = group["size"]
+            count = group["count"]
+            avg_size = total_size / count if count > 0 else 0
+            print(f"R{rank:<9} {count:>12} {format_size(total_size, base10=False):>18} {format_size(total_size, base10=True):>15} {format_size(avg_size, base10=False):>13} {format_size(avg_size, base10=True):>10}")
+
+        print(f"{'-' * 80}")
+
+
 def merge_all_datasets(args) -> int:
     """
     Merge all datasets (scannet, scannetpp, matterport3d) and show combined statistics.
@@ -943,6 +1055,25 @@ def merge_all_datasets(args) -> int:
 
     print(f"{'-' * 80}")
 
+    # Print grid SVD statistics if requested
+    if args.grid_svd_stats:
+        # Print per-dataset grid SVD stats
+        for dataset_name, data in all_datasets_data.items():
+            print_grid_svd_stats(
+                dataset_name,
+                data["file_sizes"],
+                data["file_counts"],
+                data["total_size"],
+            )
+
+        # Print merged grid SVD stats
+        print_grid_svd_stats(
+            "all_datasets_merged",
+            merged_file_sizes,
+            merged_file_counts,
+            total_size_all,
+        )
+
     # Create visualization if requested
     if args.save_plot:
         output_path = Path(args.save_plot)
@@ -1062,6 +1193,11 @@ def main():
         "--include-hf-all",
         action="store_true",
         help="Include HuggingFace lang_feat files for all datasets when using --merge-all-datasets",
+    )
+    parser.add_argument(
+        "--grid-svd-stats",
+        action="store_true",
+        help="Show detailed statistics for grid SVD related files only (lang_feat_grid_svd*.npz, grid_meta_data.json, lang_feat_index.npy)",
     )
 
     args = parser.parse_args()
@@ -1320,6 +1456,17 @@ def main():
                 data["file_counts"],
                 data["total_size"],
                 detailed=args.detailed,
+            )
+
+    # Print grid SVD statistics if requested
+    if args.grid_svd_stats:
+        for split in args.splits:
+            data = all_data[split]
+            print_grid_svd_stats(
+                split,
+                data["file_sizes"],
+                data["file_counts"],
+                data["total_size"],
             )
 
     print("\n" + "=" * 80)

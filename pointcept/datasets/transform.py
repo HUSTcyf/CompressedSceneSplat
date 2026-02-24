@@ -16,7 +16,284 @@ from pointcept.utils.registry import Registry
 TRANSFORMS = Registry("transforms")
 
 # SSL attribute transforms
-    
+
+@TRANSFORMS.register_module()
+class RecomputeGridCoord(object):
+    """Recompute grid_coord from coord to reduce values and prevent depth overflow."""
+    def __init__(self, grid_size=0.01):
+        """
+        Args:
+            grid_size: Grid size for computing grid_coord
+        """
+        self.grid_size = grid_size
+
+    def __call__(self, data_dict):
+        if "coord" in data_dict.keys():
+            # Recompute grid_coord as (coord - coord.min()) / grid_size
+            # This ensures grid_coord starts from 0 and has smaller absolute values
+            coord = data_dict["coord"]
+            grid_coord = np.floor((coord - coord.min(axis=0)) / self.grid_size).astype(int)
+            data_dict["grid_coord"] = grid_coord
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class FilterCoordOutliers(object):
+    """
+    Filter coordinate outliers to prevent uneven grid distribution and depth overflow.
+
+    Uses percentiles to identify and remove extreme values in each dimension.
+    Filtered points are marked for zeroing in output.
+
+    Args:
+        percentile_low: Lower percentile for filtering (default: 0.5)
+        percentile_high: Upper percentile for filtering (default: 99.5)
+        min_points: Minimum points to keep after filtering (default: 1000)
+        verbose: Print filtering statistics
+    """
+
+    def __init__(self, percentile_low=0.5, percentile_high=99.5, min_points=1000, verbose=True):
+        self.percentile_low = percentile_low
+        self.percentile_high = percentile_high
+        self.min_points = min_points
+        self.verbose = verbose
+
+    def __call__(self, data_dict):
+        if "coord" not in data_dict.keys():
+            return data_dict
+
+        coord = data_dict["coord"]
+        n_points = coord.shape[0]
+
+        # Calculate percentiles for each dimension
+        pct_low = np.percentile(coord, self.percentile_low, axis=0)
+        pct_high = np.percentile(coord, self.percentile_high, axis=0)
+
+        # Create mask for points within percentile range
+        mask = np.ones(n_points, dtype=bool)
+        for dim in range(3):
+            mask &= (coord[:, dim] >= pct_low[dim]) & (coord[:, dim] <= pct_high[dim])
+
+        # Ensure we keep at least min_points
+        n_keep = mask.sum()
+        if n_keep < self.min_points:
+            # Fallback: keep points closest to median
+            median = np.median(coord, axis=0)
+            distances = np.linalg.norm(coord - median, axis=1)
+            keep_indices = np.argsort(distances)[:self.min_points]
+            mask = np.zeros(n_points, dtype=bool)
+            mask[keep_indices] = True
+            n_keep = self.min_points
+
+        if self.verbose:
+            n_filtered = n_points - n_keep
+            print(f"[FilterCoordOutliers] Filtered {n_filtered}/{n_points} points ({100*n_filtered/n_points:.1f}%)")
+            print(f"  Original range: x=[{coord[:,0].min():.2f}, {coord[:,0].max():.2f}], "
+                  f"y=[{coord[:,1].min():.2f}, {coord[:,1].max():.2f}], "
+                  f"z=[{coord[:,2].min():.2f}, {coord[:,2].max():.2f}]")
+
+        # Store metadata for later processing
+        data_dict["_n_original_points_before_filter"] = n_points
+        data_dict["_filtered_out_indices"] = np.where(~mask)[0]
+        # Store mapping from filtered points back to original points before filtering
+        # kept_indices[i] = index in data_dict BEFORE filtering for point i AFTER filtering
+        kept_indices = np.where(mask)[0]
+        data_dict["_inverse_filter_map"] = kept_indices
+
+        # Define keys to filter (only known 3DGS-related keys)
+        # This prevents issues with GridSample's internal keys like "inverse" or "index"
+        keys_to_filter = ["coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"]
+
+        # Filter only the known keys
+        for key in keys_to_filter:
+            if key in data_dict and isinstance(data_dict[key], np.ndarray) and len(data_dict[key]) == n_points:
+                data_dict[key] = data_dict[key][mask]
+
+        # Remove grid_coord as it will be recomputed
+        if "grid_coord" in data_dict:
+            del data_dict["grid_coord"]
+
+        # Recompute grid_coord after filtering
+        if "coord" in data_dict.keys():
+            coord_filtered = data_dict["coord"]
+            grid_size = 0.01  # Default, will be overridden if needed
+            grid_coord = np.floor((coord_filtered - coord_filtered.min(axis=0)) / grid_size).astype(int)
+            data_dict["grid_coord"] = grid_coord
+
+            if self.verbose:
+                print(f"  Filtered range: x=[{coord_filtered[:,0].min():.2f}, {coord_filtered[:,0].max():.2f}], "
+                  f"y=[{coord_filtered[:,1].min():.2f}, {coord_filtered[:,1].max():.2f}], "
+                  f"z=[{coord_filtered[:,2].min():.2f}, {coord_filtered[:,2].max():.2f}]")
+                print(f"  grid_coord range: [{grid_coord.min(axis=0)}, {grid_coord.max(axis=0)}]")
+
+        return data_dict
+
+
+@TRANSFORMS.register_module()
+class GridCrop(object):
+    """
+    Grid-based cropping for full scene coverage.
+
+    Divides the scene into a grid of overlapping crops and returns all crops.
+    Each crop is a sphere of specified radius centered at grid points.
+
+    Args:
+        crop_radius: Radius of each spherical crop (in world units). If None, auto-calculated
+        overlap: Overlap ratio between adjacent crops (0-1)
+        min_points: Minimum points per crop (skip if fewer). Default: 2000.
+                   Also adapts based on scene size: max(min_points, n_points // (max_crops * 2))
+        max_crops: Maximum number of crops to generate (for very large scenes)
+        auto_radius_multiplier: Multiplier for auto-calculated radius (default: 0.1 means each crop covers ~10% of max dimension)
+        grid_size: Grid size for recomputing grid_coord per crop (default: 0.01). Set to None to skip recomputation.
+    """
+
+    def __init__(self, crop_radius=None, overlap=0.2, min_points=2000, max_crops=100, auto_radius_multiplier=0.1, grid_size=0.01):
+        self.crop_radius = crop_radius
+        self.overlap = overlap
+        self.min_points = min_points
+        self.max_crops = max_crops
+        self.auto_radius_multiplier = auto_radius_multiplier
+        self.grid_size = grid_size
+
+    def __call__(self, data_dict):
+        assert "coord" in data_dict.keys()
+
+        coord = data_dict["coord"]
+        n_points = coord.shape[0]
+
+        # Calculate scene bounds first for debug info
+        coord_min = coord.min(axis=0)
+        coord_max = coord.max(axis=0)
+        scene_size = coord_max - coord_min
+        max_dim = scene_size.max()
+
+        print(f"[GridCrop] Scene bounds: min={coord_min}, max={coord_max}, size={scene_size}, max_dim={max_dim}")
+
+        # Adaptive min_points: scale with scene size, but respect user minimum
+        # Target: each crop should have at least n_points / (target_crops * 2) points
+        # The *2 ensures we have some overlap in coverage
+        adaptive_min_points = max(self.min_points, n_points // (self.max_crops * 2))
+        effective_min_points = adaptive_min_points
+
+        # Debug output
+        print(f"[GridCrop] n_points={n_points}, adaptive_min_points={effective_min_points}, base_min_points={self.min_points}")
+
+        if n_points <= effective_min_points:
+            # Scene too small, return as-is (wrapped in list)
+            print(f"[GridCrop] Scene too small ({n_points} <= {effective_min_points}), returning as single crop")
+            return {"crops": [data_dict], "crop_indices": [np.arange(n_points)], "n_original_points": n_points}
+
+        # Auto-calculate crop_radius if not specified
+        if self.crop_radius is None:
+            # Use a fraction of the maximum scene dimension
+            self.crop_radius = max_dim * self.auto_radius_multiplier
+            print(f"[GridCrop] Auto-calculated crop_radius={self.crop_radius} (max_dim={max_dim} * {self.auto_radius_multiplier})")
+
+        # Calculate grid spacing based on overlap
+        # spacing = crop_radius * (1 - overlap) * 2
+        spacing = self.crop_radius * 2 * (1 - self.overlap)
+
+        # Calculate number of grid points per dimension
+        grid_counts = np.ceil(scene_size / spacing).astype(int) + 1
+        grid_counts = np.clip(grid_counts, 1, 10)  # Limit to 10x10x10 grid
+
+        print(f"[GridCrop] spacing={spacing}, grid_counts={grid_counts}, total_centers={grid_counts[0] * grid_counts[1] * grid_counts[2]}")
+
+        # Generate grid centers
+        grid_centers = []
+        for i in range(grid_counts[0]):
+            for j in range(grid_counts[1]):
+                for k in range(grid_counts[2]):
+                    center = coord_min + np.array([i, j, k]) * spacing
+                    grid_centers.append(center)
+
+        # Limit number of crops
+        if len(grid_centers) > self.max_crops:
+            # Prioritize centers closer to scene center
+            scene_center = coord_min + scene_size / 2
+            distances = [np.linalg.norm(center - scene_center) for center in grid_centers]
+            sorted_indices = np.argsort(distances)[:self.max_crops]
+            grid_centers = [grid_centers[i] for i in sorted_indices]
+
+        # Generate crops
+        crop_list = []
+        crop_indices_list = []  # Track which points belong to each crop
+
+        print(f"[GridCrop] Generating crops from {len(grid_centers)} centers...")
+        for idx, center in enumerate(grid_centers):
+            # Find points within radius
+            dist2 = np.sum((coord - center) ** 2, axis=1)
+            radius2 = self.crop_radius ** 2
+            mask = dist2 <= radius2
+            indices = np.where(mask)[0]
+
+            if idx < 3 or (idx < 10 and len(crop_list) == 0):
+                print(f"[GridCrop] Center {idx}: {len(indices)} points (need >= {effective_min_points})")
+
+            if len(indices) < effective_min_points:
+                continue  # Skip crops with too few points
+
+            # Create cropped data dict
+            # Only copy known 3DGS-related keys to avoid copying GridSample's internal keys
+            crop_dict = {}
+            known_keys = ["coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask",
+                         "point_to_grid", "segment", "grid_coord", "name", "scene_path"]
+
+            for key in known_keys:
+                if key in data_dict:
+                    if isinstance(data_dict[key], np.ndarray):
+                        crop_dict[key] = data_dict[key][indices]
+                    else:
+                        crop_dict[key] = data_dict[key]
+
+            # Recompute grid_coord for this crop to prevent depth overflow
+            # This ensures grid_coord values are local to each crop
+            if self.grid_size is not None and "coord" in crop_dict:
+                crop_coord = crop_dict["coord"]
+                grid_coord = np.floor((crop_coord - crop_coord.min(axis=0)) / self.grid_size).astype(int)
+                crop_dict["grid_coord"] = grid_coord
+
+                # Debug: Check grid_coord range
+                if idx == 0 or (idx < 5 and len(crop_list) == 0):
+                    print(f"[GridCrop] Crop {idx}: coord range [{crop_coord.min(axis=0)}, {crop_coord.max(axis=0)}], grid_coord range [{grid_coord.min(axis=0)}, {grid_coord.max(axis=0)}]")
+
+            crop_list.append(crop_dict)
+            crop_indices_list.append(indices)
+
+        print(f"[GridCrop] Generated {len(crop_list)} crops (from {len(grid_centers)} centers)")
+
+        if len(crop_list) == 0:
+            # Fallback: return entire scene as single crop
+            # Also recompute grid_coord to prevent depth overflow
+            print(f"[GridCrop] No crops passed min_points filter, returning entire scene as single crop")
+            fallback_dict = data_dict.copy()
+            if self.grid_size is not None and "coord" in fallback_dict:
+                fallback_coord = fallback_dict["coord"]
+                grid_coord = np.floor((fallback_coord - fallback_coord.min(axis=0)) / self.grid_size).astype(int)
+                fallback_dict["grid_coord"] = grid_coord
+            result = {"crops": [fallback_dict], "crop_indices": [np.arange(n_points)], "n_original_points": n_points}
+        else:
+            # Store metadata for aggregation
+            result = {
+                "crops": crop_list,
+                "crop_indices": crop_indices_list,
+                "n_original_points": n_points,
+            }
+
+        # Pass through FilterCoordOutliers metadata if present
+        if "_n_original_points_before_filter" in data_dict:
+            result["_n_original_points_before_filter"] = data_dict["_n_original_points_before_filter"]
+        if "_filtered_out_indices" in data_dict:
+            result["_filtered_out_indices"] = data_dict["_filtered_out_indices"]
+        if "_inverse_filter_map" in data_dict:
+            result["_inverse_filter_map"] = data_dict["_inverse_filter_map"]
+        # Pass through GridSample inverse mapping if present
+        if "inverse" in data_dict:
+            result["inverse"] = data_dict["inverse"]
+
+        return result
+
+
 @TRANSFORMS.register_module()
 class CollectContrast(object):
     def __init__(self, keys_prefix, offset_keys_dict=None, **kwargs):

@@ -629,23 +629,42 @@ def perform_svd_decomposition(
         rank_energy_ratio = energy_cumsum[r - 1]
 
         # Compute reconstruction error
-        # Restore U_r from grid-level [M, r] to point-level [N_valid, r] using point_to_grid_indices
-        ptg_indices = torch.from_numpy(point_to_grid_indices).to(device)
-        valid_mask = ptg_indices >= 0
-        U_r_point_level = U_r[ptg_indices[valid_mask]]  # [N_valid, r]
+        # Try GPU first, fallback to CPU if OOM
+        try:
+            # GPU path
+            # Restore U_r from grid-level [M, r] to point-level [N_valid, r] using point_to_grid_indices
+            ptg_indices = torch.from_numpy(point_to_grid_indices).to(device)
+            valid_mask = ptg_indices >= 0
+            U_r_point_level = U_r[ptg_indices[valid_mask]]  # [N_valid, r]
 
-        # Reconstruct at point level and compare with original valid_feat
-        # Use broadcasting instead of np.diag: [N, r] * [r, D] instead of [N, r] @ [r, r] @ [r, D]
-        feat_reconstructed_point_level = U_r_point_level * S_r[None, :] @ Vt_r  # [N_valid, D]
-        valid_feat_tensor = torch.from_numpy(valid_feat[valid_mask.cpu().numpy()]).to(device)
-        error = torch.norm(valid_feat_tensor - feat_reconstructed_point_level, p='fro') / torch.norm(valid_feat_tensor, p='fro')
-        assert error < 1, f"Reconstruction error {error:.6f} >= 1 for rank {r}"
+            # Reconstruct at point level and compare with original valid_feat
+            # Use broadcasting instead of np.diag: [N, r] * [r, D] instead of [N, r] @ [r, r] @ [r, D]
+            feat_reconstructed_point_level = U_r_point_level * S_r[None, :] @ Vt_r  # [N_valid, D]
+            valid_feat_tensor = torch.from_numpy(valid_feat[valid_mask.cpu().numpy()]).to(device)
+            error = torch.norm(valid_feat_tensor - feat_reconstructed_point_level, p='fro') / torch.norm(valid_feat_tensor, p='fro')
+            assert error < 1, f"Reconstruction error {error:.6f} >= 1 for rank {r}"
+
+        except torch.cuda.OutOfMemoryError:
+            print(f"      CUDA OOM during reconstruction for rank {r}, using CPU fallback...")
+            # CPU path - move everything to CPU
+            ptg_indices = torch.from_numpy(point_to_grid_indices)
+            valid_mask = ptg_indices >= 0
+            U_r_cpu = U_r.cpu()
+            S_r_cpu = S_r.cpu()
+            Vt_r_cpu = Vt_r.cpu()
+
+            U_r_point_level = U_r_cpu[ptg_indices[valid_mask]]  # [N_valid, r]
+            # Reconstruct at point level and compare with original valid_feat
+            feat_reconstructed_point_level = U_r_point_level * S_r_cpu[None, :] @ Vt_r_cpu  # [N_valid, D]
+            valid_feat_tensor = torch.from_numpy(valid_feat[valid_mask.cpu().numpy()])
+            error = torch.norm(valid_feat_tensor - feat_reconstructed_point_level, p='fro') / torch.norm(valid_feat_tensor, p='fro')
+            assert error < 1, f"Reconstruction error {error:.6f} >= 1 for rank {r}"
 
         results[r] = {
-            'compressed': compressed_feat.astype(np.float32), 
-            'indices': point_to_grid_indices.astype(np.int32), 
+            'compressed': compressed_feat.astype(np.float32),
+            'indices': point_to_grid_indices.astype(np.int32),
             'rank_energy_ratio': rank_energy_ratio,
-            'reconstruction_error': error,
+            'reconstruction_error': float(error.cpu()) if hasattr(error, 'cpu') else float(error),
         }
 
         print(f"      Rank {r}: Energy={rank_energy_ratio:.4f} ({rank_energy_ratio*100:.2f}%), Error={error:.6f}, U shape={U_r.shape}")

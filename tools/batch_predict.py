@@ -82,6 +82,11 @@ def build_test_transform_pipeline(
     normalize_color: bool = True,
     center_shift_z: bool = True,
     model_type: str = "scenesplat",
+    use_multi_crop: bool = False,
+    crop_radius: float = 5.0,
+    crop_overlap: float = 0.2,
+    max_crops: int = 50,
+    skip_gridsample: bool = False,  # NEW: Skip GridSample, use full point cloud
 ):
     """
     Build test transform pipeline following SceneSplat pattern.
@@ -91,11 +96,17 @@ def build_test_transform_pipeline(
         - initial_transform: Compose applied before voxelization
         - voxelize_transform: GridSample that creates fragments
         - post_transform: Compose applied to each fragment
+
+    Args:
+        use_multi_crop: If True, use GridCrop for full scene coverage
+        crop_radius: Radius of each spherical crop (in world units)
+        crop_overlap: Overlap ratio between adjacent crops (0-1)
+        max_crops: Maximum number of crops to generate
     """
     # GridSample keys - follow SceneSplat pattern exactly
     if model_type == "litept":
         grid_sample_keys = ("coord", "color", "opacity", "quat", "scale")
-        feat_keys = ("color", "opacity", "quat", "scale", "coord")  # 14 channels
+        feat_keys = ("color", "opacity", "quat", "scale")  # 11 channels (no coord, matches config)
     else:
         grid_sample_keys = ("coord", "color", "opacity", "quat", "scale")
         feat_keys = ("color", "opacity", "quat", "scale")  # 11 channels
@@ -107,7 +118,8 @@ def build_test_transform_pipeline(
     if normalize_color:
         initial_transforms.append(dict(type="NormalizeColor"))
     # Normalize coordinates to prevent overflow for large scenes
-    initial_transforms.append(dict(type="NormalizeCoord"))
+    # NOTE: We don't use NormalizeCoord to preserve more points
+    # Instead, we use SphereCrop/GridCrop + RecomputeGridCoord to prevent depth overflow
     initial_transforms.append(
         dict(
             type="Copy",
@@ -127,7 +139,56 @@ def build_test_transform_pipeline(
             return_grid_coord=True,
         )
     )
-    initial_transform = Compose(initial_transforms)
+
+    if use_multi_crop:
+        if not skip_gridsample:
+            # ORIGINAL: Use GridSample first
+            initial_transforms.append(
+                dict(
+                    type="GridSample",
+                    grid_size=grid_size,
+                    hash_type="fnv",
+                    mode="train",
+                    keys=grid_sample_keys,
+                    return_inverse=True,
+                    return_grid_coord=True,
+                )
+            )
+
+        # Step 1: Filter coordinate outliers BEFORE GridCrop to prevent uneven distribution
+        # This removes extreme values that cause large scene_size and poor crop distribution
+        initial_transforms.append(dict(
+            type="FilterCoordOutliers",
+            percentile_low=0.5,   # Remove bottom 0.5%
+            percentile_high=99.5,  # Remove top 0.5%
+            min_points=10000,      # Keep at least this many points
+            verbose=True,
+        ))
+        # Step 2: Use GridCrop for full scene coverage with multiple overlapping crops
+        # crop_radius=None means auto-calculate based on scene size (default: 10% of max dimension)
+        # min_points=2000 is the new default (adaptive based on scene size)
+        # max_crops limits the number of crops for large scenes
+        initial_transforms.append(dict(
+            type="GridCrop",
+            crop_radius=None,  # Auto-calculate based on scene size
+            overlap=crop_overlap,
+            min_points=2000,   # Lower threshold for better coverage
+            max_crops=max_crops,
+        ))
+        # Note: Don't use RecomputeGridCoord here, as it will be applied per-crop
+        initial_transform = Compose(initial_transforms)
+        # Return None for voxelize since GridCrop handles the splitting
+        return initial_transform, None, None
+    else:
+        # Single center crop mode
+        # CRITICAL: Use SphereCrop to reduce spatial extent and prevent depth overflow
+        # mode="center" crops from center, ensuring consistent results
+        # This reduces coord span from ~100k to ~10 units, keeping depth <= 16
+        initial_transforms.append(dict(type="SphereCrop", point_max=204800, mode="center"))
+        # CRITICAL: Recompute grid_coord from local coord to prevent depth overflow
+        # This ensures grid_coord values start from 0, keeping depth <= 16
+        initial_transforms.append(dict(type="RecomputeGridCoord", grid_size=grid_size))
+        initial_transform = Compose(initial_transforms)
 
     # Voxelization (creates test fragments)
     voxelize_transform = TRANSFORMS.build(
@@ -461,6 +522,12 @@ class BatchPredictor:
         original_checkpoint: Optional[str] = None,
         iterations: int = 30000,
         prune_invalid: bool = True,
+        # Multi-crop parameters
+        use_multi_crop: bool = False,
+        crop_radius: float = 5.0,
+        crop_overlap: float = 0.2,
+        max_crops: int = 50,
+        skip_gridsample: bool = False,  # NEW: Skip GridSample, use full point cloud
     ):
         """
         Initialize batch predictor.
@@ -482,6 +549,11 @@ class BatchPredictor:
             original_checkpoint: Base directory for original checkpoints
             iterations: Checkpoint iteration number
             prune_invalid: Whether to prune invalid Gaussians
+            use_multi_crop: Whether to use multi-crop processing for full scene coverage
+            crop_radius: Radius of each spherical crop (in world units)
+            crop_overlap: Overlap ratio between adjacent crops (0-1)
+            max_crops: Maximum number of crops to generate
+            skip_gridsample: Whether to skip GridSample and use full point cloud (NEW)
         """
         self.input_path = Path(input_path)
         self.output_path = Path(output_path)
@@ -499,6 +571,11 @@ class BatchPredictor:
         self.original_checkpoint = original_checkpoint
         self.iterations = iterations
         self.prune_invalid = prune_invalid
+        self.use_multi_crop = use_multi_crop
+        self.crop_radius = crop_radius
+        self.crop_overlap = crop_overlap
+        self.max_crops = max_crops
+        self.skip_gridsample = skip_gridsample
 
         # Initialize feature extractor
         self.extractor = SceneSplatFeatureExtractor(
@@ -513,6 +590,11 @@ class BatchPredictor:
         self.initial_transform, self.voxelize_transform, self.post_transform = build_test_transform_pipeline(
             grid_size=grid_size,
             model_type=model_type,
+            use_multi_crop=use_multi_crop,
+            crop_radius=crop_radius,
+            crop_overlap=crop_overlap,
+            max_crops=max_crops,
+            skip_gridsample=skip_gridsample,  # NEW: Pass skip_gridsample parameter
         )
 
         # Collect data paths
@@ -579,6 +661,170 @@ class BatchPredictor:
         print(f"Warning: Could not find original checkpoint for scene {scene_name}")
         return None
 
+    def _process_multi_crop(
+        self,
+        transformed_data: dict,
+        scene_start_time: float,
+        transform_time: float,
+        valid_feat_mask: Optional[np.ndarray],
+        scene_name: str,
+        data_path: Path,
+        gridsample_inverse: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray, Optional[str], Optional[np.ndarray]]:
+        """
+        Process multiple crops for full scene coverage.
+
+        Args:
+            transformed_data: Data from initial_transform (contains crops and crop_indices)
+            scene_start_time: Start time for timing
+            transform_time: Time taken for initial transform
+            valid_feat_mask: Valid feature mask
+            scene_name: Scene name
+            data_path: Path to scene data
+            gridsample_inverse: GridSample inverse mapping (original_loaded -> sampled)
+
+        Returns:
+            (features, inverse, original_checkpoint_path, valid_feat_mask)
+        """
+        import time
+
+        crops = transformed_data["crops"]
+        crop_indices_list = transformed_data["crop_indices"]
+        n_original_points = transformed_data["n_original_points"]
+
+        # Get filter metadata (if FilterCoordOutliers was used)
+        n_original_before_filter = transformed_data.get("_n_original_points_before_filter", n_original_points)
+        filtered_out_indices = transformed_data.get("_filtered_out_indices", None)
+        inverse_filter_map = transformed_data.get("_inverse_filter_map", None)
+
+        if filtered_out_indices is not None and len(filtered_out_indices) > 0:
+            print(f"  Filtered outliers: {len(filtered_out_indices):,} points (excluded from output)")
+            print(f"  Points before filter: {n_original_before_filter:,}, after filter: {n_original_points:,}")
+
+        print(f"  Processing {len(crops)} crops for full scene coverage")
+        print(f"  Working with {n_original_points:,} points (after filtering)")
+
+        # Get feature dimension from first crop
+        feat_dim = self.extractor.feat_dim
+
+        # Accumulate features and counts for each original point
+        accumulated_features = np.zeros((n_original_points, feat_dim), dtype=np.float32)
+        point_counts = np.zeros(n_original_points, dtype=np.int32)
+
+        # Build per-crop transform
+        # Note: RecomputeGridCoord is already applied by GridCrop, no need to repeat
+        from pointcept.datasets.transform import Compose
+        crop_transform = Compose([
+            dict(type="CenterShift", apply_z=False),
+            dict(type="ToTensor"),
+            dict(
+                type="Collect",
+                keys=("coord", "grid_coord"),
+                feat_keys=("color", "opacity", "quat", "scale"),
+                offset_keys_dict=dict(batch="coord"),
+            ),
+        ])
+
+        # Process each crop
+        total_feature_time = 0
+        for crop_idx, (crop, crop_indices) in enumerate(zip(crops, crop_indices_list)):
+            crop_start = time.time()
+
+            # Apply per-crop transform
+            crop = crop_transform(crop)
+
+            # Extract features from this crop
+            crop_features = self.extractor.extract(crop)
+            crop_time = time.time() - crop_start
+            total_feature_time += crop_time
+
+            # Accumulate features for points in this crop
+            accumulated_features[crop_indices] += crop_features
+            point_counts[crop_indices] += 1
+
+            if (crop_idx + 1) % 10 == 0:
+                print(f"    Processed {crop_idx + 1}/{len(crops)} crops")
+
+        # Average features for points covered by multiple crops
+        valid_mask = point_counts > 0
+        accumulated_features[valid_mask] /= point_counts[valid_mask][:, np.newaxis]
+
+        # Create output for covered points only
+        covered_indices = np.where(valid_mask)[0]
+        features = accumulated_features[covered_indices]
+
+        # Build inverse mapping chain: original_loaded -> gridsample -> filtered -> feature
+        # Step 1: filtered_point -> covered_feature_index
+        inverse_filtered = np.zeros(n_original_points, dtype=np.int64)
+        inverse_filtered[covered_indices] = np.arange(len(covered_indices))
+        # For uncovered filtered points, map to 0 (will have zero features)
+        inverse_filtered[~valid_mask] = 0
+
+        # Step 2: If GridSample inverse exists, build complete mapping: original_loaded -> feature
+        if gridsample_inverse is not None:
+            # gridsample_inverse maps: original_loaded (1,000,000) -> gridsample_sampled (385,422)
+            # We need to map: original_loaded -> feature
+            # But we have: original -> gridsample (gridsample_inverse)
+            #              gridsample -> filtered (inverse_filter_map)
+            #              filtered -> feature (inverse_filtered)
+
+            n_original_loaded = len(gridsample_inverse)
+
+            if inverse_filter_map is not None:
+                # Full chain: original -> gridsample -> filtered -> feature
+                # Build gridsample -> filtered mapping
+                # n_original_before_filter is the GridSample output size (before filtering)
+                n_gridsample = n_original_before_filter
+                gridsample_to_filtered = np.zeros(n_gridsample, dtype=np.int64)
+                # inverse_filter_map contains indices of kept points in the pre-filter data
+                # We set these indices to map to the new filtered indices
+                gridsample_to_filtered[inverse_filter_map] = np.arange(n_original_points)
+
+                # Vectorized chain: original -> gridsample -> filtered -> feature
+                inverse = np.zeros(n_original_loaded, dtype=np.int64)
+
+                # Step 1: original -> gridsample (already have gridsample_inverse)
+                # Step 2: gridsample -> filtered
+                gs_to_filt_valid = (gridsample_inverse >= 0) & (gridsample_inverse < n_gridsample)
+                filt_indices = np.full(n_original_loaded, -1, dtype=np.int64)
+                filt_indices[gs_to_filt_valid] = gridsample_to_filtered[gridsample_inverse[gs_to_filt_valid]]
+
+                # Step 3: filtered -> feature
+                filt_to_feat_valid = (filt_indices >= 0) & (filt_indices < n_original_points)
+                inverse[filt_to_feat_valid] = inverse_filtered[filt_indices[filt_to_feat_valid]]
+
+                print(f"  Inverse mapping chain: original_loaded({n_original_loaded}) -> gridsample({n_gridsample}) -> filtered({n_original_points}) -> feature({len(features)})")
+            else:
+                # Simpler case: original -> gridsample -> feature
+                n_gridsample = n_original_points
+                n_original_loaded = len(gridsample_inverse)
+                inverse = np.zeros(n_original_loaded, dtype=np.int64)
+
+                # Vectorized: original -> gridsample -> feature
+                gs_valid = (gridsample_inverse >= 0) & (gridsample_inverse < n_gridsample)
+                inverse[gs_valid] = inverse_filtered[gridsample_inverse[gs_valid]]
+
+                print(f"  Inverse mapping: original_loaded({n_original_loaded}) -> gridsample({n_gridsample}) -> feature({len(features)})")
+        else:
+            # No GridSample inverse, use filtered inverse directly
+            inverse = inverse_filtered
+            print(f"  Inverse mapping: filtered({n_original_points}) -> feature({len(features)})")
+
+        scene_total_time = time.time() - scene_start_time
+        coverage = 100 * len(covered_indices) / n_original_points
+        print(f"  Extracted features: {features.shape} from {len(crops)} crops")
+        print(f"  Coverage: {coverage:.1f}% ({len(covered_indices)}/{n_original_points} points)")
+        print(f"  Timing: transform={transform_time:.3f}s, feature={total_feature_time:.3f}s, total={scene_total_time:.3f}s")
+
+        # Find original checkpoint
+        original_checkpoint = self._find_original_checkpoint(scene_name)
+
+        # Note: Don't update valid_feat_mask here since inverse now correctly maps
+        # from original_loaded points to features
+        # The save function will handle valid_feat_mask correctly
+
+        return features, inverse, original_checkpoint, valid_feat_mask
+
     def _process_ply(self, ply_path: Path) -> Dict:
         """Process a single .ply file."""
         print(f"\nProcessing: {ply_path}")
@@ -587,12 +833,12 @@ class BatchPredictor:
         # This is a placeholder - actual implementation depends on ply format
         raise NotImplementedError("Processing .ply files directly is not yet implemented")
 
-    def _process_preprocessed(self, data_path: Path) -> Tuple[np.ndarray, np.ndarray, Optional[str]]:
+    def _process_preprocessed(self, data_path: Path) -> Tuple[np.ndarray, np.ndarray, Optional[str], Optional[np.ndarray]]:
         """
         Process preprocessed .npy folder.
 
         Returns:
-            (features, inverse, original_checkpoint_path)
+            (features, inverse, original_checkpoint_path, valid_feat_mask)
         """
         scene_name = data_path.name
         print(f"\nProcessing: {scene_name}")
@@ -605,7 +851,6 @@ class BatchPredictor:
         scale = np.load(data_path / "scale.npy")
 
         # Load valid_feat_mask.npy if available
-        # This will be used for post-processing; inference uses ALL Gaussians
         valid_feat_mask_path = data_path / "valid_feat_mask.npy"
         if valid_feat_mask_path.exists():
             valid_feat_mask = np.load(valid_feat_mask_path)
@@ -634,23 +879,32 @@ class BatchPredictor:
         # Apply SceneSplat test transform pipeline:
         # 1. Initial transform (preprocessing + GridSample with mode="train")
         transform_start = time.time()
-        data_dict = self.initial_transform(data_dict)
+        transformed_data = self.initial_transform(data_dict)
         transform_time = time.time() - transform_start
 
+        # Check if multi-crop mode (GridCrop was used)
+        if self.voxelize_transform is None:
+            # Multi-crop mode
+            # Get GridSample inverse mapping (from original loaded points to sampled points)
+            gridsample_inverse = transformed_data.get("inverse", None)
+            return self._process_multi_crop(transformed_data, scene_start_time, transform_time, valid_feat_mask, scene_name, data_path, gridsample_inverse)
+
+        # Single crop mode (original logic)
         # Save inverse mapping before voxelization overwrites it
         # GridSample(mode="train") creates "inverse" key, not "index"
-        inverse = data_dict["inverse"]
+        inverse = transformed_data["inverse"]
 
         # 2. Voxelization (GridSample with mode="test" - creates fragments)
         voxelize_start = time.time()
-        fragment_list = self.voxelize_transform(data_dict)
+        fragment_list = self.voxelize_transform(transformed_data)
         voxelize_time = time.time() - voxelize_start
         print(f"  Created {len(fragment_list)} test fragments (transform: {transform_time:.3f}s, voxelize: {voxelize_time:.3f}s)")
 
         # 3. Process each fragment with post_transform and extract features
         all_features = []
+        all_indices = []  # Track fragment indices for aggregation
         total_feature_time = 0
-        for fragment in fragment_list:
+        for i, fragment in enumerate(fragment_list):
             # Apply post_transform to each fragment
             fragment = self.post_transform(fragment)
 
@@ -661,12 +915,59 @@ class BatchPredictor:
             total_feature_time += feature_time
             all_features.append(fragment_features)
 
+            # Get the index mapping from fragment to original sampled points
+            if "index" in fragment:
+                all_indices.append(fragment["index"])
+            else:
+                # Fallback: use sequential indices
+                all_indices.append(np.arange(len(fragment_features)))
+
         # Aggregate fragment features using inverse mapping
-        # For now, use the first fragment's features (can be improved with averaging)
-        features = all_features[0]
+        # Strategy: Average features from all fragments for each sampled point
+        # Each fragment has indices mapping back to the original sampled points
+        if len(all_indices) > 0 and all_indices[0] is not None:
+            # Get the number of original sampled points
+            max_idx = max(max(idx) if len(idx) > 0 else 0 for idx in all_indices) + 1
+            feat_dim = all_features[0].shape[1]
+
+            # Accumulate features and counts
+            accumulated_features = np.zeros((max_idx, feat_dim), dtype=np.float32)
+            feature_counts = np.zeros(max_idx, dtype=np.int32)
+
+            # Aggregate features from all fragments
+            for fragment_feat, fragment_idx in zip(all_features, all_indices):
+                for i, idx in enumerate(fragment_idx):
+                    if idx < max_idx:
+                        accumulated_features[idx] += fragment_feat[i]
+                        feature_counts[idx] += 1
+
+            # Average the features (avoid division by zero)
+            valid_mask = feature_counts > 0
+            accumulated_features[valid_mask] /= feature_counts[valid_mask][:, np.newaxis]
+
+            # Remove any points that weren't covered by any fragment
+            features = accumulated_features[valid_mask]
+            # Create a new inverse mapping for valid points
+            valid_indices = np.where(valid_mask)[0]
+            # Map from aggregated features back to original points
+            # The inverse maps original points -> sampled points (before fragment aggregation)
+            # We need to filter inverse to only include valid sampled points
+            new_inverse = np.zeros_like(inverse)
+            inverse_mapping = np.full(max_idx, -1)  # Maps old sampled idx -> new aggregated idx
+            inverse_mapping[valid_indices] = np.arange(len(valid_indices))
+            # Update inverse: for each original point, find its new aggregated index
+            for i, inv_val in enumerate(inverse):
+                if inv_val < max_idx and inverse_mapping[inv_val] >= 0:
+                    new_inverse[i] = inverse_mapping[inv_val]
+                else:
+                    new_inverse[i] = 0  # Fallback
+            inverse = new_inverse
+        else:
+            # Fallback: use first fragment only
+            features = all_features[0]
 
         scene_total_time = time.time() - scene_start_time
-        print(f"  Extracted features: {features.shape} (feature extraction: {total_feature_time:.3f}s, total: {scene_total_time:.3f}s)")
+        print(f"  Extracted features: {features.shape} from {len(fragment_list)} fragments (feature extraction: {total_feature_time:.3f}s, total: {scene_total_time:.3f}s)")
 
         # Find original checkpoint
         original_checkpoint = self._find_original_checkpoint(scene_name)
@@ -685,15 +986,19 @@ class BatchPredictor:
         scene_output_dir = self.output_path / scene_name
         scene_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save features as .npy
-        feat_path = scene_output_dir / "language_features.npy"
-        np.save(feat_path, features)
-        print(f"  Saved features to: {feat_path}")
-
         # Map fragment features back to all original points using inverse mapping
         # features: [M, feat_dim] (M = sampled points)
         # inverse: [N_orig] maps each original point to a sampled point index
-        original_features = features[inverse]  # [N_orig, feat_dim]
+        # features_orig: [N_orig, feat_dim] - Full array with zeros for invalid points
+        features_orig = features[inverse]  # [N_orig, feat_dim]
+
+        # Save features as .npy (expanded to all original Gaussians)
+        feat_path = scene_output_dir / "language_features.npy"
+        np.save(feat_path, features_orig)
+        print(f"  Saved features to: {feat_path}")
+
+        # Store original features for later use
+        original_features = features_orig
 
         # Save checkpoint if original checkpoint is available
         if original_checkpoint is not None:
@@ -886,6 +1191,36 @@ def main():
              "When enabled, Gaussians where valid_feat_mask=False will be completely removed.",
     )
 
+    # Multi-crop arguments
+    parser.add_argument(
+        "--use_multi_crop",
+        action="store_true",
+        help="Use multi-crop processing for full scene coverage (slower but more complete)",
+    )
+    parser.add_argument(
+        "--crop_radius",
+        type=float,
+        default=5.0,
+        help="Radius of each spherical crop in world units (default: 5.0)",
+    )
+    parser.add_argument(
+        "--crop_overlap",
+        type=float,
+        default=0.2,
+        help="Overlap ratio between adjacent crops, 0-1 (default: 0.2)",
+    )
+    parser.add_argument(
+        "--max_crops",
+        type=int,
+        default=50,
+        help="Maximum number of crops to generate (default: 50)",
+    )
+    parser.add_argument(
+        "--skip_gridsample",
+        action="store_true",
+        help="Skip GridSample and use full point cloud directly (higher memory, simpler inverse mapping)",
+    )
+
     args = parser.parse_args()
 
     print("=" * 60)
@@ -907,6 +1242,11 @@ def main():
         print(f"  Note: Invalid Gaussians will be removed from checkpoint")
     else:
         print(f"  Note: Invalid Gaussians will be kept with zero features")
+    print(f"Multi-crop mode: {args.use_multi_crop}")
+    if args.use_multi_crop:
+        print(f"  Crop radius: {args.crop_radius}")
+        print(f"  Crop overlap: {args.crop_overlap}")
+        print(f"  Max crops: {args.max_crops}")
     print("=" * 60)
 
     # Initialize predictor
@@ -927,11 +1267,35 @@ def main():
         original_checkpoint=args.original_checkpoint,
         iterations=args.iterations,
         prune_invalid=args.prune_invalid,
+        use_multi_crop=args.use_multi_crop,
+        crop_radius=args.crop_radius,
+        crop_overlap=args.crop_overlap,
+        max_crops=args.max_crops,
+        skip_gridsample=args.skip_gridsample,  # NEW: Pass skip_gridsample
     )
 
     # Run prediction
     predictor.run()
 
-# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val --output ./output_features --weight exp/default/model-lite-768/model_last.pth --config configs/custom/lang-pretrain-litept-ovs.py --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 --iterations 30000 --preprocessed --recursive --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs
+# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val --output ./output_features --weight exp/lite-16-gridsvd/model/model_last.pth --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 --iterations 30000 --preprocessed --recursive --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs
+#
+# Single crop mode (center crop only, faster):
+# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val \
+#     --output ./output_features_single \
+#     --weight exp/lite-16-gridsvd/model/model_last.pth \
+#     --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py \
+#     --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 \
+#     --iterations 30000 --preprocessed --recursive \
+#     --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs
+#
+# Multi-crop mode (full scene coverage, slower):
+# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val \
+#     --output ./output_features_full \
+#     --weight exp/lite-16-gridsvd/model/model_last.pth \
+#     --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py \
+#     --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 \
+#     --iterations 30000 --preprocessed --recursive \
+#     --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs \
+#     --use_multi_crop --crop_radius 5.0 --crop_overlap 0.2 --max_crops 50
 if __name__ == "__main__":
     main()

@@ -66,10 +66,6 @@ class GridAwareSampler:
         # Cache for loaded grid data
         self._grid_cache = {}
 
-        # Cache for pre-computed sampling metadata (grid_counts, grid_offsets, etc.)
-        # Key: hash of point_to_grid tensor
-        self._sampling_metadata_cache = {}
-
     def load_grid_mapping_with_rank(
         self,
         scene_path: str,
@@ -226,60 +222,6 @@ class GridAwareSampler:
 
         return grid_to_points
 
-    def _compute_sampling_metadata(
-        self,
-        grid_to_points: Dict[int, torch.Tensor],
-        device: torch.device,
-    ) -> Dict:
-        """
-        Pre-compute and cache metadata for sampling operations.
-
-        This includes grid_counts, grid_offsets, and other values that
-        only depend on the grid structure, not on the sampling ratios.
-
-        Args:
-            grid_to_points: Dictionary mapping grid_id to point indices
-            device: Device to create tensors on
-
-        Returns:
-            Dictionary with pre-computed metadata
-        """
-        # Compute a cache key from grid structure
-        # Use total points and number of grids as key (fast to compute)
-        total_points = sum(len(pts) for pts in grid_to_points.values())
-        num_grids = len(grid_to_points)
-        cache_key = (total_points, num_grids)
-
-        if cache_key in self._sampling_metadata_cache:
-            return self._sampling_metadata_cache[cache_key]
-
-        # Compute metadata
-        point_tensors = list(grid_to_points.values())
-
-        # OPTIMIZED: Compute grid_counts more efficiently
-        # Use list comprehension instead of tensor construction
-        grid_counts_list = [len(pts) for pts in point_tensors]
-        grid_counts = torch.tensor(grid_counts_list, device=device)
-
-        # Pre-compute grid_offsets
-        grid_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
-                                 grid_counts[:-1].cumsum(dim=0)])
-
-        # Pre-compute positions_in_grid (used in all sampling operations)
-        positions_in_grid = torch.arange(num_grids, device=device).repeat_interleave(grid_counts)
-
-        # Store in cache
-        metadata = {
-            'grid_counts': grid_counts,
-            'grid_counts_list': grid_counts_list,
-            'grid_offsets': grid_offsets,
-            'positions_in_grid': positions_in_grid,
-            'point_tensors': point_tensors,  # Keep reference to avoid re-conversion
-        }
-        self._sampling_metadata_cache[cache_key] = metadata
-
-        return metadata
-
     def sample_dense(
         self,
         coord: torch.Tensor,
@@ -362,12 +304,17 @@ class GridAwareSampler:
             all_indices = perm[:num_samples]
             actual_ratios = torch.full((num_samples,), 0.5, device=device)
         else:
-            # OPTIMIZATION: Use cached metadata when available
-            metadata = self._compute_sampling_metadata(grid_to_points, device)
-            grid_counts = metadata['grid_counts']
-            grid_offsets = metadata['grid_offsets']
-            positions_in_grid = metadata['positions_in_grid']
-            point_tensors = metadata['point_tensors']
+            # Direct computation of sampling metadata (no cache)
+            point_tensors = list(grid_to_points.values())
+            grid_counts_list = [len(pts) for pts in point_tensors]
+            grid_counts = torch.tensor(grid_counts_list, device=device)
+
+            # Pre-compute grid_offsets
+            grid_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                     grid_counts[:-1].cumsum(dim=0)])
+
+            # Pre-compute positions_in_grid
+            positions_in_grid = torch.arange(num_grids, device=device).repeat_interleave(grid_counts)
 
             # Generate all random ratios at once on GPU
             sample_ratios = torch.empty(num_grids, device=device)
@@ -379,15 +326,16 @@ class GridAwareSampler:
             # Flatten all point indices
             flat_point_indices = torch.cat(point_tensors)
 
-            # Generate random permutations for each grid (cache by count)
+            # Generate random permutations for each grid (simple approach, no caching)
+            # This reduces memory pressure by not storing permutations across iterations
             unique_counts = torch.unique(grid_counts)
             perm_cache = {}
             for count in unique_counts:
                 count_val = count.item()
+                # Generate fresh permutation each time (no caching)
                 perm_cache[count_val] = torch.randperm(count_val, device=device)
 
             # Build flat permutation tensor by concatenating perms for each grid
-            # This list comprehension is necessary to look up perms from cache
             all_perms = [perm_cache[grid_counts[i].item()] for i in range(num_grids)]
             flat_perms = torch.cat(all_perms)
 
@@ -477,11 +425,14 @@ class GridAwareSampler:
         if num_grids == 0:
             all_indices = torch.tensor([0], device=device)
         else:
-            # OPTIMIZATION: Use cached metadata when available
-            metadata = self._compute_sampling_metadata(grid_to_points, device)
-            grid_counts = metadata['grid_counts']
-            grid_offsets = metadata['grid_offsets']
-            point_tensors = metadata['point_tensors']
+            # Direct computation of sampling metadata (no cache)
+            point_tensors = list(grid_to_points.values())
+            grid_counts_list = [len(pts) for pts in point_tensors]
+            grid_counts = torch.tensor(grid_counts_list, device=device)
+
+            # Pre-compute grid_offsets
+            grid_offsets = torch.cat([torch.zeros(1, device=device, dtype=torch.long),
+                                     grid_counts[:-1].cumsum(dim=0)])
 
             # Generate random offset for each grid (0 to count-1) on GPU
             random_offsets = torch.rand(num_grids, device=device) * grid_counts.float()
