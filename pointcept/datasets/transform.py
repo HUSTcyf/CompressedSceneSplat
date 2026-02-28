@@ -117,7 +117,8 @@ class FilterCoordOutliers(object):
         if "coord" in data_dict.keys():
             coord_filtered = data_dict["coord"]
             grid_size = 0.01  # Default, will be overridden if needed
-            grid_coord = np.floor((coord_filtered - coord_filtered.min(axis=0)) / grid_size).astype(int)
+            # Use the same grid_coord calculation as in structure.py: torch.div(x, grid_size, rounding_mode='trunc')
+            grid_coord = ((coord_filtered - coord_filtered.min(axis=0)) / grid_size).astype(int)
             data_dict["grid_coord"] = grid_coord
 
             if self.verbose:
@@ -1576,9 +1577,22 @@ class GridSample(object):
                         displacement * data_dict["normal"], axis=-1, keepdims=True
                     )
                 data_dict["displacement"] = displacement[idx_unique]
+
+            # CRITICAL FIX: Preserve point_to_grid indices for SVD-compressed features
+            # point_to_grid contains indices into the original SVD compressed features
+            # When we sub-sample points, we must preserve these indices (not re-index them)
+            point_to_grid_original = None
+            if "point_to_grid" in data_dict and "point_to_grid" in self.keys:
+                point_to_grid_original = data_dict["point_to_grid"].copy()
+
             for key in self.keys:
                 if key in data_dict.keys():  # data may not have normal
-                    data_dict[key] = data_dict[key][idx_unique]
+                    # Special handling: don't re-index point_to_grid as it maps to SVD features
+                    if key == "point_to_grid" and point_to_grid_original is not None:
+                        # Preserve original indices - just filter, don't re-index
+                        data_dict[key] = point_to_grid_original[idx_unique]
+                    else:
+                        data_dict[key] = data_dict[key][idx_unique]
             return data_dict
 
         elif self.mode == "test":  # test mode
@@ -1605,11 +1619,15 @@ class GridSample(object):
                     data_dict["displacement"] = displacement[idx_part]
                 for key in data_dict.keys():
                     if key in self.keys:
-                        data_part[key] = data_dict[key][idx_part]
+                        # Special handling: preserve point_to_grid indices for SVD features
+                        if key == "point_to_grid":
+                            data_part[key] = data_dict[key][idx_part]  # Just filter, don't re-index
+                        else:
+                            data_part[key] = data_dict[key][idx_part]
                     else:
                         data_part[key] = data_dict[key]
                 data_part_list.append(data_part)
-            return data_part_list  # covers a subset of points (one “slice” of each voxel cell)
+            return data_part_list  # covers a subset of points (one "slice" of each voxel cell)
         else:
             raise NotImplementedError
 
@@ -1956,11 +1974,15 @@ class FilterValidPoints(object):
     This is useful for removing points with invalid/missing language features before applying
     transforms like GridSample.
 
+    CRITICAL: This transform ensures point_to_grid mapping remains aligned with the filtered data.
+    The point_to_grid indices are preserved (not re-indexed) since they map to SVD compressed features.
+
     Args:
         key: The name of the valid mask field. Default is "valid_feat_mask".
     """
-    def __init__(self, key="valid_feat_mask"):
+    def __init__(self, key="valid_feat_mask", verbose=False):
         self.key = key
+        self.verbose = verbose
 
     def __call__(self, data_dict):
         if self.key not in data_dict.keys():
@@ -1979,6 +2001,10 @@ class FilterValidPoints(object):
                 f"This may indicate all points have invalid/missing features."
             )
 
+        # Store point_to_grid before filtering for validation
+        point_to_grid_before = data_dict.get("point_to_grid")
+        point_to_grid_len_before = len(point_to_grid_before) if point_to_grid_before is not None else None
+
         # Filter all array-like keys in data_dict
         for key in data_dict.keys():
             value = data_dict[key]
@@ -1986,6 +2012,20 @@ class FilterValidPoints(object):
                 data_dict[key] = value[valid_indices]
             elif isinstance(value, list) and len(value) == len(valid_mask):
                 data_dict[key] = [value[i] for i in valid_indices]
+
+        # Validate point_to_grid was filtered correctly
+        if point_to_grid_before is not None:
+            point_to_grid_after = data_dict.get("point_to_grid")
+            if point_to_grid_after is None:
+                raise ValueError("point_to_grid was removed during FilterValidPoints!")
+            if self.verbose:
+                print(f"[FilterValidPoints] point_to_grid: {point_to_grid_len_before} -> {len(point_to_grid_after)}")
+                # Check that indices are still valid (non-negative)
+                if (point_to_grid_after < 0).any():
+                    raise ValueError(
+                        f"point_to_grid contains negative indices after filtering! "
+                        f"min={point_to_grid_after.min()}"
+                    )
 
         return data_dict
 

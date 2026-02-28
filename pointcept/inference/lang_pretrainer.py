@@ -179,7 +179,7 @@ class LangPretrainerInference:
             )
             feature_acc = feature_acc[inverse_tensor]
 
-        feature_acc = F.normalize(feature_acc, p=2, dim=1)
+        # feature_acc = F.normalize(feature_acc, p=2, dim=1)  # Commented out: disabled output normalization
         backbone_cpu = feature_acc.detach().cpu()
 
         outputs = {

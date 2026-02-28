@@ -364,8 +364,8 @@ class AggregatedContrastiveLoss(nn.Module):
         for lab in unique_labels:
             # iterate over each unique class
             indices = (labels == lab).nonzero(as_tuple=True)[0]
-            if indices.numel() < 100:
-                continue  # insufficient samples
+            if indices.numel() < 20:
+                continue  # insufficient samples (lowered from 100 for GridSample)
 
             # Shuffle the indices randomly
             perm = indices[torch.randperm(indices.size(0))]
@@ -416,7 +416,7 @@ class AggregatedContrastiveLoss(nn.Module):
         # For "mean", cross_entropy already averages over the classes.
 
         # Optionally print or log the loss
-        # print("contrastive loss:", self.loss_weight * loss.item())
+        print("contrastive loss:", self.loss_weight * loss.item(), "classes:", len(used_labels))
 
         return self.loss_weight * loss
 

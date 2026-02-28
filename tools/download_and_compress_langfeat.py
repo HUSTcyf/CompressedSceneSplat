@@ -442,6 +442,7 @@ class LangFeatDownloadCompressor:
         force_reprocess: bool = False,
         stats_only: bool = False,
         skip_download: bool = False,
+        download_only: bool = False,
         delete_after_compress: bool = False,
     ):
         """
@@ -461,6 +462,7 @@ class LangFeatDownloadCompressor:
             force_reprocess: If True, force reprocess all scenes including already compressed ones
             stats_only: If True, only show statistics of existing compressed scenes without downloading/compressing
             skip_download: If True, skip download and only compress scenes with existing lang_feat.npy files
+            download_only: If True, only download lang_feat.npy files without compression (for incomplete processing)
             delete_after_compress: If True, delete lang_feat.npy after successful compression (for training data)
         """
         self.repo_id = repo_id
@@ -472,6 +474,7 @@ class LangFeatDownloadCompressor:
         self.force_reprocess = force_reprocess
         self.stats_only = stats_only
         self.skip_download = skip_download
+        self.download_only = download_only
         self.delete_after_compress = delete_after_compress
 
         # Single GPU mode: force single thread
@@ -532,6 +535,7 @@ class LangFeatDownloadCompressor:
         If grid_meta_data.json doesn't exist, delete lang_feat.npy to force re-download.
         If force_reprocess=True, delete both grid_meta_data.json and lang_feat.npy to force full reprocessing.
         If skip_download=True, find scenes with lang_feat.npy that need compression.
+        If download_only=True, find scenes that need lang_feat.npy download (regardless of compression status).
 
         When both skip_download=True and force_reprocess=True:
         - Find all scenes with lang_feat.npy (regardless of grid_meta_data.json)
@@ -578,6 +582,20 @@ class LangFeatDownloadCompressor:
                         lang_feat_files.append(str(rel_path).replace('\\', '/'))
             return sorted(lang_feat_files)
 
+        # Download-only mode: find scenes that need lang_feat.npy download (considering compression status)
+        if self.download_only:
+            for item in base_path.rglob('*'):
+                if item.is_dir():
+                    coord_path = item / "coord.npy"
+                    lang_feat_path = item / "lang_feat.npy"
+                    grid_meta_path = item / "grid_meta_data.json"
+
+                    # Need coord.npy, NOT lang_feat.npy, and NOT already compressed (no grid_meta_data.json)
+                    if coord_path.exists() and not lang_feat_path.exists() and not grid_meta_path.exists():
+                        rel_path = item.relative_to(self.local_dir)
+                        lang_feat_files.append(str(rel_path).replace('\\', '/'))
+            return sorted(lang_feat_files)
+
         # Normal mode: find scenes that need download
         # Find all directories that contain coord.npy but might not have lang_feat.npy
         for item in base_path.rglob('*'):
@@ -607,16 +625,10 @@ class LangFeatDownloadCompressor:
                         print(f"  [Skip] Already compressed: {rel_path}")
                         continue
 
-                    # If grid_meta_data.json doesn't exist, need to process
-                    # Delete existing lang_feat.npy to force re-download
-                    if lang_feat_path.exists():
-                        print(f"  [Cleanup] Deleting existing lang_feat.npy for re-download: {rel_path}")
-                        try:
-                            lang_feat_path.unlink()
-                        except Exception as e:
-                            print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
-
                     # Add scene to download list
+                    # Note: We don't delete existing lang_feat.npy to allow resume_download
+                    # to work. If the file is partially downloaded, hf_hub_download will
+                    # resume from where it left off.
                     lang_feat_files.append(str(rel_path).replace('\\', '/'))
 
         return sorted(lang_feat_files)
@@ -1208,6 +1220,19 @@ class LangFeatDownloadCompressor:
         """
         scene_name = Path(scene_rel_path).name
 
+        # Download-only mode: only download, skip compression
+        if self.download_only:
+            self._print_progress()
+            if self._download_lang_feat_for_scene(scene_rel_path):
+                with self.lock:
+                    self.stats['downloaded'] += 1
+                    self.processed_scenes.add(scene_name)
+            else:
+                with self.lock:
+                    self.stats['failed'] += 1
+                    self.failed_scenes.append((scene_rel_path, "download failed"))
+            return
+
         # Skip download mode: directly compress
         if self.skip_download:
             self._print_progress()
@@ -1345,6 +1370,7 @@ class LangFeatDownloadCompressor:
         print(f"  Compression device: {self.compression_device}")
         print(f"  RPCA enabled: {self.use_rpca}")
         print(f"  Skip download: {self.skip_download}")
+        print(f"  Download only: {self.download_only}")
         print(f"  Delete lang_feat after compress: {self.delete_after_compress}")
 
         if self.use_gpu:
@@ -1358,7 +1384,10 @@ class LangFeatDownloadCompressor:
 
         # Process scenes with threading
         print("\n" + "=" * 60)
-        print("Processing scenes (download + compress)...")
+        if self.download_only:
+            print("Processing scenes (download only)...")
+        else:
+            print("Processing scenes (download + compress)...")
         print("=" * 60)
 
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
@@ -1401,6 +1430,7 @@ Examples:
     # Optional mode flags (mutually exclusive):
     #   --stats_only:        Only show statistics of existing compressed scenes
     #   --skip_download:     Skip download, only compress existing lang_feat.npy files
+    #   --download_only:     Only download lang_feat.npy files without compression
     #   --force_reprocess:   Force reprocess all scenes (delete existing compressed files)
     #   --test_mode:         Only process the first scene for testing
 
@@ -1541,6 +1571,11 @@ Examples:
         help="Skip download and only compress existing lang_feat.npy files (useful for val/test datasets)",
     )
     parser.add_argument(
+        "--download_only",
+        action="store_true",
+        help="Only download lang_feat.npy files without compression (useful for incomplete processing scenarios)",
+    )
+    parser.add_argument(
         "--delete_after_compress",
         action="store_true",
         help="Delete lang_feat.npy after successful compression (useful for training data to save disk space)",
@@ -1571,6 +1606,7 @@ Examples:
         force_reprocess=args.force_reprocess,
         stats_only=args.stats_only,
         skip_download=args.skip_download,
+        download_only=args.download_only,
         delete_after_compress=args.delete_after_compress,
     )
 

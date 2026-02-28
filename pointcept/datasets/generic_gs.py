@@ -50,7 +50,10 @@ class GenericGSDataset(DefaultDataset):
             if not asset.endswith(".npy"):
                 continue
             if self.is_train:
-                if asset[:-4] not in self.VALID_ASSETS:
+                # Always load lang_label as segment for OVS data
+                if asset[:-4] == "lang_label":
+                    pass  # Allow loading
+                elif asset[:-4] not in self.VALID_ASSETS:
                     continue
             else:
                 if (
@@ -90,9 +93,15 @@ class GenericGSDataset(DefaultDataset):
                 data_dict["scale"].astype(np.float32).clip(1e-4, 1.0)
             )  # clip scale
 
+        # Handle both segment.npy and lang_label.npy
         if "segment" in data_dict.keys():
             data_dict["segment"] = (
                 data_dict.pop("segment").reshape([-1]).astype(np.int32)
+            )
+        elif "lang_label" in data_dict.keys():
+            # Load lang_label.npy as segment for OVS data (supports AggregatedContrastiveLoss)
+            data_dict["segment"] = (
+                data_dict.pop("lang_label").reshape([-1]).astype(np.int32)
             )
         
         if "instance" in data_dict.keys():

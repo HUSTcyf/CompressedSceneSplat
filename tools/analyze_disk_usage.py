@@ -41,6 +41,9 @@ Usage:
 
     # Merge all datasets and save combined visualization
     python tools/analyze_disk_usage.py --merge-all-datasets --save-plot scenesplat.png
+
+    # Display results capped at GB/GiB level (both GB and GiB shown, never TB/TiB)
+    python tools/analyze_disk_usage.py --max-gb
 """
 
 import sys
@@ -130,27 +133,38 @@ def should_exclude_file(filename: str, exclude_patterns: Optional[List[str]]) ->
     return False
 
 
-def format_size(size_bytes: int, base10: bool = False) -> str:
+def format_size(size_bytes: int, base10: bool = False, max_gb: bool = False) -> str:
     """
     Format bytes to human readable size.
 
     Args:
         size_bytes: Size in bytes
         base10: If True, use base-10 units (TB=10^12), else base-2 (TiB=2^40)
+        max_gb: If True, cap at GB/GiB level (never show TB/TiB/PB/PiB)
     """
     if base10:
         # Base-10 (decimal) - like HuggingFace web: 1 KB = 1000 bytes
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
-            if size_bytes < 1000.0:
+        units = ['B', 'KB', 'MB', 'GB'] if max_gb else ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        divisor = 1000.0
+        for unit in units:
+            if size_bytes < divisor:
                 return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1000.0
+            size_bytes /= divisor
+        # If max_gb and still too large, show in GB with larger number
+        if max_gb:
+            return f"{size_bytes * 1000:.2f} GB"
         return f"{size_bytes:.2f} EB"
     else:
         # Base-2 (binary) - traditional: 1 KiB = 1024 bytes
-        for unit in ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']:
-            if size_bytes < 1024.0:
+        units = ['B', 'KiB', 'MiB', 'GiB'] if max_gb else ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
+        divisor = 1024.0
+        for unit in units:
+            if size_bytes < divisor:
                 return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1024.0
+            size_bytes /= divisor
+        # If max_gb and still too large, show in GiB with larger number
+        if max_gb:
+            return f"{size_bytes * 1024:.2f} GiB"
         return f"{size_bytes:.2f} EiB"
 
 
@@ -676,6 +690,7 @@ def print_split_stats(
     total_size: int,
     detailed: bool = False,
     show_base10: bool = True,
+    max_gb: bool = False,
 ):
     """Print statistics for a single split."""
     if total_size == 0:
@@ -685,13 +700,21 @@ def print_split_stats(
     print(f"\n{'=' * 80}")
     print(f"{split_name.upper()} SET")
     print(f"{'=' * 80}")
-    print(f"Total size: {format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})")
+    print(f"Total size: {format_size(total_size, base10=False, max_gb=max_gb)} ({format_size(total_size, base10=True, max_gb=max_gb)})")
     print(f"            ({total_size:,} bytes)")
     print(f"Total files: {sum(file_counts.values()):,}")
 
+    # Determine column headers based on max_gb setting
+    if max_gb:
+        size_header_base2 = "Size (GiB)"
+        size_header_base10 = "Size (GB)"
+    else:
+        size_header_base2 = "Size (GiB/TiB)"
+        size_header_base10 = "Size (GB/TB)"
+
     if detailed:
         print(f"\n{'-' * 80}")
-        print(f"{'File Name':<30} {'Count':>10} {'Size (GiB/TiB)':>18} {'Size (GB/TB)':>15} {'Percentage':>12}")
+        print(f"{'File Name':<30} {'Count':>10} {size_header_base2:>18} {size_header_base10:>15} {'Percentage':>12}")
         print(f"{'-' * 80}")
 
         # Sort by size (descending)
@@ -700,11 +723,11 @@ def print_split_stats(
         for file_name, size in sorted_files:
             count = file_counts[file_name]
             percentage = (size / total_size) * 100 if total_size > 0 else 0
-            print(f"{file_name:<30} {count:>10} {format_size(size, base10=False):>18} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
+            print(f"{file_name:<30} {count:>10} {format_size(size, base10=False, max_gb=max_gb):>18} {format_size(size, base10=True, max_gb=max_gb):>15} {percentage:>11.2f}%")
     else:
         # Group by file extension/base type
         print(f"\n{'-' * 80}")
-        print(f"{'File Type':<30} {'Count':>10} {'Size (GiB/TiB)':>18} {'Size (GB/TB)':>15} {'Percentage':>12}")
+        print(f"{'File Type':<30} {'Count':>10} {size_header_base2:>18} {size_header_base10:>15} {'Percentage':>12}")
         print(f"{'-' * 80}")
 
         # Group files by pattern
@@ -734,7 +757,7 @@ def print_split_stats(
             size = data["size"]
             count = data["count"]
             percentage = (size / total_size) * 100 if total_size > 0 else 0
-            print(f"{group_name:<30} {count:>10} {format_size(size, base10=False):>18} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
+            print(f"{group_name:<30} {count:>10} {format_size(size, base10=False, max_gb=max_gb):>18} {format_size(size, base10=True, max_gb=max_gb):>15} {percentage:>11.2f}%")
 
 
 def print_grid_svd_stats(
@@ -742,6 +765,7 @@ def print_grid_svd_stats(
     file_sizes: Dict[str, int],
     file_counts: Dict[str, int],
     total_size: int,
+    max_gb: bool = False,
 ) -> None:
     """
     Print detailed statistics for grid SVD related files only.
@@ -782,20 +806,32 @@ def print_grid_svd_stats(
         print(f"\n[Grid SVD Stats] No grid SVD files found in {split_name.upper()} set")
         return
 
+    # Determine column headers based on max_gb setting
+    if max_gb:
+        size_header_base2 = "Size (GiB)"
+        size_header_base10 = "Size (GB)"
+        size_header_base2_small = "(GiB)"
+        size_header_base10_small = "(GB)"
+    else:
+        size_header_base2 = "Size (GiB/TiB)"
+        size_header_base10 = "Size (GB/TB)"
+        size_header_base2_small = "(GiB/TiB)"
+        size_header_base10_small = "(GB/TB)"
+
     print(f"\n{'=' * 80}")
     print(f"GRID SVD FILES - {split_name.upper()} SET")
     print(f"{'=' * 80}")
 
     # Summary
     percentage_of_total = (grid_svd_total_size / total_size * 100) if total_size > 0 else 0
-    print(f"Grid SVD total size: {format_size(grid_svd_total_size, base10=False)} ({format_size(grid_svd_total_size, base10=True)})")
+    print(f"Grid SVD total size: {format_size(grid_svd_total_size, base10=False, max_gb=max_gb)} ({format_size(grid_svd_total_size, base10=True, max_gb=max_gb)})")
     print(f"                     ({grid_svd_total_size:,} bytes)")
     print(f"Grid SVD files: {grid_svd_total_count:,}")
     print(f"Percentage of total: {percentage_of_total:.2f}%")
 
     # Detailed breakdown
     print(f"\n{'-' * 80}")
-    print(f"{'File Name':<40} {'Count':>10} {'Size (GiB/TiB)':>18} {'Size (GB/TB)':>15} {'% of SVD':>12}")
+    print(f"{'File Name':<40} {'Count':>10} {size_header_base2:>18} {size_header_base10:>15} {'% of SVD':>12}")
     print(f"{'-' * 80}")
 
     # Sort by size (descending)
@@ -805,10 +841,10 @@ def print_grid_svd_stats(
         size = data["size"]
         count = data["count"]
         percentage = (size / grid_svd_total_size * 100) if grid_svd_total_size > 0 else 0
-        print(f"{file_name:<40} {count:>10} {format_size(size, base10=False):>18} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
+        print(f"{file_name:<40} {count:>10} {format_size(size, base10=False, max_gb=max_gb):>18} {format_size(size, base10=True, max_gb=max_gb):>15} {percentage:>11.2f}%")
 
     print(f"{'-' * 80}")
-    print(f"{'TOTAL':<40} {grid_svd_total_count:>10} {format_size(grid_svd_total_size, base10=False):>18} {format_size(grid_svd_total_size, base10=True):>15} {100.0:>11.2f}%")
+    print(f"{'TOTAL':<40} {grid_svd_total_count:>10} {format_size(grid_svd_total_size, base10=False, max_gb=max_gb):>18} {format_size(grid_svd_total_size, base10=True, max_gb=max_gb):>15} {100.0:>11.2f}%")
     print(f"{'-' * 80}")
 
     # Group lang_feat_grid_svd by rank
@@ -816,7 +852,7 @@ def print_grid_svd_stats(
     if svd_npz_files:
         print(f"\n{'-' * 80}")
         print(f"{'Rank':<10} {'File Count':>12} {'Total Size':>35} {'Avg Size':>25}")
-        print(f"{'':>10} {'':>12} {'(GiB/TiB)':>18} {'(GB/TB)':>15} {'(MiB/GiB)':>13} {'(MB/GB)':>10}")
+        print(f"{'':>10} {'':>12} {size_header_base2_small:>18} {size_header_base10_small:>15} {'(MiB/GiB)':>13} {'(MB/GB)':>10}")
         print(f"{'-' * 80}")
 
         # Group by rank
@@ -837,7 +873,7 @@ def print_grid_svd_stats(
             total_size = group["size"]
             count = group["count"]
             avg_size = total_size / count if count > 0 else 0
-            print(f"R{rank:<9} {count:>12} {format_size(total_size, base10=False):>18} {format_size(total_size, base10=True):>15} {format_size(avg_size, base10=False):>13} {format_size(avg_size, base10=True):>10}")
+            print(f"R{rank:<9} {count:>12} {format_size(total_size, base10=False, max_gb=max_gb):>18} {format_size(total_size, base10=True, max_gb=max_gb):>15} {format_size(avg_size, base10=False):>13} {format_size(avg_size, base10=True):>10}")
 
         print(f"{'-' * 80}")
 
@@ -854,6 +890,7 @@ def merge_all_datasets(args) -> int:
     """
     exclude_files = args.exclude_files if args.exclude_files else []
     use_hf = args.include_hf_lang_feat or args.include_hf_all
+    max_gb = args.max_gb if hasattr(args, 'max_gb') else False
 
     # Collect data from all datasets
     all_datasets_data = {}
@@ -1019,8 +1056,16 @@ def merge_all_datasets(args) -> int:
     print(f"Include HuggingFace: {use_hf}")
     print()
 
+    # Determine column headers based on max_gb setting
+    if max_gb:
+        size_header_base2 = "Size (GiB)"
+        size_header_base10 = "Size (GB)"
+    else:
+        size_header_base2 = "Size (GiB/TiB)"
+        size_header_base10 = "Size (GB/TB)"
+
     print(f"\n{'-' * 80}")
-    print(f"{'Dataset':<15} {'Size (GiB/TiB)':>20} {'Size (GB/TB)':>15} {'Percentage':>12} {'Files':>12}")
+    print(f"{'Dataset':<15} {size_header_base2:>20} {size_header_base10:>15} {'Percentage':>12} {'Files':>12}")
     print(f"{'-' * 80}")
 
     for dataset_name, data in all_datasets_data.items():
@@ -1028,21 +1073,21 @@ def merge_all_datasets(args) -> int:
         file_count = sum(data["file_counts"].values())
         percentage = (total_size / total_size_all * 100) if total_size_all > 0 else 0
 
-        print(f"{dataset_name.upper():<15} {format_size(total_size, base10=False):>20} {format_size(total_size, base10=True):>15} {percentage:>11.2f}% {file_count:>12,}")
+        print(f"{dataset_name.upper():<15} {format_size(total_size, base10=False, max_gb=max_gb):>20} {format_size(total_size, base10=True, max_gb=max_gb):>15} {percentage:>11.2f}% {file_count:>12,}")
 
     print(f"{'-' * 80}")
-    print(f"{'TOTAL':<15} {format_size(total_size_all, base10=False):>20} {format_size(total_size_all, base10=True):>15} {100.0:>11.2f}% {total_files_all:>12,}")
+    print(f"{'TOTAL':<15} {format_size(total_size_all, base10=False, max_gb=max_gb):>20} {format_size(total_size_all, base10=True, max_gb=max_gb):>15} {100.0:>11.2f}% {total_files_all:>12,}")
     print(f"{'-' * 80}")
 
     # Print detailed file type breakdown
     print(f"\n{'=' * 80}")
     print("MERGED FILE TYPE BREAKDOWN")
     print(f"{'=' * 80}")
-    print(f"Total size: {format_size(total_size_all, base10=False)} ({format_size(total_size_all, base10=True)})")
+    print(f"Total size: {format_size(total_size_all, base10=False, max_gb=max_gb)} ({format_size(total_size_all, base10=True, max_gb=max_gb)})")
     print(f"Total files: {total_files_all:,}")
 
     print(f"\n{'-' * 80}")
-    print(f"{'File Type':<30} {'Count':>12} {'Size (GiB/TiB)':>20} {'Size (GB/TB)':>15} {'Percentage':>12}")
+    print(f"{'File Type':<30} {'Count':>12} {size_header_base2:>20} {size_header_base10:>15} {'Percentage':>12}")
     print(f"{'-' * 80}")
 
     # Sort by size (descending)
@@ -1051,7 +1096,7 @@ def merge_all_datasets(args) -> int:
     for file_name, size in sorted_files:
         count = merged_file_counts[file_name]
         percentage = (size / total_size_all * 100) if total_size_all > 0 else 0
-        print(f"{file_name:<30} {count:>12,} {format_size(size, base10=False):>20} {format_size(size, base10=True):>15} {percentage:>11.2f}%")
+        print(f"{file_name:<30} {count:>12,} {format_size(size, base10=False, max_gb=max_gb):>20} {format_size(size, base10=True, max_gb=max_gb):>15} {percentage:>11.2f}%")
 
     print(f"{'-' * 80}")
 
@@ -1064,6 +1109,7 @@ def merge_all_datasets(args) -> int:
                 data["file_sizes"],
                 data["file_counts"],
                 data["total_size"],
+                max_gb=max_gb,
             )
 
         # Print merged grid SVD stats
@@ -1072,6 +1118,7 @@ def merge_all_datasets(args) -> int:
             merged_file_sizes,
             merged_file_counts,
             total_size_all,
+            max_gb=max_gb,
         )
 
     # Create visualization if requested
@@ -1198,6 +1245,11 @@ def main():
         "--grid-svd-stats",
         action="store_true",
         help="Show detailed statistics for grid SVD related files only (lang_feat_grid_svd*.npz, grid_meta_data.json, lang_feat_index.npy)",
+    )
+    parser.add_argument(
+        "--max-gb",
+        action="store_true",
+        help="Cap units at GB/GiB level (never show TB/TiB) - both GB and GiB will be displayed",
     )
 
     args = parser.parse_args()
@@ -1428,8 +1480,16 @@ def main():
         print(f"Note: Train set includes lang_feat files from HuggingFace ({hf_repo_id})")
     print()
 
+    # Determine column headers based on max_gb setting
+    if args.max_gb:
+        size_header_base2 = "Size (GiB)"
+        size_header_base10 = "Size (GB)"
+    else:
+        size_header_base2 = "Size (GiB/TiB)"
+        size_header_base10 = "Size (GB/TB)"
+
     print(f"\n{'-' * 80}")
-    print(f"{'Split':<15} {'Size (GiB/TiB)':>20} {'Size (GB/TB)':>15} {'Percentage':>12} {'Files':>12}")
+    print(f"{'Split':<15} {size_header_base2:>20} {size_header_base10:>15} {'Percentage':>12} {'Files':>12}")
     print(f"{'-' * 80}")
 
     for split in args.splits:
@@ -1438,12 +1498,12 @@ def main():
         file_count = sum(data["file_counts"].values())
         percentage = (total_size / total_all_splits * 100) if total_all_splits > 0 else 0
 
-        print(f"{split.upper():<15} {format_size(total_size, base10=False):>20} {format_size(total_size, base10=True):>15} {percentage:>11.2f}% {file_count:>12,}")
+        print(f"{split.upper():<15} {format_size(total_size, base10=False, max_gb=args.max_gb):>20} {format_size(total_size, base10=True, max_gb=args.max_gb):>15} {percentage:>11.2f}% {file_count:>12,}")
 
     print(f"{'-' * 80}")
     # Calculate total files only from displayed splits
     total_files = sum(sum(all_data[s]['file_counts'].values()) for s in args.splits)
-    print(f"{'TOTAL':<15} {format_size(total_all_splits, base10=False):>20} {format_size(total_all_splits, base10=True):>15} {100.0:>11.2f}% {total_files:>12,}")
+    print(f"{'TOTAL':<15} {format_size(total_all_splits, base10=False, max_gb=args.max_gb):>20} {format_size(total_all_splits, base10=True, max_gb=args.max_gb):>15} {100.0:>11.2f}% {total_files:>12,}")
     print(f"{'-' * 80}")
 
     # Print detailed per-split information
@@ -1456,6 +1516,7 @@ def main():
                 data["file_counts"],
                 data["total_size"],
                 detailed=args.detailed,
+                max_gb=args.max_gb,
             )
 
     # Print grid SVD statistics if requested
@@ -1467,6 +1528,7 @@ def main():
                 data["file_sizes"],
                 data["file_counts"],
                 data["total_size"],
+                max_gb=args.max_gb,
             )
 
     print("\n" + "=" * 80)

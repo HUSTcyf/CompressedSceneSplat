@@ -130,7 +130,6 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
 
         # model_params should be a 13-element tuple in capture_language_feature() format
         print(f"Loaded checkpoint with iteration: {first_iter}")
-        print(f"Model params type: {type(model_params)}")
 
         # Extract all Gaussian state from the language checkpoint (which includes pruned state)
         (active_sh_degree, xyz, features_dc, features_rest,

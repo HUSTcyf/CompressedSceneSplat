@@ -31,20 +31,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Try to import GPU-accelerated UMAP (RAPIDS cuML)
 CUML_AVAILABLE = False
+cuml_UMAP = None
+
 try:
     from cuml.manifold import UMAP as cuml_UMAP
     CUML_AVAILABLE = True
 except ImportError:
     CUML_AVAILABLE = False
+    print("RAPIDS cuML not available, using CPU UMAP")
 
-    # Fallback to CPU UMAP
-    try:
-        import umap
-    except ImportError:
-        print("Installing umap-learn...")
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "umap-learn", "-q"])
-        import umap
+# Always import CPU UMAP as fallback
+umap = None
+try:
+    import umap
+except ImportError:
+    print("umap-learn not found, installing...")
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "umap-learn", "-q"])
+    import umap
 
 
 def get_umap_reducer(use_gpu: bool = False, n_components: int = 2, n_neighbors: int = 15,
@@ -75,16 +79,20 @@ def get_umap_reducer(use_gpu: bool = False, n_components: int = 2, n_neighbors: 
         else:
             print("Warning: GPU requested but RAPIDS cuML is not available. Falling back to CPU.")
             print("To install cuML: conda install -c rapidsai -c nvidia cuml")
-    else:
-        return umap.UMAP(
-            n_components=n_components,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric=metric,
-            random_state=random_state,
-            n_jobs=-1,
-            verbose=True
-        )
+
+    # Use CPU UMAP
+    if umap is None:
+        raise RuntimeError("UMAP is not available. Please install umap-learn: pip install umap-learn")
+
+    return umap.UMAP(
+        n_components=n_components,
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        metric=metric,
+        random_state=random_state,
+        n_jobs=-1,
+        verbose=True
+    )
 
 
 def find_scene_data(data_root: str) -> Dict[str, Dict[str, Path]]:
@@ -255,32 +263,68 @@ def load_features(scene_info: Dict, rank: int = 16, max_samples: int = None,
     # === Handle different data space scenarios ===
     # Case 1: U and original have same dimensions (no prior filtering)
     # Case 2: U is already filtered by valid_feat_mask (U.shape[0] < original.shape[0])
+    # Case 3: lang_feat.npy is pre-filtered (smaller than valid_feat_mask)
 
     if n_u == n_original:
-        # Case 1: Same space, can apply masks directly
+        # Case 1: Same space - but need to verify if original is already filtered
         print(f"  Same space: U and original both have {n_original} dimensions")
 
-        # Compute combined filter mask
+        # Check if original is already pre-filtered (smaller than valid_feat_mask)
         combined_mask = None
+        original_already_filtered = False
 
         if valid_feat_mask_path.exists():
             valid_feat_mask = np.load(valid_feat_mask_path).astype(bool)
-            combined_mask = valid_feat_mask
-            print(f"  valid_feat_mask: {combined_mask.sum()}/{len(combined_mask)} points")
+            print(f"  valid_feat_mask size: {len(valid_feat_mask)}, original size: {len(original)}")
+
+            # Check if original is already filtered
+            if len(valid_feat_mask) != len(original):
+                print(f"  Original is pre-filtered (lang_feat.npy already filtered)")
+                print(f"  Skipping valid_feat_mask application, only using label_mask")
+                original_already_filtered = True
+                # Don't apply valid_feat_mask since original is already filtered
+            else:
+                combined_mask = valid_feat_mask
+                print(f"  valid_feat_mask: {combined_mask.sum()}/{len(combined_mask)} points")
 
         if label_mask is not None:
-            if combined_mask is None:
-                combined_mask = label_mask
+            if original_already_filtered:
+                # Original is already filtered, label_mask needs to be aligned
+                if len(label_mask) != len(original):
+                    # label_mask is in original space, need to filter it
+                    if valid_feat_mask_path.exists():
+                        valid_feat_mask = np.load(valid_feat_mask_path).astype(bool)
+                        # First, align semantic_labels to filtered space
+                        if semantic_labels is not None:
+                            semantic_labels = semantic_labels[valid_feat_mask]
+                            print(f"  semantic_labels aligned to filtered space: {len(semantic_labels)} points")
+                        # Then align label_mask to filtered space
+                        label_mask_for_filtered = label_mask[valid_feat_mask]
+                        combined_mask = label_mask_for_filtered
+                        print(f"  label_mask (aligned to filtered space): {combined_mask.sum()}/{len(combined_mask)} points")
+                    else:
+                        print(f"  Warning: Cannot align label_mask (no valid_feat_mask)")
+                        combined_mask = None
+                else:
+                    combined_mask = label_mask
+                    print(f"  label_mask: {combined_mask.sum()}/{len(combined_mask)} points")
             else:
-                combined_mask = combined_mask & label_mask
-            print(f"  Combined mask (valid & labeled): {combined_mask.sum()}/{len(combined_mask)} points")
+                # Normal case: original is not pre-filtered
+                if combined_mask is None:
+                    combined_mask = label_mask
+                else:
+                    combined_mask = combined_mask & label_mask
+                print(f"  Combined mask (valid & labeled): {combined_mask.sum()}/{len(combined_mask)} points")
 
-        # Apply combined filter
+        # Apply combined filter (only if mask size matches)
         if combined_mask is not None:
-            original = original[combined_mask]
-            U = U[combined_mask]
-            if semantic_labels is not None:
-                semantic_labels = semantic_labels[combined_mask]
+            if len(combined_mask) == len(original):
+                original = original[combined_mask]
+                U = U[combined_mask]
+                if semantic_labels is not None:
+                    semantic_labels = semantic_labels[combined_mask]
+            else:
+                print(f"  Warning: Mask size ({len(combined_mask)}) != data size ({len(original)}), skipping filter")
 
         # Reconstruct compressed features
         U_r = U[:, :rank]
@@ -627,10 +671,8 @@ def process_scenes_iteratively(
                     # Original features
                     ax1 = axes[0]
                     ax1.scatter(orig_2d_viz[:, 0], orig_2d_viz[:, 1], c='blue', s=1, alpha=0.5)
-                    title = f'{scene_key}: Original Features (768-dim)'
-                    if remove_outliers:
-                        title += f' - {outlier_method}'
-                    ax1.set_title(title, fontsize=12, fontweight='bold')
+                    title = f'Original Features (768-dim)'
+                    ax1.set_title(title, fontsize=24, fontweight='bold')
                     ax1.set_xlabel('UMAP 1')
                     ax1.set_ylabel('UMAP 2')
                     ax1.grid(True, alpha=0.3)
@@ -642,10 +684,8 @@ def process_scenes_iteratively(
                     # Compressed features
                     ax2 = axes[1]
                     ax2.scatter(comp_2d_viz[:, 0], comp_2d_viz[:, 1], c='red', s=1, alpha=0.5)
-                    title = f'{scene_key}: Compressed Features (16-dim SVD)'
-                    if remove_outliers:
-                        title += f' - {outlier_method}'
-                    ax2.set_title(title, fontsize=12, fontweight='bold')
+                    title = f'Compressed Features ({rank}-dim SVD)'
+                    ax2.set_title(title, fontsize=24, fontweight='bold')
                     ax2.set_xlabel('UMAP 1')
                     ax2.set_ylabel('UMAP 2')
                     ax2.grid(True, alpha=0.3)
@@ -708,10 +748,8 @@ def process_scenes_iteratively(
                                                     c=[colors[label_idx]], label=f"{class_name} ({n_points})",
                                                     s=2, alpha=0.6)
 
-                            title = f'{scene_key}: Original - Semantic ({n_classes} classes)'
-                            if remove_outliers:
-                                title += f' - {outlier_method}'
-                            ax1.set_title(title, fontsize=12, fontweight='bold')
+                            title = f'Original - Semantic ({n_classes} classes)'
+                            ax1.set_title(title, fontsize=24, fontweight='bold')
                             ax1.set_xlabel('UMAP 1')
                             ax1.set_ylabel('UMAP 2')
                             ax1.grid(True, alpha=0.3)
@@ -739,10 +777,8 @@ def process_scenes_iteratively(
                                                     c=[colors[label_idx]], label=f"{class_name} ({n_points})",
                                                     s=2, alpha=0.6)
 
-                            title = f'{scene_key}: Compressed - Semantic ({n_classes} classes)'
-                            if remove_outliers:
-                                title += f' - {outlier_method}'
-                            ax2.set_title(title, fontsize=12, fontweight='bold')
+                            title = f'Compressed ({rank}-dim SVD) - Semantic ({n_classes} classes)'
+                            ax2.set_title(title, fontsize=24, fontweight='bold')
                             ax2.set_xlabel('UMAP 1')
                             ax2.set_ylabel('UMAP 2')
                             ax2.grid(True, alpha=0.3)
@@ -757,7 +793,7 @@ def process_scenes_iteratively(
                             else:
                                 ax2.legend(loc='best', fontsize=7, ncol=2 if n_classes > 8 else 1)
 
-                            fig.suptitle(f'Semantic: {scene_key}', fontsize=14, fontweight='bold', y=0.98)
+                            fig.suptitle(f'Semantic: {scene_key}', fontsize=28, fontweight='bold', y=0.98)
                             plt.tight_layout(rect=[0, 0, 0.85 if n_classes > 20 else 1, 0.96])
 
                             if remove_outliers:
@@ -1125,7 +1161,8 @@ def load_umap_embeddings(npz_path: str) -> Tuple[np.ndarray, np.ndarray, List[st
 
 
 def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
-                        labels: List[str], output_path: str, dataset_names: List[str] = None):
+                        labels: List[str], output_path: str, dataset_names: List[str] = None,
+                        rank: int = 16):
     """
     Create comparison visualization of original vs compressed feature spaces.
 
@@ -1158,7 +1195,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
         mask = np.array(label_datasets) == dataset
         ax1.scatter(original_2d[mask, 0], original_2d[mask, 1],
                    c=[colors[dataset]], label=dataset, s=0.5, alpha=0.6)
-    ax1.set_title('Original Features (768-dim)', fontsize=14, fontweight='bold')
+    ax1.set_title('Original Features (768-dim)', fontsize=28, fontweight='bold')
     ax1.set_xlabel('UMAP 1')
     ax1.set_ylabel('UMAP 2')
     ax1.legend(fontsize=8)
@@ -1170,7 +1207,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
         mask = np.array(label_datasets) == dataset
         ax2.scatter(compressed_2d[mask, 0], compressed_2d[mask, 1],
                    c=[colors[dataset]], label=dataset, s=0.5, alpha=0.6)
-    ax2.set_title('Compressed Features (16-dim SVD)', fontsize=14, fontweight='bold')
+    ax2.set_title(f'Compressed Features ({rank}-dim SVD)', fontsize=28, fontweight='bold')
     ax2.set_xlabel('UMAP 1')
     ax2.set_ylabel('UMAP 2')
     ax2.legend(fontsize=8)
@@ -1193,7 +1230,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
         ax3.scatter(original_2d[mask, 0], original_2d[mask, 1],
                    c=[scene_to_color[scene]], label=scene.split('/')[-1][:15],
                    s=0.5, alpha=0.6)
-    ax3.set_title('Original Features (by Scene)', fontsize=12, fontweight='bold')
+    ax3.set_title('Original Features (by Scene)', fontsize=24, fontweight='bold')
     ax3.set_xlabel('UMAP 1')
     ax3.set_ylabel('UMAP 2')
     ax3.legend(fontsize=6, loc='upper right')
@@ -1206,7 +1243,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
         ax4.scatter(compressed_2d[mask, 0], compressed_2d[mask, 1],
                    c=[scene_to_color[scene]], label=scene.split('/')[-1][:15],
                    s=0.5, alpha=0.6)
-    ax4.set_title('Compressed Features (by Scene)', fontsize=12, fontweight='bold')
+    ax4.set_title('Compressed Features (by Scene)', fontsize=24, fontweight='bold')
     ax4.set_xlabel('UMAP 1')
     ax4.set_ylabel('UMAP 2')
     ax4.legend(fontsize=6, loc='upper right')
@@ -1218,7 +1255,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
     # Plot distribution of UMAP coordinates
     ax5.hist(original_2d[:, 0], bins=50, alpha=0.5, label='Original (UMAP 1)', color='blue')
     ax5.hist(compressed_2d[:, 0], bins=50, alpha=0.5, label='Compressed (UMAP 1)', color='red')
-    ax5.set_title('Distribution of UMAP-1 Coordinates', fontsize=12, fontweight='bold')
+    ax5.set_title('Distribution of UMAP-1 Coordinates', fontsize=24, fontweight='bold')
     ax5.set_xlabel('UMAP 1 Value')
     ax5.set_ylabel('Frequency')
     ax5.legend(fontsize=10)
@@ -1247,7 +1284,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
       Std UMAP-1: {orig_std[0]:.2f}
       Std UMAP-2: {orig_std[1]:.2f}
 
-    Compressed Features (16-dim SVD):
+    Compressed Features ({rank}-dim SVD):
       Mean UMAP-1: {comp_mean[0]:.2f}
       Mean UMAP-2: {comp_mean[1]:.2f}
       Std UMAP-1: {comp_std[0]:.2f}
@@ -1262,7 +1299,7 @@ def create_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
 
     # Add overall title
     fig.suptitle('Language Feature Space: Original vs SVD-16 Compressed',
-                fontsize=16, fontweight='bold', y=0.98)
+                fontsize=32, fontweight='bold', y=0.98)
 
     # Save figure
     output_path = Path(output_path)
@@ -1283,7 +1320,8 @@ def create_semantic_visualization(
     outlier_method: str = "isolation_forest",
     contamination: float = 0.05,
     percentile: float = 95.0,
-    exclude_invalid: bool = True
+    exclude_invalid: bool = True,
+    rank: int = 16
 ):
     """
     Create per-scene semantic label-based visualizations with colored classes and legend.
@@ -1377,10 +1415,8 @@ def create_semantic_visualization(
                               c=[colors[label_idx]], label=f"{class_name} ({n_points})",
                               s=2, alpha=0.6)
 
-        title = f'{scene}: Original Features (768-dim) - Semantic Classes ({n_classes})'
-        if remove_outliers:
-            title += f' - {outlier_method}'
-        ax1.set_title(title, fontsize=12, fontweight='bold')
+        title = f'Original Features (768-dim) - Semantic Classes ({n_classes})'
+        ax1.set_title(title, fontsize=24, fontweight='bold')
         ax1.set_xlabel('UMAP 1')
         ax1.set_ylabel('UMAP 2')
         ax1.grid(True, alpha=0.3)
@@ -1410,10 +1446,8 @@ def create_semantic_visualization(
                               c=[colors[label_idx]], label=f"{class_name} ({n_points})",
                               s=2, alpha=0.6)
 
-        title = f'{scene}: Compressed Features (16-dim SVD) - Semantic Classes ({n_classes})'
-        if remove_outliers:
-            title += f' - {outlier_method}'
-        ax2.set_title(title, fontsize=12, fontweight='bold')
+        title = f'Compressed Features ({rank}-dim SVD) - Semantic Classes ({n_classes})'
+        ax2.set_title(title, fontsize=24, fontweight='bold')
         ax2.set_xlabel('UMAP 1')
         ax2.set_ylabel('UMAP 2')
         ax2.grid(True, alpha=0.3)
@@ -1432,7 +1466,7 @@ def create_semantic_visualization(
 
         # Add overall title
         fig.suptitle(f'Semantic Visualization: {scene}',
-                    fontsize=14, fontweight='bold', y=0.98)
+                    fontsize=28, fontweight='bold', y=0.98)
 
         # Adjust layout to make room for legend
         plt.tight_layout(rect=[0, 0, 0.85 if n_classes > 20 else 1, 0.96])
@@ -1451,7 +1485,8 @@ def create_semantic_visualization(
 
 
 def create_per_dataset_visualization(original_2d: np.ndarray, compressed_2d: np.ndarray,
-                                   labels: List[str], output_dir: str):
+                                   labels: List[str], output_dir: str,
+                                   rank: int = 16):
     """
     Create individual visualizations for each dataset.
 
@@ -1487,7 +1522,7 @@ def create_per_dataset_visualization(original_2d: np.ndarray, compressed_2d: np.
             scene_mask = np.array(scene_labels) == scene
             ax1.scatter(orig_2d[scene_mask, 0], orig_2d[scene_mask, 1],
                        c=[cmap(i / n_scenes)], label=scene[:20], s=1, alpha=0.6)
-        ax1.set_title(f'{dataset}: Original Features (768-dim)', fontsize=14, fontweight='bold')
+        ax1.set_title(f'{dataset}: Original Features (768-dim)', fontsize=28, fontweight='bold')
         ax1.set_xlabel('UMAP 1')
         ax1.set_ylabel('UMAP 2')
         ax1.legend(fontsize=8, bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -1499,7 +1534,7 @@ def create_per_dataset_visualization(original_2d: np.ndarray, compressed_2d: np.
             scene_mask = np.array(scene_labels) == scene
             ax2.scatter(comp_2d[scene_mask, 0], comp_2d[scene_mask, 1],
                        c=[cmap(i / n_scenes)], label=scene[:20], s=1, alpha=0.6)
-        ax2.set_title(f'{dataset}: Compressed Features (16-dim SVD)', fontsize=14, fontweight='bold')
+        ax2.set_title(f'{dataset}: Compressed Features ({rank}-dim SVD)', fontsize=28, fontweight='bold')
         ax2.set_xlabel('UMAP 1')
         ax2.set_ylabel('UMAP 2')
         ax2.legend(fontsize=8, bbox_to_anchor=(1.05, 1), loc='upper left')
@@ -1517,7 +1552,8 @@ def create_per_scene_visualization(original_2d: np.ndarray, compressed_2d: np.nd
                                    remove_outliers: bool = False,
                                    outlier_method: str = "isolation_forest",
                                    contamination: float = 0.05,
-                                   percentile: float = 95.0):
+                                   percentile: float = 95.0,
+                                   rank: int = 16):
     """
     Create individual comparison visualization for each scene.
 
@@ -1560,10 +1596,8 @@ def create_per_scene_visualization(original_2d: np.ndarray, compressed_2d: np.nd
         # Original features
         ax1 = axes[0]
         ax1.scatter(orig_2d[:, 0], orig_2d[:, 1], c='blue', s=1, alpha=0.5)
-        title = f'{scene}: Original Features (768-dim)'
-        if remove_outliers:
-            title += f' {outlier_method}'
-        ax1.set_title(title, fontsize=14, fontweight='bold')
+        title = f'Original Features (768-dim)'
+        ax1.set_title(title, fontsize=28, fontweight='bold')
         ax1.set_xlabel('UMAP 1')
         ax1.set_ylabel('UMAP 2')
         ax1.grid(True, alpha=0.3)
@@ -1577,10 +1611,8 @@ def create_per_scene_visualization(original_2d: np.ndarray, compressed_2d: np.nd
         # Compressed features
         ax2 = axes[1]
         ax2.scatter(comp_2d[:, 0], comp_2d[:, 1], c='red', s=1, alpha=0.5)
-        title = f'{scene}: Compressed Features (16-dim SVD)'
-        if remove_outliers:
-            title += f' {outlier_method}'
-        ax2.set_title(title, fontsize=14, fontweight='bold')
+        title = f'Compressed Features ({rank}-dim SVD)'
+        ax2.set_title(title, fontsize=28, fontweight='bold')
         ax2.set_xlabel('UMAP 1')
         ax2.set_ylabel('UMAP 2')
         ax2.grid(True, alpha=0.3)
@@ -1753,12 +1785,12 @@ def main():
         print("\nCreating comparison visualization...")
         main_output = output_dir / f"umap_comparison{suffix}.png"
         dataset_names = sorted(set(label.split('/')[0] for label in labels))
-        create_visualization(original_2d, compressed_2d, labels, main_output, dataset_names)
+        create_visualization(original_2d, compressed_2d, labels, main_output, dataset_names, args.rank)
 
     # Create per-dataset visualizations if requested
     if args.create_per_dataset:
         print("\nCreating per-dataset visualizations...")
-        create_per_dataset_visualization(original_2d, compressed_2d, labels, output_dir)
+        create_per_dataset_visualization(original_2d, compressed_2d, labels, output_dir, args.rank)
 
     # Save UMAP embeddings (only if not loaded from npz)
     if not args.load_npz:

@@ -80,10 +80,11 @@ class LangPretrainer(nn.Module):
         self,
         backbone=None,
         criteria=None,
+        verbose_losses=False,
     ):
         super().__init__()
         self.backbone = build_model(backbone)
-        self.criteria = build_criteria(criteria)
+        self.criteria = build_criteria(criteria, verbose_losses=verbose_losses)
 
     def forward(self, input_dict, chunk_size=None):
         if (
@@ -95,14 +96,19 @@ class LangPretrainer(nn.Module):
         point = Point(input_dict)
         point_feat = self.backbone(point)
         # normalize the feature
+        # Normalize both model output and target features for consistent L2/Cosine loss
         point_feat["feat"] = nn.functional.normalize(point_feat["feat"], p=2, dim=1)
 
         # train
         if self.training:
             segment = input_dict["segment"] if "segment" in input_dict.keys() else None
+
+            # Normalize target features to match model output scale
+            lang_feat_normalized = nn.functional.normalize(input_dict["lang_feat"], p=2, dim=1)
+
             loss = self.criteria(
                 point_feat["feat"],
-                input_dict["lang_feat"],
+                lang_feat_normalized,
                 valid_feat_mask=input_dict["valid_feat_mask"],
                 segment=segment,
                 epoch_progress=input_dict["epoch_progress"],
@@ -151,9 +157,10 @@ class LangPretrainer(nn.Module):
             chunk_point = Point(chunk_input_dict)
 
             chunk_point_feat = self.backbone(chunk_point)
-            chunk_point_feat["feat"] = nn.functional.normalize(
-                chunk_point_feat["feat"], p=2, dim=1
-            )
+            # NOTE: Disabled to allow L2 loss to properly converge - target features are not normalized
+            # chunk_point_feat["feat"] = nn.functional.normalize(
+            #     chunk_point_feat["feat"], p=2, dim=1
+            # )
 
             if is_training:
                 segment = chunk_input_dict.get("segment", None)

@@ -5,22 +5,52 @@ Batch Prediction Script for SceneSplat using LangPretrainerInference
 This script uses the LangPretrainerInference class for batch processing,
 with support for Gaussian checkpoint loading/saving.
 
+Features:
+- Load original SceneSplat PT-v3m1 model (768-dim output)
+- Load LitePT model (smaller, faster)
+- Output 768-dimensional language features
+- Save Gaussian checkpoint with embedded language features
+
 Usage:
-    # Basic inference
+    # Basic inference with LitePT model
     python tools/batch_predict_inference.py \\
         --config configs/inference/lang-pretrain-litept-3dgs.py \\
         --checkpoint /path/to/model.pth \\
         --input-root /path/to/npy/folder \\
         --output-dir /path/to/output
 
-    # With original checkpoint for GaussianModel format
+    # Use original SceneSplat PT-v3m1 model (768-dim features)
     python tools/batch_predict_inference.py \\
-        --config configs/inference/lang-pretrain-litept-3dgs.py \\
+        --use-original-model \\
+        --checkpoint /path/to/model.pth \\
+        --input-root /path/to/npy/folder \\
+        --output-dir /path/to/output
+
+    # With Gaussian checkpoint saving (768-dim language features)
+    python tools/batch_predict_inference.py \\
+        --use-original-model \\
         --checkpoint /path/to/model.pth \\
         --input-root /path/to/npy/folder \\
         --output-dir /path/to/output \\
         --original-checkpoint /path/to/gaussian/checkpoints \\
-        --iterations 30000
+        --iterations 30000 \\
+        --save-checkpoint
+
+    # Process a single scene
+    python tools/batch_predict_inference.py \\
+        --use-original-model \\
+        --checkpoint /path/to/model.pth \\
+        --input-root /path/to/npy/folder \\
+        --output-dir /path/to/output \\
+        --scene scene_name
+
+    # Specify custom config with feature dimension
+    python tools/batch_predict_inference.py \\
+        --config configs/custom/my_config.py \\
+        --checkpoint /path/to/model.pth \\
+        --input-root /path/to/npy/folder \\
+        --output-dir /path/to/output \\
+        --feature-dim 512
 """
 
 import argparse
@@ -79,7 +109,7 @@ class GaussianCheckpointHandler:
         index: np.ndarray,
         original_checkpoint: Dict,
         valid_feat_mask: Optional[np.ndarray] = None,
-        prune_invalid: bool = True,
+        prune_invalid: bool = False,
     ) -> Tuple:
         """
         Create GaussianModel checkpoint with language features.
@@ -157,8 +187,10 @@ class GaussianCheckpointHandler:
             else:
                 features_orig = features[index]  # [N, feat_dim]
                 if valid_feat_mask is not None:
+                    # Convert to boolean mask to avoid bitwise NOT issues with integer arrays
+                    bool_mask = valid_feat_mask.astype(bool)
                     features_orig = features_orig.copy()
-                    features_orig[~valid_feat_mask] = 0.0
+                    features_orig[~bool_mask] = 0.0
                 language_features = features_orig.astype(np.float32)
 
             # Convert language features to tensor
@@ -247,8 +279,10 @@ class GaussianCheckpointHandler:
             else:
                 features_orig = features[index]
                 if valid_feat_mask is not None:
+                    # Convert to boolean mask to avoid bitwise NOT issues with integer arrays
+                    bool_mask = valid_feat_mask.astype(bool)
                     features_orig = features_orig.copy()
-                    features_orig[~valid_feat_mask] = 0.0
+                    features_orig[~bool_mask] = 0.0
                 language_features = features_orig.astype(np.float32)
 
             language_features_tensor = torch.from_numpy(language_features)
@@ -312,7 +346,7 @@ class BatchPredictorWithInference:
         device: str = "cuda",
         original_checkpoint: Optional[str] = None,
         iterations: int = 30000,
-        prune_invalid: bool = True,
+        prune_invalid: bool = False,
         save_checkpoint: bool = False,
     ):
         """
@@ -325,7 +359,7 @@ class BatchPredictorWithInference:
             device: Device to use
             original_checkpoint: Base directory for original Gaussian checkpoints
             iterations: Checkpoint iteration number
-            prune_invalid: Whether to prune invalid Gaussians
+            prune_invalid: Whether to prune invalid Gaussians (default: False, keeps all Gaussians)
             save_checkpoint: Whether to save Gaussian checkpoint (when original checkpoint is found)
         """
         self.output_dir = Path(output_dir)
@@ -597,7 +631,7 @@ class BatchPredictorWithInference:
                 )
 
                 # Save checkpoint
-                ckpt_path = self.output_dir / scene_name / "checkpoint_with_features.pth"
+                ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_p.pth"
                 self.checkpoint_handler.save_checkpoint(new_ckpt, str(ckpt_path))
 
             except Exception as e:
@@ -633,12 +667,31 @@ class BatchPredictorWithInference:
         input_root: str,
         recursive: bool = False,
         max_scenes: Optional[int] = None,
+        scene: Optional[str] = None,
     ):
-        """Run batch prediction on all scenes."""
+        """Run batch prediction on all scenes or a single scene.
+
+        Args:
+            input_root: Input directory containing scene folders
+            recursive: Recursively find scene directories
+            max_scenes: Maximum number of scenes to process
+            scene: Single scene name to process (relative to input_root)
+        """
         input_path = Path(input_root)
         scenes = []
 
-        if recursive:
+        # Handle single scene mode
+        if scene is not None:
+            scene_path = input_path / scene
+            if not scene_path.exists():
+                raise ValueError(f"Scene path does not exist: {scene_path}")
+            if not scene_path.is_dir():
+                raise ValueError(f"Scene path is not a directory: {scene_path}")
+            if not any(scene_path.glob("*.npy")):
+                raise ValueError(f"No .npy files found in scene directory: {scene_path}")
+            scenes = [scene_path]
+            print(f"\nProcessing single scene: {scene}")
+        elif recursive:
             # Find all directories with .npy files
             for root, dirs, files in os.walk(input_path):
                 root_path = Path(root)
@@ -656,21 +709,25 @@ class BatchPredictorWithInference:
         if max_scenes:
             scenes = scenes[:max_scenes]
 
-        print(f"\nFound {len(scenes)} scenes to process")
+        if scene is None:
+            print(f"\nFound {len(scenes)} scenes to process")
 
         results = []
-        for scene in scenes:
+        for scene_item in scenes:
             try:
-                result = self.process_scene(scene)
+                result = self.process_scene(scene_item)
                 results.append(result)
             except Exception as e:
-                print(f"Error processing {scene}: {e}")
+                print(f"Error processing {scene_item}: {e}")
                 import traceback
                 traceback.print_exc()
 
         # Summary
         print("\n" + "=" * 60)
-        print("Batch Prediction Summary")
+        if scene is not None:
+            print("Single Scene Processing Summary")
+        else:
+            print("Batch Prediction Summary")
         print("=" * 60)
         for r in results:
             timing = r.get('timing', {})
@@ -687,13 +744,14 @@ class BatchPredictorWithInference:
             total_postprocess = sum(r.get('timing', {}).get('postprocess', 0) for r in results)
             total_save = sum(r.get('timing', {}).get('save', 0) for r in results)
             total_time_all = sum(r.get('timing', {}).get('total', 0) for r in results)
-            print(f"\nAggregate timing over {len(results)} scenes:")
-            print(f"  Total load: {total_load:.3f}s")
-            print(f"  Total inference: {total_inference:.3f}s")
-            print(f"  Total postprocess: {total_postprocess:.3f}s")
-            print(f"  Total save: {total_save:.3f}s")
-            print(f"  Total time: {total_time_all:.3f}s")
-            print(f"  Average per scene: {total_time_all / len(results):.3f}s")
+            if len(results) > 1:
+                print(f"\nAggregate timing over {len(results)} scenes:")
+                print(f"  Total load: {total_load:.3f}s")
+                print(f"  Total inference: {total_inference:.3f}s")
+                print(f"  Total postprocess: {total_postprocess:.3f}s")
+                print(f"  Total save: {total_save:.3f}s")
+                print(f"  Total time: {total_time_all:.3f}s")
+                print(f"  Average per scene: {total_time_all / len(results):.3f}s")
 
         # Save summary
         summary_path = self.output_dir / "summary.json"
@@ -708,8 +766,19 @@ def parse_args():
     )
     parser.add_argument(
         "--config",
-        required=True,
-        help="Path to inference config",
+        default=None,
+        help="Path to inference config (auto-selected by --use-original-model if not specified)",
+    )
+    parser.add_argument(
+        "--use-original-model",
+        action="store_true",
+        help="Use original SceneSplat PT-v3m1 model (configs/inference/lang-pretrain-pt-v3m1-3dgs.py)",
+    )
+    parser.add_argument(
+        "--feature-dim",
+        type=int,
+        default=None,
+        help="Feature dimension to output (default: auto-detected from config, 768 for PT-v3m1)",
     )
     parser.add_argument(
         "--checkpoint",
@@ -745,8 +814,8 @@ def parse_args():
     parser.add_argument(
         "--prune-invalid",
         action="store_true",
-        default=True,
-        help="Prune Gaussians with invalid features (default: True)",
+        default=False,
+        help="Prune Gaussians with invalid features (default: False)",
     )
     parser.add_argument(
         "--no-prune-invalid",
@@ -771,29 +840,70 @@ def parse_args():
         default=None,
         help="Maximum number of scenes to process",
     )
+    parser.add_argument(
+        "--scene",
+        default=None,
+        help="Process a single scene by name (relative to input_root)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
+    # Validate and auto-select config
+    config_path = args.config
+    feature_dim = args.feature_dim
+    model_type = "unknown"
+
+    if args.use_original_model:
+        if config_path is not None:
+            print("Warning: --use-original-model specified with --config, using --config")
+        else:
+            # Auto-select original SceneSplat PT-v3m1 config
+            config_path = "configs/inference/lang-pretrain-pt-v3m1-3dgs.py"
+            model_type = "PT-v3m1 (original SceneSplat)"
+            # Set default feature dim for PT-v3m1 if not specified
+            if feature_dim is None:
+                feature_dim = 768
+    elif config_path is None:
+        raise ValueError("Either --config or --use-original-model must be specified")
+    else:
+        # Detect model type from config path
+        if "litept" in config_path.lower():
+            model_type = "LitePT"
+        elif "pt-v3" in config_path.lower() or "ptv3" in config_path.lower():
+            model_type = "PT-v3m1 (original SceneSplat)"
+        else:
+            model_type = "Custom"
+
+    # Resolve config path relative to project root
+    if config_path is not None and not os.path.isabs(config_path):
+        config_path = str(PROJECT_ROOT / config_path)
+
     print("=" * 60)
     print("SceneSplat Batch Prediction (LangPretrainerInference)")
     print("=" * 60)
-    print(f"Config: {args.config}")
+    print(f"Model type: {model_type}")
+    print(f"Config: {config_path}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Input: {args.input_root}")
+    if args.scene is not None:
+        print(f"Scene: {args.scene} (single scene mode)")
     print(f"Output: {args.output_dir}")
     print(f"Device: {args.device}")
+    if feature_dim is not None:
+        print(f"Feature dim: {feature_dim}")
     print(f"Original checkpoint: {args.original_checkpoint or 'N/A'}")
     print(f"Iterations: {args.iterations}")
     print(f"Prune invalid: {args.prune_invalid}")
     print(f"Save checkpoint: {args.save_checkpoint}")
-    print(f"Recursive: {args.recursive}")
+    if args.scene is None:
+        print(f"Recursive: {args.recursive}")
     print("=" * 60)
 
     predictor = BatchPredictorWithInference(
-        config_path=args.config,
+        config_path=config_path,
         checkpoint_path=args.checkpoint,
         output_dir=args.output_dir,
         device=args.device,
@@ -807,6 +917,7 @@ def main():
         input_root=args.input_root,
         recursive=args.recursive,
         max_scenes=args.max_scenes,
+        scene=args.scene,
     )
 
 

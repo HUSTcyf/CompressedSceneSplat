@@ -995,15 +995,39 @@ class DensityInvariantTrainer(TrainerBase):
 
         # CRITICAL: SVD files contain point_to_grid mapping for ONLY valid points
         # We need to filter input data to valid points before using the mapping
+        # Note: FilterValidPoints transform has already been applied in the dataset,
+        # but we apply it again here for safety in case the data loader modified things
+
+        # Get point_to_grid mapping FIRST (before any filtering)
+        # This mapping was loaded in GenericGSDataset and should align with coord/feat
+        point_to_grid = input_dict.get('point_to_grid')
+
+        # Handle batched data: DataLoader wraps items in lists
+        if isinstance(point_to_grid, list):
+            if len(point_to_grid) == 0:
+                point_to_grid = None
+            else:
+                point_to_grid = point_to_grid[0]  # Take first element
+
+        # Store original sizes for validation
+        num_total = coord.shape[0]
+        point_to_grid_size = point_to_grid.shape[0] if point_to_grid is not None else 0
+
+        # Apply valid_feat_mask filtering if needed
         if valid_feat_mask is not None:
             valid_mask = valid_feat_mask > 0
             num_valid = valid_mask.sum().item()
-            num_total = coord.shape[0]
 
             # Warn if very few valid points
             if num_valid < 100:
                 self.logger.warning(f"[Rank {self.rank}] Scene '{scene_name}' has very few valid points ({num_valid}). "
                                    f"This may indicate a data problem.")
+
+            # IMPORTANT: Filter point_to_grid along with other data to maintain alignment
+            # The GenericGSDataset and transforms should have already done this, but we ensure it here
+            if point_to_grid is not None and point_to_grid.shape[0] == num_total:
+                point_to_grid = point_to_grid[valid_mask]
+                self.logger.debug(f"[Rank {self.rank}] Filtered point_to_grid to match valid points")
 
             # Filter to valid points
             coord = coord[valid_mask]
@@ -1016,24 +1040,25 @@ class DensityInvariantTrainer(TrainerBase):
             self.logger.debug(f"[Rank {self.rank}] Filtered to {num_valid:,} valid points "
                             f"out of {num_total:,} total points")
 
-        # Get point_to_grid mapping (loaded in GenericGSDataset)
-        # OPTIMIZED: If we filtered valid points, also filter point_to_grid to match
-        point_to_grid = input_dict.get('point_to_grid')
+        # Validate point_to_grid alignment
+        if point_to_grid is not None:
+            current_num_points = coord.shape[0]
+            if point_to_grid.shape[0] != current_num_points:
+                raise ValueError(
+                    f"[Rank {self.rank}] point_to_grid size mismatch!\n"
+                    f"  point_to_grid.shape[0] = {point_to_grid.shape[0]}\n"
+                    f"  coord.shape[0] = {current_num_points}\n"
+                    f"  Original sizes: coord={num_total}, point_to_grid={point_to_grid_size}\n"
+                    f"This indicates a bug in the data pipeline - transforms didn't maintain alignment."
+                )
 
-        # Handle batched data: DataLoader wraps items in lists
-        if isinstance(point_to_grid, list):
-            if len(point_to_grid) == 0:
-                point_to_grid = None
-            else:
-                point_to_grid = point_to_grid[0]  # Take first element
-
-        # OPTIMIZED: If data was filtered, also filter point_to_grid to maintain consistency
-        # This prevents mismatch between point indices and grid indices
-        if valid_feat_mask is not None and point_to_grid is not None:
-            # Check if point_to_grid needs filtering (matches original data size)
-            if point_to_grid.shape[0] == num_total:
-                point_to_grid = point_to_grid[valid_mask]
-                self.logger.debug(f"[Rank {self.rank}] Filtered point_to_grid to match valid points")
+            # Validate indices are non-negative (basic sanity check)
+            if (point_to_grid < 0).any():
+                raise ValueError(
+                    f"[Rank {self.rank}] point_to_grid contains negative indices!\n"
+                    f"  min(point_to_grid) = {point_to_grid.min().item()}\n"
+                    f"This indicates corrupted SVD file or incorrect filtering."
+                )
 
         # Assert point_to_grid is available
         assert point_to_grid is not None, (
@@ -1143,7 +1168,7 @@ class DensityInvariantTrainer(TrainerBase):
             point = Point(batched_input)
             point_feat = backbone(point)
 
-            # Normalize features (same as LangPretrainer)
+            # Normalize features (consistent with LangPretrainer)
             import torch.nn.functional as F
             point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)
 
@@ -1189,9 +1214,18 @@ class DensityInvariantTrainer(TrainerBase):
                     criteria = self.model.criteria
 
                 segment = scenario_input.get("segment")
+
+                # Normalize GT features to match model output (consistent with LangPretrainer)
+                lang_feat = scenario_input.get('lang_feat')
+                if lang_feat is not None:
+                    import torch.nn.functional as F
+                    lang_feat_normalized = F.normalize(lang_feat, p=2, dim=1)
+                else:
+                    lang_feat_normalized = None
+
                 loss = criteria(
                     scenario_feat,
-                    scenario_input.get('lang_feat'),
+                    lang_feat_normalized,
                     valid_feat_mask=scenario_input['valid_feat_mask'],
                     segment=segment,
                     epoch_progress=epoch_progress,
