@@ -42,6 +42,7 @@ import sys
 import time
 import datetime
 import argparse
+import logging
 from pathlib import Path
 
 # Add project root to Python path
@@ -83,14 +84,19 @@ def main_worker(cfg, density_invariant=False):
 
     cfg = default_setup(cfg)
 
+    # Setup log file output
+    log_file = os.path.join(cfg.save_path, f"train_{start_datetime.strftime('%Y%m%d_%H%M%S')}.log")
+    os.makedirs(cfg.save_path, exist_ok=True)
+    from pointcept.utils.logger import get_root_logger
+    logger = get_root_logger(log_file=log_file, log_level=logging.INFO)
+    logger.info(f"Log file: {log_file}")
+
     # Override trainer type if density-invariant training is requested
     if density_invariant:
         original_trainer_type = cfg.train.type
         cfg.train.type = "DensityInvariantTrainer"
 
         # Log the trainer override
-        from pointcept.utils.logger import get_root_logger
-        logger = get_root_logger()
         logger.info("=" * 80)
         logger.info("Density-Invariant Training Mode")
         logger.info("=" * 80)
@@ -101,8 +107,6 @@ def main_worker(cfg, density_invariant=False):
         logger.info("")
 
     # Log start time
-    from pointcept.utils.logger import get_root_logger
-    logger = get_root_logger()
     logger.info("=" * 80)
     logger.info("Training Started")
     logger.info("=" * 80)

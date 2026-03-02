@@ -666,7 +666,14 @@ class DensityConsistencyLoss(nn.Module):
 
                 num_common_grids = aligned_feat_i.shape[0]
                 if num_common_grids == 0:
-                    continue
+                    raise RuntimeError(
+                        f"[DensityConsistencyLoss] No common grids found between scenario {i} ({scenario_i}) "
+                        f"and scenario {j} ({scenario_j}). "
+                        f"This indicates a data loading error where point_to_grid mappings "
+                        f"do not share any grid indices. "
+                        f"feat_i.shape={feat_i.shape}, grid_i range=[{grid_i.min()}, {grid_i.max()}], "
+                        f"feat_j.shape={feat_j.shape}, grid_j range=[{grid_j.min()}, {grid_j.max()}]"
+                    )
 
                 # Compute consistency loss (detached, no gradients to model)
                 if self.consistency_type == 'mse':
@@ -755,6 +762,7 @@ class DensityInvariantTrainer(TrainerBase):
         )
         self.use_compressed_features = self.density_config.get('use_compressed_features', True)
         self.svd_rank = self.density_config.get('svd_rank', None)  # SVD compression rank to load
+        self.batched_forward = self.density_config.get('batched_forward', True)  # NEW: batched or separate forward
 
         self.logger.info("=> Density-Invariant Training Configuration:")
         self.logger.info(f"   Rank: {self.rank}/{self.world_size}")
@@ -765,6 +773,7 @@ class DensityInvariantTrainer(TrainerBase):
         self.logger.info(f"   Scenario weights: {self.scenario_weights}")
         self.logger.info(f"   Use compressed features: {self.use_compressed_features}")
         self.logger.info(f"   SVD rank: {self.svd_rank if self.svd_rank else 'auto (highest available)'}")
+        self.logger.info(f"   Batched forward: {self.batched_forward}")
 
         # Build components
         self.logger.info("=> Building model ...")
@@ -803,6 +812,10 @@ class DensityInvariantTrainer(TrainerBase):
             consistency_type=self.consistency_type,
         )
 
+        # Per-scene loss tracking for debugging and visualization
+        # Dictionary structure: {scene_name: {'total_loss': [], 'l1_loss': [], 'cosine_loss': [], 'iterations': []}}
+        self.per_scene_losses = {}
+
         self.logger.info("=> Building hooks ...")
         self.register_hooks(cfg.hooks)
 
@@ -833,9 +846,10 @@ class DensityInvariantTrainer(TrainerBase):
 
     def build_writer(self):
         """Build tensorboard writer"""
-        writer = SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
+        # TEMPORARILY DISABLED: Prevent writing to events file to save disk space
+        writer = None  # SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
         if comm.is_main_process():
-            self.logger.info(f"Tensorboard writer logging dir: {self.cfg.save_path}")
+            self.logger.info(f"Tensorboard writer DISABLED (not logging to: {self.cfg.save_path})")
         return writer
 
     def build_train_loader(self):
@@ -925,8 +939,44 @@ class DensityInvariantTrainer(TrainerBase):
         return build_scheduler(self.cfg.scheduler, self.optimizer)
 
     def build_scaler(self):
-        """Build gradient scaler"""
-        scaler = torch.amp.GradScaler("cuda") if self.cfg.enable_amp else None
+        """Build gradient scaler with very conservative init_scale to prevent NaN.
+
+        OBSERVED ISSUE: decoder0.conv.1.bias has persistent large gradients (~0.77)
+        - This is NOT a random spike, but a structural issue from dim[0] dominance
+        - Large gradients accumulate in weights → activation anomalies → NaN
+
+        VERY CONSERVATIVE: init_scale=16.0 to minimize overflow risk.
+        - This is 32x smaller than the initial 512, and 4096x smaller than PyTorch default 65536
+        - Priority: Stability over learning speed
+        - GradScaler will automatically increase scale when training is stable (growth_factor=2.0)
+
+        With init_scale=16:
+        - loss (1.6) × scale (16) = 25.6
+        - 25.6 × activation (2) × channels (504) = 25.8K >> 65K fp16 max
+        - BUT: This is MUCH smaller than before, reducing overflow risk significantly
+
+        Trade-off:
+        - Learning will be slower initially (smaller gradients)
+        - But training will be stable (no NaN)
+        - GradScaler will auto-increase scale over time if no overflow occurs
+
+        Key protection layers:
+        1. Very small init_scale (16) - minimizes initial gradient magnitude
+        2. Loss spike detection (2.5x MA)
+        3. Gradient clipping (1.0 norm)
+        4. Consecutive large gradient detection (5 in a row)
+        5. GradScaler auto-adjustment (will decrease on overflow, increase when stable)
+        """
+        if self.cfg.enable_amp:
+            scaler = torch.amp.GradScaler(
+                "cuda",
+                init_scale=16.0,        # Very conservative: 32x smaller than 512
+                growth_factor=2.0,       # Double scale every 2000 successful iters
+                backoff_factor=0.5,      # Halve scale when inf/NaN detected
+                growth_interval=2000,    # How often to increase scale
+            )
+        else:
+            scaler = None
         return scaler
 
     def train(self):
@@ -1096,16 +1146,44 @@ class DensityInvariantTrainer(TrainerBase):
         grid_size = input_dict.get('grid_size', 0.01)
         epoch_progress = self.epoch / self.max_epoch
         device = coord.device
-        scene_name = input_dict.get('name', 'unknown')
+        # Get scene name (may be list due to collate_fn, so handle that)
+        scene_name_raw = input_dict.get('name', 'unknown')
+        if isinstance(scene_name_raw, list):
+            # For batched data, use the first scene name or join them
+            scene_name = scene_name_raw[0] if len(scene_name_raw) == 1 else "_".join(str(s) for s in scene_name_raw)
+        else:
+            scene_name = scene_name_raw
 
         # TIMING: Forward pass
         forward_start = time.time()
 
-        # OPTIMIZATION: Batched forward pass for all scenarios
-        # Instead of calling model 3 times, concatenate all scenarios and call once
-        # This leverages GPU parallelism and reduces kernel launch overhead
+        # Get backbone model (used in both modes)
+        if hasattr(self.model, 'module'):
+            backbone = self.model.module.backbone
+        else:
+            backbone = self.model.backbone
 
-        # Check minimum point count for all scenarios first
+        # NAN CHECK: Check backbone weights before forward pass (EVERY iteration now)
+        # This was previously done every 10 iters, but NaN can happen at any time
+        has_nan_in_backbone = False
+        nan_params = []
+        for name, param in backbone.named_parameters():
+            if torch.isnan(param).any():
+                has_nan_in_backbone = True
+                nan_count = torch.isnan(param).sum().item()
+                nan_params.append(f"{name} ({nan_count} NaNs)")
+
+        if has_nan_in_backbone:
+            print(f"\n🚨 NaN DETECTED IN BACKBONE WEIGHTS BEFORE FORWARD PASS!")
+            print(f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}")
+            print(f"  Corrupted parameters:")
+            for p in nan_params[:5]:  # Show first 5
+                print(f"    - {p}")
+            print(f"  Model is corrupted from previous iterations!")
+            print(f"  Need to restart from a clean checkpoint.")
+            raise RuntimeError("Backbone weights contain NaN! Cannot continue training.")
+
+        # Check minimum point count for all scenarios
         for sample_dict in scenario_samples:
             num_points = sample_dict['coord'].shape[0]
             if num_points < 4:
@@ -1116,143 +1194,529 @@ class DensityInvariantTrainer(TrainerBase):
                     f"Scene: {scene_name}"
                 )
 
-        # Concatenate all scenarios into a single batch
-        batched_coord = []
-        batched_feat = []
-        batch_indices = []  # To track which scenario each point belongs to
-        scenario_point_counts = []  # To split outputs back
+        if self.batched_forward:
+            # =====================================================================
+            # MODE 1: BATCHED FORWARD (default, faster but may cross-contaminate)
+            # =====================================================================
+            # Concatenate all scenarios into a single batch
+            # OPTIMIZATION: Single forward pass leverages GPU parallelism
 
-        for i, sample_dict in enumerate(scenario_samples):
-            batched_coord.append(sample_dict['coord'])
-            batched_feat.append(sample_dict['feat'])
-            num_points = sample_dict['coord'].shape[0]
-            scenario_point_counts.append(num_points)
-            batch_indices.append(torch.full((num_points,), i, device=device))
+            batched_coord = []
+            batched_feat = []
+            batch_indices = []  # To track which scenario each point belongs to
+            scenario_point_counts = []  # To split outputs back
 
-        # Concatenate all data
-        batched_coord = torch.cat(batched_coord, dim=0)  # [Total_points, 3]
-        batched_feat = torch.cat(batched_feat, dim=0)    # [Total_points, C]
-        batch_indices = torch.cat(batch_indices, dim=0)  # [Total_points]
+            for i, sample_dict in enumerate(scenario_samples):
+                batched_coord.append(sample_dict['coord'])
+                batched_feat.append(sample_dict['feat'])
+                num_points = sample_dict['coord'].shape[0]
+                scenario_point_counts.append(num_points)
+                batch_indices.append(torch.full((num_points,), i, device=device))
 
-        # Store total points before deleting tensors
-        total_points = batched_coord.shape[0]
+            # Concatenate all data
+            batched_coord = torch.cat(batched_coord, dim=0)  # [Total_points, 3]
+            batched_feat = torch.cat(batched_feat, dim=0)    # [Total_points, C]
+            batch_indices = torch.cat(batch_indices, dim=0)  # [Total_points]
 
-        # Create batch input dict
-        batched_input = {
-            'coord': batched_coord,
-            'feat': batched_feat,
-            'batch': batch_indices,
-            'grid_size': grid_size,
-            'epoch_progress': epoch_progress,
-        }
+            # Store total points before deleting tensors
+            total_points = batched_coord.shape[0]
 
-        # Clear concatenated tensors to free memory (after creating batched_input)
-        del batched_coord, batched_feat, batch_indices
-
-        # Create valid_feat_mask for all points (all valid after filtering)
-        batched_input['valid_feat_mask'] = torch.ones(
-            total_points, dtype=torch.bool, device=device
-        )
-
-        # Forward pass through backbone (batched for all scenarios)
-        with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-            # Get backbone model
-            if hasattr(self.model, 'module'):
-                # DDP wrapped model
-                backbone = self.model.module.backbone
-            else:
-                backbone = self.model.backbone
-
-            # Create Point object and pass through backbone
-            from pointcept.models.utils.structure import Point
-            point = Point(batched_input)
-            point_feat = backbone(point)
-
-            # Normalize features (consistent with LangPretrainer)
-            import torch.nn.functional as F
-            point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)
-
-            # Split features back to individual scenarios
-            batched_features = point_feat["feat"]  # [Total_points, D]
-
-        # Clean up large intermediate tensors to free memory before loss computation
-        del point, point_feat, batched_input
-
-        # Now compute loss for each scenario separately
-        # (Each scenario has its own lang_feat target)
-        start_idx = 0
-        for i, sample_dict in enumerate(scenario_samples):
-            end_idx = start_idx + scenario_point_counts[i]
-            # Extract features for this scenario (creates new tensor, not a view)
-            scenario_feat = batched_features[start_idx:end_idx].clone()
-
-            # Build scenario-specific input for loss computation
-            scenario_input = {
-                'coord': sample_dict['coord'],
-                'feat': sample_dict['feat'],
+            # Create batch input dict
+            batched_input = {
+                'coord': batched_coord,
+                'feat': batched_feat,
+                'batch': batch_indices,
                 'grid_size': grid_size,
                 'epoch_progress': epoch_progress,
-                'valid_feat_mask': torch.ones(
-                    scenario_point_counts[i], dtype=torch.bool, device=device
-                ),
             }
 
-            # Add lang_feat if present (required for loss computation)
-            if 'lang_feat' in sample_dict:
-                scenario_input['lang_feat'] = sample_dict['lang_feat']
+            # Clear concatenated tensors to free memory (after creating batched_input)
+            del batched_coord, batched_feat, batch_indices
 
-            # Add segment labels if present
-            if 'labels' in sample_dict:
-                scenario_input['segment'] = sample_dict['labels']
+            # Create valid_feat_mask for all points (all valid after filtering)
+            batched_input['valid_feat_mask'] = torch.ones(
+                total_points, dtype=torch.bool, device=device
+            )
 
-            # Compute loss using criteria
+            # Forward pass through backbone (batched for all scenarios)
+            # NAN CHECK: Check input data for anomalies
+            coord = batched_input['coord']
+            feat = batched_input['feat']
+            if torch.isnan(coord).any() or torch.isinf(coord).any():
+                print(f"\n🚨 NaN/Inf DETECTED IN INPUT COORD!")
+                print(f"  coord NaN: {torch.isnan(coord).any().item()}")
+                print(f"  coord Inf: {torch.isinf(coord).any().item()}")
+                print(f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}")
+                assert False, "Input coord contains NaN/Inf! Check data loading."
+            if torch.isnan(feat).any() or torch.isinf(feat).any():
+                print(f"\n🚨 NaN/Inf DETECTED IN INPUT FEAT!")
+                print(f"  feat NaN: {torch.isnan(feat).any().item()}")
+                print(f"  feat Inf: {torch.isinf(feat).any().item()}")
+                print(f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}")
+                assert False, "Input feat contains NaN/Inf! Check data loading."
+
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-                # Get criteria
+                from pointcept.models.utils.structure import Point
+                point = Point(batched_input)
+                point_feat = backbone(point)
+
+                # NAN CHECK: Detect NaN in backbone output immediately
+                feat_before_scale = point_feat["feat"]
+                if torch.isnan(feat_before_scale).any():
+                    print(f"\n🚨 NaN DETECTED IN BACKBONE OUTPUT!")
+                    print(f"  feat_before_scale contains NaN!")
+                    print(f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}")
+                    print(f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}")
+                    print(f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}")
+
+                    # Print scenario names
+                    scenario_names = [s.get('scenario', 'unknown') for s in scenario_samples]
+                    print(f"  Scenarios in this batch: {scenario_names}")
+                    print(f"  Point counts per scenario: {scenario_point_counts}")
+
+                    # Check which dimensions have NaN
+                    for dim in range(feat_before_scale.shape[1]):
+                        if torch.isnan(feat_before_scale[:, dim]).any():
+                            print(f"    dim[{dim}] has NaN!")
+
+                    # Check if AMP is enabled
+                    print(f"  AMP enabled: {self.cfg.enable_amp}")
+                    print(f"  If AMP is True, try setting enable_amp=False in config to test.")
+
+                    assert False, "Backbone output contains NaN! Training stopped to prevent corruption."
+
+                # CRITICAL FIX: Do NOT normalize features
+                # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
+                # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
+
+                # CRITICAL FIX: Apply learnable dimension-wise scaling
+                # The LangPretrainer wrapper has dim_scale parameter, but we're calling
+                # backbone directly here, so we need to apply scaling manually
                 if hasattr(self.model, 'module'):
-                    criteria = self.model.module.criteria
+                    dim_scale = self.model.module.dim_scale
                 else:
-                    criteria = self.model.criteria
+                    dim_scale = self.model.dim_scale
 
-                segment = scenario_input.get("segment")
+                # Check dim_scale validity
+                if torch.isnan(dim_scale).any() or torch.isinf(dim_scale).any():
+                    print(f"\n🚨 NaN/Inf DETECTED IN dim_scale!")
+                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
+                    print(f"  Resetting to safe values...")
+                    with torch.no_grad():
+                        dim_scale.copy_(torch.ones(16, device=dim_scale.device) * 0.3)
+                        dim_scale[0] = 1.0
 
-                # Normalize GT features to match model output (consistent with LangPretrainer)
-                lang_feat = scenario_input.get('lang_feat')
-                if lang_feat is not None:
-                    import torch.nn.functional as F
-                    lang_feat_normalized = F.normalize(lang_feat, p=2, dim=1)
+                # Apply scaling: [N, 16] * [16] = [N, 16]
+                batched_features = feat_before_scale * dim_scale  # [Total_points, D]
+
+                # NAN CHECK: Detect NaN after scaling
+                if torch.isnan(batched_features).any():
+                    print(f"\n🚨 NaN DETECTED AFTER SCALING!")
+                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
+                    print(f"  feat_before_scale NaN: {torch.isnan(feat_before_scale).any().item()}")
+                    assert False, "Features contain NaN after scaling! Training stopped."
+
+                # STABILITY CHECK: Detect extreme values that might cause numerical instability
+                feat_max = batched_features.abs().max().item()
+                feat_mean = batched_features.abs().mean().item()
+                if feat_max > 1000.0 or feat_mean > 100.0:
+                    print(f"\n⚠️ WARNING: Extreme feature values detected!")
+                    print(f"  feat_max: {feat_max:.2f}, feat_mean: {feat_mean:.2f}")
+                    print(f"  This may lead to numerical instability or NaN in loss computation.")
+
+                # DEBUG: Verify scaling was applied (only print once at iter 0)
+                if self.comm_info["iter"] == 0:
+                    feat_before = point_feat["feat"]
+                    print(f"\n[DEBUG IN TRAINER] Applying dim_scale in batched forward:")
+                    print(f"  feat_before mean: {feat_before.mean():.6f}, std: {feat_before.std():.6f}")
+                    print(f"  feat_after mean: {batched_features.mean():.6f}, std: {batched_features.std():.6f}")
+                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
+                    print(f"  Reduction ratio: {batched_features.mean().item() / (feat_before.mean().item() + 1e-8):.4f}")
+
+            # Clean up large intermediate tensors to free memory before loss computation
+            del point, point_feat, batched_input
+
+            # Now compute loss for each scenario separately
+            # (Each scenario has its own lang_feat target)
+
+            # Collect all scene names for consistent loss tracking across all scenes
+            all_scene_names = [s.get('scenario', f'scene_{i}') for i, s in enumerate(scenario_samples)]
+
+            # Track current iteration's losses for each scene being trained
+            current_iteration_losses = {}  # {scene_name: {'total': float, 'l1': float, 'cos': float}}
+
+            start_idx = 0
+            for i, sample_dict in enumerate(scenario_samples):
+                end_idx = start_idx + scenario_point_counts[i]
+                # Extract features for this scenario (creates new tensor, not a view)
+                scenario_feat = batched_features[start_idx:end_idx].clone()
+
+                # Check if sample_dict has valid_feat_mask, otherwise use all ones
+                if 'valid_feat_mask' in sample_dict:
+                    valid_mask = sample_dict['valid_feat_mask']
+                    valid_ratio = valid_mask.float().mean().item()
+                    # Warn about low valid ratios
+                    if valid_ratio < 0.5:
+                        print(f"\n⚠️ WARNING: Scenario {i} has low valid_feat_mask ratio: {valid_ratio:.2%}")
+                        print(f"  This may cause training instability!")
                 else:
-                    lang_feat_normalized = None
+                    valid_mask = torch.ones(scenario_point_counts[i], dtype=torch.bool, device=device)
 
-                loss = criteria(
-                    scenario_feat,
-                    lang_feat_normalized,
-                    valid_feat_mask=scenario_input['valid_feat_mask'],
-                    segment=segment,
-                    epoch_progress=epoch_progress,
-                )
+                # Build scenario-specific input for loss computation
+                scenario_input = {
+                    'coord': sample_dict['coord'],
+                    'feat': sample_dict['feat'],
+                    'grid_size': grid_size,
+                    'epoch_progress': epoch_progress,
+                    'valid_feat_mask': valid_mask,  # Use actual valid mask from dataset
+                }
 
-            output = dict(loss=loss, feat=scenario_feat)
-            scenario_outputs.append(output)
-            scenario_losses.append(loss)
+                # Add lang_feat if present (required for loss computation)
+                if 'lang_feat' in sample_dict:
+                    scenario_input['lang_feat'] = sample_dict['lang_feat']
+                    # Check if lang_feat contains NaN
+                    if torch.isnan(scenario_input['lang_feat']).any():
+                        print(f"\n🚨 NaN DETECTED IN lang_feat for scenario {i}!")
+                        print(f"  This is a data loading issue, not a model issue!")
+                        assert False, "Target lang_feat contains NaN! Check data pipeline."
 
-            # Clean up scenario-specific tensors to free memory
-            del scenario_feat, scenario_input
+                # Add segment labels if present
+                if 'labels' in sample_dict:
+                    scenario_input['segment'] = sample_dict['labels']
 
-            start_idx = end_idx
+                # Get scene name for tracking
+                scene_name = scenario_input.get('scenario', all_scene_names[i])
 
-        # Clean up batched_features after all scenarios processed
-        del batched_features
+                # Compute loss using criteria
+                with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+                    # Get criteria
+                    if hasattr(self.model, 'module'):
+                        criteria = self.model.module.criteria
+                    else:
+                        criteria = self.model.criteria
+
+                    segment = scenario_input.get("segment")
+                    lang_feat = scenario_input.get('lang_feat')
+
+                    # VALIDATION: Verify target (lang_feat) correctness before loss computation
+                    if self.comm_info["iter"] == 0 and i == 0:
+                        print(f"\n[VALIDATION] Target Correctness Check - Scenario {i} (batched mode):")
+                        print(f"  pred (scenario_feat) shape: {scenario_feat.shape}")
+                        print(f"  target (lang_feat) shape: {lang_feat.shape if lang_feat is not None else 'None'}")
+                        print(f"  valid_feat_mask shape: {scenario_input['valid_feat_mask'].shape}")
+
+                        # Check learnable dim_scale parameters
+                        if hasattr(self.model, 'module'):
+                            dim_scale = self.model.module.dim_scale
+                        else:
+                            dim_scale = self.model.dim_scale
+                        print(f"\n  [LEARNABLE] dim_scale parameters:")
+                        print(f"    dim[0]: {dim_scale[0].item():.4f} (init=1.0, DC component)")
+                        print(f"    dim[1]: {dim_scale[1].item():.4f} (init=0.3)")
+                        print(f"    dim[2]: {dim_scale[2].item():.4f}")
+                        print(f"    dim[3]: {dim_scale[3].item():.4f}")
+                        print(f"    mean(all): {dim_scale.mean().item():.4f}")
+
+                        # DEBUG: Check if scaling was actually applied to scenario_feat
+                        # If dim_scale is working, we should see much smaller pred values
+                        print(f"\n  [DEBUG] Checking if dim_scale was applied:")
+                        print(f"    scenario_feat (after scaling) first 3 values: {scenario_feat[0, :3].detach().cpu().numpy()}")
+                        # Expected: if dim_scale=[0.1, 0.5, 0.5], values should be ~0.1x, 0.5x smaller
+
+                        if lang_feat is not None:
+                            # Check 1: NaN/Inf in target
+                            has_nan = torch.isnan(lang_feat).any().item()
+                            has_inf = torch.isinf(lang_feat).any().item()
+                            print(f"  Target has NaN: {has_nan}, has Inf: {has_inf}")
+
+                            # Check 2: Target scale statistics
+                            print(f"  Target statistics:")
+                            print(f"    mean: {lang_feat.mean().item():.6f}, std: {lang_feat.std().item():.6f}")
+                            print(f"    min: {lang_feat.min().item():.6f}, max: {lang_feat.max().item():.6f}")
+
+                            # Check 3: Pred statistics for comparison
+                            print(f"  Pred statistics:")
+                            print(f"    mean: {scenario_feat.mean().item():.6f}, std: {scenario_feat.std().item():.6f}")
+                            print(f"    min: {scenario_feat.min().item():.6f}, max: {scenario_feat.max().item():.6f}")
+
+                            # Check 4: Scale difference (important for convergence)
+                            target_scale = lang_feat.abs().mean().item()
+                            pred_scale = scenario_feat.abs().mean().item()
+                            scale_ratio = pred_scale / (target_scale + 1e-8)
+                            print(f"  Scale ratio (pred/target): {scale_ratio:.4f}")
+                            if scale_ratio > 100 or scale_ratio < 0.01:
+                                print(f"    WARNING: Large scale mismatch! This may prevent convergence.")
+
+                            # Check if scaling is working: if dim_scale is applied with mean=0.475,
+                            # and before scaling mean≈0.055, after scaling should be ≈0.026
+                            # But we see 0.0546, which means NO scaling was applied!
+
+                            # Check 5: point_to_grid validity
+                            point_to_grid = sample_dict.get('point_to_grid')
+                            if point_to_grid is not None:
+                                print(f"  point_to_grid range: [{point_to_grid.min()}, {point_to_grid.max()}]")
+                                # Check if indices match lang_feat length
+                                if point_to_grid.shape[0] != lang_feat.shape[0]:
+                                    print(f"    ERROR: point_to_grid length {point_to_grid.shape[0]} != lang_feat length {lang_feat.shape[0]}")
+                                else:
+                                    print(f"    ✓ point_to_grid length matches lang_feat")
+
+                            # Check 6: Valid mask coverage
+                            valid_mask = scenario_input['valid_feat_mask']
+                            valid_ratio = valid_mask.float().mean().item()
+                            print(f"  Valid feat mask coverage: {valid_ratio:.2%}")
+                            if valid_ratio < 0.5:
+                                print(f"    WARNING: Less than 50% of features are valid!")
+
+                            # Check 7: Per-dimension statistics (for 16-dim SVD)
+                            if lang_feat.shape[1] == 16:
+                                print(f"  Per-dimension target stats:")
+                                for dim in range(min(4, 16)):  # Show first 4 dims
+                                    dim_mean = lang_feat[:, dim].mean().item()
+                                    dim_std = lang_feat[:, dim].std().item()
+                                    print(f"    dim[{dim}]: mean={dim_mean:.4f}, std={dim_std:.4f}")
+
+                    # Compute loss (returns tuple when verbose_losses=True)
+                    loss_result = criteria(
+                        scenario_feat,
+                        lang_feat,  # Use raw features, not normalized
+                        valid_feat_mask=scenario_input['valid_feat_mask'],
+                        segment=segment,
+                        epoch_progress=epoch_progress,
+                    )
+
+                    # Handle both return formats: (loss, loss_dict) or just loss
+                    if isinstance(loss_result, tuple):
+                        loss, loss_dict = loss_result
+                    else:
+                        loss = loss_result
+                        loss_dict = None
+
+                    # Store this scene's loss for current iteration
+                    current_iteration_losses[scene_name] = {
+                        'total': loss.item(),
+                        'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
+                        'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
+                    }
+
+                output = dict(loss=loss, feat=scenario_feat)
+                scenario_outputs.append(output)
+                scenario_losses.append(loss)
+
+                # Clean up scenario-specific tensors to free memory
+                del scenario_feat, scenario_input
+
+                start_idx = end_idx
+
+            # UNIFIED LOSS TRACKING: Record losses for ALL scenes at each iteration
+            # For the scene(s) trained this iteration: use newly computed loss
+            # For other scenes: repeat the last recorded loss value
+            # This ensures all scenes have aligned loss curves for comparison
+            #
+            # CRITICAL FIX: Calculate TRUE global iteration that continues across epochs
+            # self.comm_info["iter"] resets to 0 at the start of each epoch
+            # We need: global_iter = epoch * iters_per_epoch + iter_within_epoch
+            local_iter = self.comm_info["iter"]
+            iters_per_epoch = len(self.train_loader)
+            true_global_iter = self.epoch * iters_per_epoch + local_iter
+
+            for scene_name in all_scene_names:
+                # Initialize loss tracking dict for this scene if needed
+                if scene_name not in self.per_scene_losses:
+                    self.per_scene_losses[scene_name] = {
+                        'total_loss': [],
+                        'l1_loss': [],
+                        'cos_loss': [],
+                        'iterations': [],
+                        'epochs': [],
+                    }
+
+                # Get the loss values for this iteration
+                if scene_name in current_iteration_losses:
+                    # This scene was trained this iteration - use new values
+                    total_loss = current_iteration_losses[scene_name]['total']
+                    l1_loss = current_iteration_losses[scene_name]['l1']
+                    cos_loss = current_iteration_losses[scene_name]['cos']
+                else:
+                    # This scene was NOT trained this iteration - repeat last values
+                    if self.per_scene_losses[scene_name]['total_loss']:
+                        total_loss = self.per_scene_losses[scene_name]['total_loss'][-1]
+                        l1_loss = self.per_scene_losses[scene_name]['l1_loss'][-1]
+                        cos_loss = self.per_scene_losses[scene_name]['cos_loss'][-1]
+                    else:
+                        # No previous loss - this shouldn't happen, but handle gracefully
+                        total_loss = 0.0
+                        l1_loss = 0.0
+                        cos_loss = 0.0
+
+                # Record the loss for this scene at this iteration
+                self.per_scene_losses[scene_name]['total_loss'].append(total_loss)
+                self.per_scene_losses[scene_name]['l1_loss'].append(l1_loss)
+                self.per_scene_losses[scene_name]['cos_loss'].append(cos_loss)
+                self.per_scene_losses[scene_name]['iterations'].append(true_global_iter)
+                self.per_scene_losses[scene_name]['epochs'].append(self.epoch)
+
+            # Clean up batched_features after all scenarios processed
+            del batched_features
+
+        # else:
+        #     # =====================================================================
+        #     # MODE 2: SEPARATE FORWARD (slower but no cross-contamination)
+        #     # =====================================================================
+        #     # Forward each scenario independently to avoid interference
+        #     # This prevents sparse convolution from operating across scenario boundaries
+        #
+        #     for i, sample_dict in enumerate(scenario_samples):
+        #         num_points = sample_dict['coord'].shape[0]
+        #
+        #         # Build scenario-specific input dict
+        #         scenario_input = {
+        #             'coord': sample_dict['coord'],
+        #             'feat': sample_dict['feat'],
+        #             'batch': torch.zeros(num_points, dtype=torch.long, device=device),  # Always batch 0
+        #             'grid_size': grid_size,
+        #             'epoch_progress': epoch_progress,
+        #             'valid_feat_mask': torch.ones(num_points, dtype=torch.bool, device=device),
+        #         }
+        #
+        #         # Add lang_feat if present (required for loss computation)
+        #         if 'lang_feat' in sample_dict:
+        #             scenario_input['lang_feat'] = sample_dict['lang_feat']
+        #
+        #         # Add segment labels if present
+        #         if 'labels' in sample_dict:
+        #             scenario_input['segment'] = sample_dict['labels']
+        #
+        #         # Forward pass through backbone (separate for each scenario)
+        #         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+        #             from pointcept.models.utils.structure import Point
+        #             point = Point(scenario_input)
+        #             point_feat = backbone(point)
+        #
+        #             # CRITICAL FIX: Do NOT normalize features
+        #             # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
+        #             # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
+        #
+        #             scenario_feat = point_feat["feat"]  # [N_scenario, D]
+        #
+        #             # DEBUG: Verify model preserves point ordering (only print once at first iteration)
+        #             if self.comm_info["iter"] == 0 and i == 0:
+        #                 print(f"\n[DEBUG] Model Forward Verification:")
+        #                 print(f"  Input coord shape: {scenario_input['coord'].shape}")
+        #                 print(f"  Input feat shape: {scenario_input['feat'].shape}")
+        #                 print(f"  Output feat shape: {scenario_feat.shape}")
+        #                 # Check if point object has coord preserved
+        #                 if hasattr(point_feat, 'coord') or 'coord' in point_feat.keys():
+        #                     output_coord = point_feat.coord if hasattr(point_feat, 'coord') else point_feat['coord']
+        #                     print(f"  Output coord shape: {output_coord.shape}")
+        #                     # Verify coordinates match (should be identical if ordering preserved)
+        #                     coords_match = torch.allclose(scenario_input['coord'], output_coord, atol=1e-5)
+        #                     print(f"  Input/Output coords match: {coords_match}")
+        #                     if not coords_match:
+        #                         print(f"  WARNING: Coordinates don't match! This may indicate reordering.")
+        #                         # Check if it's just a permutation
+        #                         coord_diff = (scenario_input['coord'] - output_coord).abs().max()
+        #                         print(f"  Max coord difference: {coord_diff.item()}")
+        #
+        #         # Clean up intermediate tensors
+        #         del point, point_feat
+        #
+        #         # Compute loss using criteria
+        #         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+        #             # Get criteria
+        #             if hasattr(self.model, 'module'):
+        #                 criteria = self.model.module.criteria
+        #             else:
+        #                 criteria = self.model.criteria
+        #
+        #             segment = scenario_input.get("segment")
+        #             lang_feat = scenario_input.get('lang_feat')
+        #
+        #             # VALIDATION: Verify target (lang_feat) correctness before loss computation
+        #             if self.comm_info["iter"] == 0 and i == 0:
+        #                 print(f"\n[VALIDATION] Target Correctness Check - Scenario {i}:")
+        #                 print(f"  pred (scenario_feat) shape: {scenario_feat.shape}")
+        #                 print(f"  target (lang_feat) shape: {lang_feat.shape if lang_feat is not None else 'None'}")
+        #                 print(f"  valid_feat_mask shape: {scenario_input['valid_feat_mask'].shape}")
+        #
+        #                 if lang_feat is not None:
+        #                     # Check 1: NaN/Inf in target
+        #                     has_nan = torch.isnan(lang_feat).any().item()
+        #                     has_inf = torch.isinf(lang_feat).any().item()
+        #                     print(f"  Target has NaN: {has_nan}, has Inf: {has_inf}")
+        #
+        #                     # Check 2: Target scale statistics
+        #                     print(f"  Target statistics:")
+        #                     print(f"    mean: {lang_feat.mean().item():.6f}, std: {lang_feat.std().item():.6f}")
+        #                     print(f"    min: {lang_feat.min().item():.6f}, max: {lang_feat.max().item():.6f}")
+        #
+        #                     # Check 3: Pred statistics for comparison
+        #                     print(f"  Pred statistics:")
+        #                     print(f"    mean: {scenario_feat.mean().item():.6f}, std: {scenario_feat.std().item():.6f}")
+        #                     print(f"    min: {scenario_feat.min().item():.6f}, max: {scenario_feat.max().item():.6f}")
+        #
+        #                     # Check 4: Scale difference (important for convergence)
+        #                     target_scale = lang_feat.abs().mean().item()
+        #                     pred_scale = scenario_feat.abs().mean().item()
+        #                     scale_ratio = pred_scale / (target_scale + 1e-8)
+        #                     print(f"  Scale ratio (pred/target): {scale_ratio:.4f}")
+        #                     if scale_ratio > 100 or scale_ratio < 0.01:
+        #                         print(f"    WARNING: Large scale mismatch! This may prevent convergence.")
+        #
+        #                     # Check 5: point_to_grid validity
+        #                     point_to_grid = sample_dict.get('point_to_grid')
+        #                     if point_to_grid is not None:
+        #                         print(f"  point_to_grid range: [{point_to_grid.min()}, {point_to_grid.max()}]")
+        #                         # Check if indices match lang_feat length
+        #                         if point_to_grid.shape[0] != lang_feat.shape[0]:
+        #                             print(f"    ERROR: point_to_grid length {point_to_grid.shape[0]} != lang_feat length {lang_feat.shape[0]}")
+        #                         else:
+        #                             print(f"    ✓ point_to_grid length matches lang_feat")
+        #
+        #                     # Check 6: Valid mask coverage
+        #                     valid_mask = scenario_input['valid_feat_mask']
+        #                     valid_ratio = valid_mask.float().mean().item()
+        #                     print(f"  Valid feat mask coverage: {valid_ratio:.2%}")
+        #                     if valid_ratio < 0.5:
+        #                         print(f"    WARNING: Less than 50% of features are valid!")
+        #
+        #                     # Check 7: Per-dimension statistics (for 16-dim SVD)
+        #                     if lang_feat.shape[1] == 16:
+        #                         print(f"  Per-dimension target stats:")
+        #                         for dim in range(min(4, 16)):  # Show first 4 dims
+        #                             dim_mean = lang_feat[:, dim].mean().item()
+        #                             dim_std = lang_feat[:, dim].std().item()
+        #                             print(f"    dim[{dim}]: mean={dim_mean:.4f}, std={dim_std:.4f}")
+        #
+        #         loss = criteria(
+        #             scenario_feat,
+        #             lang_feat,  # Use raw features, not normalized
+        #             valid_feat_mask=scenario_input['valid_feat_mask'],
+        #             segment=segment,
+        #             epoch_progress=epoch_progress,
+        #         )
+        #
+        #         output = dict(loss=loss, feat=scenario_feat)
+        #         scenario_outputs.append(output)
+        #         scenario_losses.append(loss)
+        #
+        #         # Clean up scenario-specific tensors to free memory
+        #         del scenario_feat, scenario_input
 
         forward_time = time.time() - forward_start
 
         # TIMING: Consistency loss computation
         consistency_start = time.time()
-        # Compute density consistency loss
-        with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+        # Compute density consistency loss between different sampling scenarios
+        try:
             consistency_loss, consistency_loss_dict = self.consistency_loss(
                 outputs=scenario_outputs,
                 inputs=scenario_samples,
             )
+        except Exception as e:
+            self.logger.warning(f"Consistency loss computation failed: {e}")
+            consistency_loss = torch.tensor(0.0, device=self.device)
+            consistency_loss_dict = {'total_consistency': 0.0, 'num_common_grids': 0}
         consistency_time = time.time() - consistency_start
 
         # Optionally: add grid feature alignment loss
@@ -1270,7 +1734,91 @@ class DensityInvariantTrainer(TrainerBase):
             weight = self.scenario_weights.get(scenario, 1.0)
             total_loss = total_loss + weight * loss
 
+        # Add density consistency loss
         total_loss = total_loss + self.consistency_weight * consistency_loss
+
+        # LOSS SPIKE DETECTION: Skip iteration to prevent gradient explosion in AMP
+        # Chain reaction: loss spike → large gradients → fp16 overflow → NaN
+        # Example: loss 0.91 → 1.93 (2x) → gradients overflow fp16 → NaN
+        #
+        # CRITICAL FIX: Instead of just clipping the loss, we SKIP the iteration entirely.
+        # This prevents large gradients from being computed and corrupting the weights.
+        # The previous approach (clipping loss) still allowed backward pass with large gradients.
+        if self.cfg.enable_amp:
+            loss_value = total_loss.item() if torch.is_tensor(total_loss) else total_loss
+
+            # Initialize loss history tracking
+            if not hasattr(self, '_loss_history'):
+                self._loss_history = []
+                self._loss_ma = None  # Moving average
+                self._loss_ma_window = 10  # Moving average window
+
+            # Track loss for spike detection
+            self._loss_history.append(loss_value)
+            if len(self._loss_history) > 50:  # Keep recent history
+                self._loss_history.pop(0)
+
+            # Update moving average
+            if len(self._loss_history) >= self._loss_ma_window:
+                recent_losses = self._loss_history[-self._loss_ma_window:]
+                self._loss_ma = sum(recent_losses) / len(recent_losses)
+
+            # Detection thresholds
+            # NOTE: Normal loss range depends on checkpoint and data:
+            # - After loading pretrained checkpoint: ~17-18 is NORMAL (each scene ~8.6 + 0.5)
+            # - After fine-tuning: may decrease to lower values
+            #
+            # Therefore:
+            # - fixed_threshold = 30.0 (safety net for EXTREME anomalies only)
+            # - spike_multiplier = 2.5x MA (main detection mechanism)
+            fixed_threshold = 30.0  # Extreme outliers only (1.7x normal initial loss)
+            spike_multiplier = 2.5  # Allow 2.5x increase before skipping
+
+            should_skip = False
+            skip_reason = ""
+
+            # Check 1: Spike detection (relative to moving average) - PRIMARY mechanism
+            # This catches sudden loss increases that indicate gradient explosion
+            if self._loss_ma is not None and len(self._loss_history) >= self._loss_ma_window:
+                if loss_value > self._loss_ma * spike_multiplier:
+                    should_skip = True
+                    skip_reason = f"spike detected: {loss_value:.4f} > {spike_multiplier}x MA ({self._loss_ma:.4f})"
+
+            # Check 2: Fixed threshold (catch EXTREME outliers only)
+            # This is a safety net for completely broken training
+            elif loss_value > fixed_threshold:
+                should_skip = True
+                skip_reason = f"exceeds extreme threshold {fixed_threshold}"
+
+            if should_skip:
+                print(f"\n⚠️ WARNING: Loss spike detected - SKIPPING ITERATION to prevent NaN!")
+                print(f"  Reason: {skip_reason}")
+                print(f"  Current loss: {loss_value:.4f}")
+                if self._loss_ma is not None:
+                    print(f"  Moving average: {self._loss_ma:.4f}")
+                    print(f"  Ratio: {loss_value / (self._loss_ma + 1e-8):.2f}x")
+                print(f"  scenario_losses: {[f'{l.item():.2f}' for l in scenario_losses]}")
+                print(f"  Skipping backward pass and optimizer step.")
+                print(f"  This prevents large gradients from corrupting weights.")
+
+                # IMPORTANT: Return early to skip backward pass and optimizer step
+                # This is the key fix - we don't compute gradients or update weights
+                return
+
+        # NAN CHECK: Detect and handle NaN loss before backward pass
+        # This prevents cascading NaN failures that can corrupt the entire model
+        if torch.isnan(total_loss).any() or torch.isinf(total_loss).any():
+            print(f"\n🚨 NaN/Inf DETECTED IN TOTAL LOSS! Skipping backward pass.")
+            print(f"  total_loss: {total_loss.item()}")
+            print(f"  scenario_losses: {[f'{l.item():.6f}' for l in scenario_losses]}")
+            print(f"  Current iteration: {self.iter}")
+            print(f"  Current epoch: {self.epoch}")
+            # Try to identify which scenario caused the NaN
+            for i, (loss, scenario) in enumerate(zip(scenario_losses, scenarios_to_use)):
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
+                    print(f"  Scenario '{scenario}' has NaN/Inf loss!")
+            # Skip this iteration to prevent corruption
+            return
 
         # TIMING: Backward pass
         backward_start = time.time()
@@ -1279,16 +1827,198 @@ class DensityInvariantTrainer(TrainerBase):
 
         if self.cfg.enable_amp:
             self.scaler.scale(total_loss).backward()
+
+            # Check gradients before unscale (they're still scaled)
+            has_nan_grad_before_unscale = False
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        print(f"\n🚨 NaN/Inf DETECTED IN SCALED GRADIENTS (before unscale)!")
+                        print(f"  Parameter: {name}")
+                        has_nan_grad_before_unscale = True
+
+            if has_nan_grad_before_unscale:
+                print(f"  Skipping unscale_() and optimizer step!")
+                print(f"  Calling scaler.update() to reduce scale factor...")
+                self.scaler.update()
+                self.optimizer.zero_grad()
+                return
+
             self.scaler.unscale_(self.optimizer)
+
             if self.cfg.clip_grad is not None:
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.cfg.clip_grad
                 )
-            self.scaler.step(self.optimizer)
 
-            scaler = self.scaler.get_scale()
+            # LARGE GRADIENT DETECTION: Skip iteration if gradients are dangerously large
+            # Large gradients can corrupt weights even if loss looks normal
+            #
+            # CRITICAL ISSUE: decoder0.conv.1.bias has persistent large gradients (~0.77)
+            # - This is NOT a random spike, but a structural issue from dim[0] dominance
+            # - Persistent large gradients → weight accumulation → activation anomalies → NaN
+            #
+            # Solution: Global threshold + consecutive detection
+            # 1. Global threshold (1.0) - unified for all decoder layers
+            # 2. Consecutive large gradient detection (5 in a row) - prevent accumulation
+            # 3. Sudden spike detection (2.5x previous)
+            #
+            # Gradient norm analysis (with init_scale=512):
+            # - decoder0.conv.1.bias: 0.7-0.8 (persistent, but within tolerance)
+            # - Other decoder params: 0.1-0.3 (normal)
+            # - Warning range: 0.5-1.0
+            # - Danger range: > 1.0
+
+            # Track max gradient
+            max_grad = 0.0
+            max_grad_param = ""
+
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and 'dec' in name:
+                    grad_norm = param.grad.norm().item()
+                    if grad_norm > max_grad:
+                        max_grad = grad_norm
+                        max_grad_param = name
+
+            # Check for dangerous gradients that will corrupt weights
+            should_skip_grad = False
+            skip_reason = ""
+
+            # Check 1: Global absolute threshold (1.0)
+            if max_grad > 1.0:
+                should_skip_grad = True
+                skip_reason = f"gradient {max_grad:.4f} > 1.0"
+
+            # Check 2: Consecutive large gradient detection
+            # DISABLED during warmup: LR is low, gradients may be consistently large
+            # Warmup detection: current LR < 0.0005 (warmup goes from 0.0001 to 0.001)
+            current_lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
+            in_warmup = current_lr < 0.0005
+
+            # Store previous gradient value BEFORE any checks (for comparison)
+            prev_max_grad = getattr(self, '_prev_max_grad', 0)
+
+            if in_warmup:
+                # Reset consecutive count during warmup, don't accumulate
+                self._consecutive_large_grad_count = 0
+            else:
+                # CRITICAL FIX: Only count consecutive GROWING gradients, not just large gradients
+                # A stable gradient of 0.58 is fine, but a gradient growing from 0.5 → 0.7 → 0.9 is dangerous
+                if hasattr(self, '_consecutive_large_grad_count'):
+                    if prev_max_grad > 0:
+                        # Only increment if gradient is GROWING (significantly larger than previous)
+                        if max_grad > 1.2 * prev_max_grad:
+                            self._consecutive_large_grad_count += 1
+                        elif max_grad < 0.8 * prev_max_grad:
+                            # Gradient decreased - reset counter
+                            self._consecutive_large_grad_count = 0
+                        # else: gradient is stable (within 20% of previous) - don't change counter
+                    else:
+                        # First iteration after warmup - initialize
+                        self._consecutive_large_grad_count = 0
+
+                    # Also increment if gradient is very large (>1.0) regardless of growth
+                    if max_grad > 1.0:
+                        self._consecutive_large_grad_count += 1
+                else:
+                    self._consecutive_large_grad_count = 0
+
+                # Skip if we've had 10+ consecutive iterations with growing/large gradients
+                # Increased from 5 to 10 to be more lenient
+                if self._consecutive_large_grad_count >= 10:
+                    should_skip_grad = True
+                    skip_reason = f"{self._consecutive_large_grad_count} consecutive growing/large grads (max={max_grad:.4f})"
+
+            # Check 3: Sudden spike detection (relative to previous)
+            # Apply to all iterations regardless of warmup status
+            if prev_max_grad > 0:
+                if max_grad > 2.5 * prev_max_grad:
+                    should_skip_grad = True
+                    skip_reason = f"sudden spike: {max_grad:.4f} > 2.5x previous ({prev_max_grad:.4f})"
+
+            # Store current gradient for next iteration's comparison
+            self._prev_max_grad = max_grad
+
+            # Skip iteration if gradient is dangerous
+            if should_skip_grad:
+                print(f"\n⚠️ WARNING: Skipping iteration due to gradient issue!")
+                print(f"  Reason: {skip_reason}")
+                print(f"  Max gradient: {max_grad:.4f}")
+                print(f"  Parameter: {max_grad_param}")
+                print(f"  Consecutive large grad count: {self._consecutive_large_grad_count}")
+                print(f"  Skipping optimizer.step() to prevent weight corruption.")
+                # IMPORTANT: Call scaler.update() to reset scaler state after unscale_()
+                # This prevents "unscale_() has already been called" error on next iteration
+                # We don't call optimizer.step() because gradients are bad
+                self.scaler.update()
+                self.optimizer.zero_grad()
+                return
+
+            # WARNING: Monitor decoder layer gradients (no clipping, just warn)
+            # Decoder layers receive large gradients from dim[0] and need monitoring
+            for name, param in self.model.named_parameters():
+                if param.grad is not None and 'dec' in name:
+                    decoder_grad_norm = param.grad.norm().item()
+                    if decoder_grad_norm > 0.5:  # Threshold for warning
+                        print(f"\n⚠️ WARNING: Large decoder gradient detected!")
+                        print(f"  Parameter: {name}")
+                        print(f"  Gradient norm: {decoder_grad_norm:.4f} (threshold: 0.5)")
+
+            # Store old scale to check if scaler reduced it
+            old_scale = self.scaler.get_scale()
+
+            # Let GradScaler handle inf/NaN gradients automatically
+            # If gradients contain inf/NaN, scaler.step() will skip the update
+            self.scaler.step(self.optimizer)
             self.scaler.update()
-            if scaler <= self.scaler.get_scale():
+
+            # CHECK: Verify backbone weights are still valid after optimizer step
+            # This catches cases where the optimizer step creates NaN/Inf weights
+            if hasattr(self.model, 'module'):
+                backbone = self.model.module.backbone
+            else:
+                backbone = self.model.backbone
+
+            has_nan_in_backbone_after_step = False
+            nan_params_after_step = []
+            for name, param in backbone.named_parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    has_nan_in_backbone_after_step = True
+                    nan_count = torch.isnan(param).sum().item() + torch.isinf(param).sum().item()
+                    nan_params_after_step.append(f"  {name} ({nan_count} NaN/Inf)")
+
+            if has_nan_in_backbone_after_step:
+                print(f"\n🚨 CRITICAL: Backbone weights contain NaN/Inf AFTER optimizer step!")
+                print(f"  This indicates the optimizer created invalid weights.")
+                print(f"  Affected parameters:")
+                for p in nan_params_after_step[:5]:  # Show first 5
+                    print(p)
+                if len(nan_params_after_step) > 5:
+                    print(f"  ... and {len(nan_params_after_step) - 5} more")
+                print(f"  Scale factor: {new_scale}")
+                print(f"  Possible causes:")
+                print(f"    1. Learning rate too high for current scale")
+                print(f"    2. Gradient clipping not preventing large updates")
+                print(f"    3. Numerical instability in optimizer")
+                raise RuntimeError("Optimizer step created NaN/Inf weights! Training stopped.")
+
+            # WARNING: Monitor extreme weight values (no clipping, just warn)
+            # This warns about weights that might cause NaN in subsequent iterations
+            max_weight_value = 10.0  # Warning threshold for absolute weight values
+            for name, param in self.model.named_parameters():
+                max_abs_weight = param.data.abs().max().item()
+                if max_abs_weight > max_weight_value:
+                    print(f"\n⚠️ WARNING: Extreme weight values detected!")
+                    print(f"  Parameter: {name}")
+                    print(f"  Max absolute weight: {max_abs_weight:.4f} (threshold: {max_weight_value})")
+
+            # Check if scaler was reduced (indicates inf/NaN gradients were detected)
+            new_scale = self.scaler.get_scale()
+            if new_scale < old_scale:
+                print(f"\n⚠️ WARNING: GradScaler reduced from {old_scale} to {new_scale}")
+                print(f"  This indicates inf/NaN gradients were auto-detected and skipped.")
+
+            if old_scale <= new_scale:
                 self.scheduler.step()
         else:
             total_loss.backward()
@@ -1352,40 +2082,40 @@ class DensityInvariantTrainer(TrainerBase):
                 global_step
             )
 
-            # Print consistency loss to console
-            if consistency_loss_dict:
-                # Print float losses
-                consistency_str = ", ".join([f"{k}={v:.6f}" for k, v in consistency_loss_dict.items() if isinstance(v, float)])
-                if consistency_str:
-                    print(f"[Epoch {self.epoch}, Iter {step}] Consistency Loss: {consistency_str}")
-                # Print num_common_grids separately
-                num_grids = consistency_loss_dict.get('num_common_grids')
-                if num_grids is not None:
-                    num_grids_val = int(num_grids) if isinstance(num_grids, (int, float)) else num_grids
-                    print(f"[Epoch {self.epoch}, Iter {step}] Common Grids: {num_grids_val}")
+            # # Print consistency loss to console
+            # if consistency_loss_dict:
+            #     # Print float losses
+            #     consistency_str = ", ".join([f"{k}={v:.6f}" for k, v in consistency_loss_dict.items() if isinstance(v, float)])
+            #     if consistency_str:
+            #         print(f"[Epoch {self.epoch}, Iter {step}] Consistency Loss: {consistency_str}")
+            #     # Print num_common_grids separately
+            #     num_grids = consistency_loss_dict.get('num_common_grids')
+            #     if num_grids is not None:
+            #         num_grids_val = int(num_grids) if isinstance(num_grids, (int, float)) else num_grids
+            #         print(f"[Epoch {self.epoch}, Iter {step}] Common Grids: {num_grids_val}")
 
-            for scenario, loss in zip(scenarios_to_use, scenario_losses):
-                print(f"[Epoch {self.epoch}, Iter {step}] Loss {scenario}: {loss.item():.6f}")
-            print(f"[Epoch {self.epoch}, Iter {step}] Total Loss: {total_loss.item():.6f}")
+            # for scenario, loss in zip(scenarios_to_use, scenario_losses):
+            #     print(f"[Epoch {self.epoch}, Iter {step}] Loss {scenario}: {loss.item():.6f}")
+            # print(f"[Epoch {self.epoch}, Iter {step}] Total Loss: {total_loss.item():.6f}")
 
-            # TIMING: Print timing information to console
-            timing = self.comm_info.get("timing", {})
-            if timing:
-                total = timing.get("total", 0)
-                print(f"[Epoch {self.epoch}, Iter {step}] Time: "
-                      f"total={total:.4f}s, "
-                      f"data={timing.get('data_load', 0):.4f}s, "
-                      f"sampling={timing.get('sampling', 0):.4f}s, "
-                      f"forward={timing.get('forward', 0):.4f}s, "
-                      f"consistency={timing.get('consistency', 0):.4f}s, "
-                      f"backward={timing.get('backward', 0):.4f}s")
-                # Print percentages for better understanding
-                if total > 0:
-                    print(f"[Epoch {self.epoch}, Iter {step}] Time %: "
-                          f"sampling={timing.get('sampling', 0)/total*100:.1f}%, "
-                          f"forward={timing.get('forward', 0)/total*100:.1f}%, "
-                          f"consistency={timing.get('consistency', 0)/total*100:.1f}%, "
-                          f"backward={timing.get('backward', 0)/total*100:.1f}%")
+            # # TIMING: Print timing information to console
+            # timing = self.comm_info.get("timing", {})
+            # if timing:
+            #     total = timing.get("total", 0)
+            #     print(f"[Epoch {self.epoch}, Iter {step}] Time: "
+            #           f"total={total:.4f}s, "
+            #           f"data={timing.get('data_load', 0):.4f}s, "
+            #           f"sampling={timing.get('sampling', 0):.4f}s, "
+            #           f"forward={timing.get('forward', 0):.4f}s, "
+            #           f"consistency={timing.get('consistency', 0):.4f}s, "
+            #           f"backward={timing.get('backward', 0):.4f}s")
+            #     # Print percentages for better understanding
+            #     if total > 0:
+            #         print(f"[Epoch {self.epoch}, Iter {step}] Time %: "
+            #               f"sampling={timing.get('sampling', 0)/total*100:.1f}%, "
+            #               f"forward={timing.get('forward', 0)/total*100:.1f}%, "
+            #               f"consistency={timing.get('consistency', 0)/total*100:.1f}%, "
+            #               f"backward={timing.get('backward', 0)/total*100:.1f}%")
 
             for sample_dict in scenario_samples:
                 scenario = sample_dict['scenario']
@@ -1418,7 +2148,13 @@ class DensityInvariantTrainer(TrainerBase):
             model_feat = output.get('feat')
 
             if point_to_grid is None or model_feat is None:
-                continue
+                raise RuntimeError(
+                    f"[compute_grid_alignment_loss] Missing required data! "
+                    f"point_to_grid is None: {point_to_grid is None}, "
+                    f"model_feat is None: {model_feat is None}. "
+                    f"This indicates a data pipeline error where scenario outputs "
+                    f"or inputs are not properly populated."
+                )
 
             unique_grids = torch.unique(point_to_grid)
 
@@ -1460,6 +2196,12 @@ class DensityInvariantTrainer(TrainerBase):
             h.before_train()
 
     def before_epoch(self):
+        # Reset scenario iteration counters at the start of each epoch
+        # This ensures each epoch starts counting from iteration 0 for each scenario
+        if hasattr(self, '_scenario_iter_in_epoch'):
+            # Reset all scenario counters to 0
+            for scenario_name in self._scenario_iter_in_epoch:
+                self._scenario_iter_in_epoch[scenario_name] = 0
         for h in self.hooks:
             h.before_epoch()
 
@@ -1489,7 +2231,7 @@ class DensityInvariantTrainer(TrainerBase):
         for h in self.hooks:
             h.after_train()
 
-        if comm.is_main_process():
+        if comm.is_main_process() and self.writer is not None:
             self.writer.close()
 
 

@@ -88,9 +88,6 @@ class FilterCoordOutliers(object):
         if self.verbose:
             n_filtered = n_points - n_keep
             print(f"[FilterCoordOutliers] Filtered {n_filtered}/{n_points} points ({100*n_filtered/n_points:.1f}%)")
-            print(f"  Original range: x=[{coord[:,0].min():.2f}, {coord[:,0].max():.2f}], "
-                  f"y=[{coord[:,1].min():.2f}, {coord[:,1].max():.2f}], "
-                  f"z=[{coord[:,2].min():.2f}, {coord[:,2].max():.2f}]")
 
         # Store metadata for later processing
         data_dict["_n_original_points_before_filter"] = n_points
@@ -120,12 +117,6 @@ class FilterCoordOutliers(object):
             # Use the same grid_coord calculation as in structure.py: torch.div(x, grid_size, rounding_mode='trunc')
             grid_coord = ((coord_filtered - coord_filtered.min(axis=0)) / grid_size).astype(int)
             data_dict["grid_coord"] = grid_coord
-
-            if self.verbose:
-                print(f"  Filtered range: x=[{coord_filtered[:,0].min():.2f}, {coord_filtered[:,0].max():.2f}], "
-                  f"y=[{coord_filtered[:,1].min():.2f}, {coord_filtered[:,1].max():.2f}], "
-                  f"z=[{coord_filtered[:,2].min():.2f}, {coord_filtered[:,2].max():.2f}]")
-                print(f"  grid_coord range: [{grid_coord.min(axis=0)}, {grid_coord.max(axis=0)}]")
 
         return data_dict
 
@@ -734,7 +725,8 @@ class CenterShift(object):
     def __call__(self, data_dict):
         if "coord" in data_dict.keys():
             x_min, y_min, z_min = data_dict["coord"].min(axis=0)
-            x_max, y_max, _ = data_dict["coord"].max(axis=0)
+            x_max, y_max, z_max = data_dict["coord"].max(axis=0)
+
             if self.apply_z:
                 shift = [(x_min + x_max) / 2, (y_min + y_max) / 2, z_min]
             else:

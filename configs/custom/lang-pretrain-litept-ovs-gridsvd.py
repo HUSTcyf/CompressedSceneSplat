@@ -43,8 +43,8 @@ batch_size_val = 1 * gpu_nums
 batch_size_test = 1 * gpu_nums
 num_worker = 0  # Set to 0 for single GPU to avoid multiprocessing issues
 mix_prob = 0.0  # no mixup for language pretraining
-empty_cache = False
-enable_amp = True
+empty_cache = True  # ENABLED to free memory between iterations and reduce OOM
+enable_amp = True  # Re-enabled for memory efficiency, using gradient clipping to prevent NaN
 evaluate = False
 find_unused_parameters = True
 
@@ -79,10 +79,9 @@ model = dict(
         enc_attn=(False, False, False, True, True),
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         # Decoder (output 16 dimensions to match SVD rank)
-        # Simplified decoder for compressed feature prediction
         dec_depths=(2, 2, 2, 2),
-        dec_channels=(FD, FD*2, FD*4, 144),  # Gradually reduce from 16 to 2
-        dec_num_head=(16, 8, 4, 2),
+        dec_channels=(FD, FD*2, FD*4, 126),  # (16, 64, 128, 252) - 4x intermediate capacity
+        dec_num_head=(1, 2, 4, 7),  # Updated last head for 252 channels (14*18=252)
         dec_patch_size=(1024, 1024, 1024, 1024),
         dec_conv=(True, True, True, False),
         dec_attn=(False, False, False, True),
@@ -93,25 +92,48 @@ model = dict(
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
-        drop_path=0.3,
+        drop_path=0.1,  # REDUCED from 0.3 - 16-dim task needs less dropout
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
     ),
     # Language pretraining losses for compressed features
+    #
+    # STANDARD REGRESSION LOSSES for 16-dimensional SVD features
+    # ------------------------------------------------------------------
+    # Using standard L1 + Cosine similarity losses:
+    # - L1Loss: Element-wise absolute difference (optimizes magnitude)
+    # - CosineSimilarity: Angular similarity (optimizes direction)
+    #
+    # This combination provides:
+    # - Magnitude matching via L1
+    # - Directional alignment via Cosine
+    # - Simple, stable training without complex weighting schemes
+    #
     criteria=[
-        dict(type="L2Loss", loss_weight=0.5),  # RESTORED from 0.1 to 0.5
-        dict(type="CosineSimilarity", loss_weight=1.0),
-        # AggregatedContrastiveLoss - encourages semantic diversity to reduce mode collapse
-        # TEMPORARILY DISABLED
+        # L1Loss: PRIMARY loss for element-wise feature matching
+        dict(
+            type="L1Loss",
+            loss_weight=1.0,
+            reduction="mean",
+        ),
+
+        # CosineSimilarity: SECONDARY loss for angular alignment
+        dict(
+            type="CosineSimilarity",
+            loss_weight=0.5,
+            reduction="mean",
+        ),
+
+        # AggregatedContrastiveLoss: DISABLED for 16-dim training
+        # Re-enable only when using SVD rank 32 or higher
         # dict(
         #     type="AggregatedContrastiveLoss",
-        #     temperature=0.5,  # INCREASED from 0.2 - better for low-dimensional features
+        #     temperature=0.2,
         #     reduction="mean",
-        #     loss_weight=1.0,  # INCREASED from 0.2 - 5x stronger to fight mode collapse
-        #     schedule="all",  # Apply throughout training
+        #     loss_weight=0.1,
+        #     schedule="all",
         # ),
-        # dict(type="ValidNonValidContrastiveLoss", loss_weight=0.5, temperature=0.1, margin=0.5),
     ],
 )
 
@@ -129,7 +151,7 @@ density_invariant = dict(
     max_sample_ratio=0.7,  # Maximum sampling ratio (70%)
 
     # Consistency loss settings
-    consistency_weight=1.0,  # REDUCED from 10 - lower consistency loss weight
+    consistency_weight=0.5,  # Density consistency loss weight
     consistency_type="mse",  # Options: "mse", "cosine", "kl"
 
     # Training scenarios to use
@@ -144,6 +166,11 @@ density_invariant = dict(
 
     # Whether to use compressed features for grid alignment loss
     use_compressed_features=True,
+
+    # Forward pass mode: batched vs separate
+    # False: Each scenario forwarded independently (slower but no cross-contamination)
+    # True: All scenarios batched together (faster but may interfere via sparse conv)
+    batched_forward=True,  # CHANGED to False for cleaner training (was True)
 )
 
 # ============================================================================
@@ -152,31 +179,22 @@ density_invariant = dict(
 eval_epoch = 20  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 
-# Increased learning rate by 10x to compensate for gradient scaling from normalization
-# Original: lr=0.001, max_lr=[0.001, 0.0001], block_lr=0.0001
-# New: lr=0.01, max_lr=[0.01, 0.001], block_lr=0.001
-# Original (disabled):
-# optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
-# scheduler = dict(
-#     type="OneCycleLR",
-#     max_lr=[0.001, 0.0001],
-#     pct_start=0.05,
-#     anneal_strategy="cos",
-#     div_factor=10.0,
-#     final_div_factor=1000.0,
-# )
-# param_dicts = [dict(keyword="block", lr=0.0001)]
-
-optimizer = dict(type="AdamW", lr=0.01, weight_decay=0.05)
+# Optimizer settings with gradient clipping for stability
+optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
+# Gradient clipping (configured separately, used in trainer)
+clip_grad = 1.0
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[0.01, 0.001],
+    max_lr=[0.001, 0.0001, 0.0001],  # dim_scale lr increased to 0.0001
     pct_start=0.05,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
-param_dicts = [dict(keyword="block", lr=0.001)]
+param_dicts = [
+    dict(keyword="block", lr=0.001),
+    dict(keyword="dim_scale", lr=0.0001),  # dim_scale lr increased to 0.0001 (same as block)
+]
 
 # ============================================================================
 # Dataset settings
@@ -215,8 +233,15 @@ data = dict(
                     # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
                     # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
                     # dict(type="ChromaticJitter", p=0.95, std=0.05),
+                    # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+                    # Step 2: Filter valid points (those with valid language features)
                     dict(type="FilterValidPoints", key="valid_feat_mask"),
+                    # Step 3: Re-center coordinates to the filtered dense region
+                    # This shifts coordinates so the dense region is centered around origin
+                    # GridSample then operates on these centered coordinates for better spatial distribution
+                    dict(type="CenterShift", apply_z=True),
+                    # Step 4: GridSample for representative sampling
                     dict(
                         type="GridSample",
                         grid_size=0.01,  # Smaller grid_size to preserve more valid points
@@ -236,7 +261,6 @@ data = dict(
                         return_grid_coord=True,  # Required by LitePT's GridPooling
                     ),
                     # dict(type="SphereCrop", point_max=204800, mode="random"),
-                    dict(type="CenterShift", apply_z=False),
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
                     # Collect features - grid_coord is required by LitePT's GridPooling
@@ -270,8 +294,13 @@ data = dict(
                     # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
                     # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
                     # dict(type="ChromaticJitter", p=0.95, std=0.05),
+                    # Step 1: Filter outliers (same as train pipeline)
                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+                    # Step 2: Filter valid points
                     dict(type="FilterValidPoints", key="valid_feat_mask"),
+                    # Step 3: Re-center coordinates to the filtered dense region
+                    dict(type="CenterShift", apply_z=True),
+                    # Step 4: GridSample for representative sampling
                     dict(
                         type="GridSample",
                         grid_size=0.01,  # Smaller grid_size to preserve more valid points
@@ -292,7 +321,6 @@ data = dict(
                     ),
                     # Optional: SphereCrop for additional point reduction if needed
                     # dict(type="SphereCrop", point_max=204800, mode="random"),
-                    dict(type="CenterShift", apply_z=False),
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
                     # Collect features - grid_coord is required by LitePT's GridPooling
@@ -508,4 +536,8 @@ hooks = [
     dict(type="IterationTimer", warmup_iter=2),
     dict(type="InformationWriter"),
     dict(type="CheckpointSaver", save_freq=None),
+    dict(type="PerSceneLossVisualizer",
+         enabled=True,
+         save_every_n_epochs=1,  # Save loss curves every epoch (set to None to only save at end)
+         save_at_end=True),  # Also save final curves at end of training
 ]

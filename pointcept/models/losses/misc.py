@@ -21,15 +21,227 @@ class L1Loss(nn.Module):
         loss_weight=1.0,
     ):
         super(L1Loss, self).__init__()
+        self.reduction = reduction
         self.loss_weight = loss_weight
-        self.loss = nn.L1Loss(
-            size_average=size_average,
-            reduce=reduce,
-            reduction=reduction,
-        )
 
-    def forward(self, pred, target):
-        return self.loss(pred, target) * self.loss_weight
+    def forward(self, pred, target, valid_feat_mask, **kwargs):
+        # L1 Loss: |pred - target| for valid features only
+        # Unlike L2, L1 has constant gradient (±1), avoiding vanishing gradient
+
+        # RUNTIME VALIDATION: Ensure data integrity
+        assert pred.shape == target.shape, f"Shape mismatch: pred {pred.shape} vs target {target.shape}"
+        assert valid_feat_mask.shape[0] == pred.shape[0], f"Mask shape mismatch: {valid_feat_mask.shape} vs {pred.shape}"
+
+        # Enhanced NaN detection with diagnostic information
+        if torch.isnan(pred).any():
+            nan_count = torch.isnan(pred).sum().item()
+            nan_indices = torch.where(torch.isnan(pred).any(dim=1))[0][:10]  # First 10 samples with NaN
+            print(f"\n🚨 NaN DETECTED IN PRED!")
+            print(f"  Total NaN values: {nan_count}")
+            print(f"  Samples with NaN (first 10): {nan_indices.tolist()}")
+            print(f"  pred stats: min={pred.min().item():.6f}, max={pred.max().item():.6f}")
+            print(f"              mean={pred.mean().item():.6f}, std={pred.std().item():.6f}")
+            print(f"  pred device: {pred.device}, dtype: {pred.dtype}")
+            # Check per-dimension NaN
+            for dim in range(pred.shape[1]):
+                if torch.isnan(pred[:, dim]).any():
+                    print(f"    dim[{dim}] has NaN!")
+            assert False, "pred contains NaN! See diagnostic info above."
+
+        if torch.isnan(target).any():
+            nan_count = torch.isnan(target).sum().item()
+            print(f"\n🚨 NaN DETECTED IN TARGET!")
+            print(f"  Total NaN values: {nan_count}")
+            print(f"  target stats: min={target.min().item():.6f}, max={target.max().item():.6f}")
+            print(f"                mean={target.mean().item():.6f}, std={target.std().item():.6f}")
+            assert False, "target contains NaN!"
+
+        if torch.isinf(pred).any():
+            print(f"\n🚨 Inf DETECTED IN PRED!")
+            print(f"  pred stats: min={pred.min().item():.6f}, max={pred.max().item():.6f}")
+            assert False, "pred contains Inf!"
+
+        if torch.isinf(target).any():
+            print(f"\n🚨 Inf DETECTED IN TARGET!")
+            assert False, "target contains Inf!"
+
+        loss = torch.abs(pred[valid_feat_mask] - target[valid_feat_mask]).sum(dim=1)
+
+        if self.reduction == "mean":
+            # Average the loss over only the valid samples
+            valid_count = valid_feat_mask.sum()
+            if valid_count > 0:
+                loss = loss.sum() / valid_count
+            else:
+                loss = loss.sum()  # fallback if there are no valid samples
+        elif self.reduction == "sum":
+            # Sum the loss over all valid samples
+            loss = loss.sum()
+
+        print("l1 loss:", self.loss_weight * loss.item())
+        return self.loss_weight * loss
+
+
+@LOSSES.register_module()
+class WeightedL1Loss(nn.Module):
+    """
+    Weighted L1 Loss based on feature dimension importance.
+
+    Higher weight for dimensions with higher variance (more important),
+    lower weight for dimensions with lower variance (less important/noise).
+
+    This allows the model to focus on optimizing the most important features,
+    enabling L1 loss to converge closer to zero for the principal components.
+    """
+    def __init__(
+        self,
+        size_average=None,
+        reduce=None,
+        reduction="mean",
+        loss_weight=1.0,
+        weight_strategy="variance",  # "variance", "uniform", "predefined"
+        min_weight=0.1,  # Minimum weight for any dimension
+        max_weight=3.0,  # Maximum weight for any dimension
+        momentum=0.99,  # Momentum for updating importance weights (EMA)
+    ):
+        super(WeightedL1Loss, self).__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.weight_strategy = weight_strategy
+        self.min_weight = min_weight
+        self.max_weight = max_weight
+        self.momentum = momentum
+
+        # Running statistics for dimension importance
+        self.register_buffer("dim_importance", None)  # Will be initialized on first forward
+        self.register_buffer("num_updates", torch.tensor(0.0))
+
+    def _compute_variance_weights(self, target: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Compute importance weights based on feature variance.
+
+        Dimensions with higher variance are considered more important
+        (they carry more information about the data).
+        """
+        # Extract valid target features
+        valid_target = target[valid_mask > 0]  # [M, D]
+
+        if valid_target.numel() == 0:
+            return torch.ones(target.shape[1], device=target.device)
+
+        # Compute variance per dimension
+        dim_variance = valid_target.var(dim=0)  # [D]
+
+        # Avoid division by zero
+        dim_variance = dim_variance.clamp(min=1e-8)
+
+        # Normalize to [min_weight, max_weight]
+        variance_min = dim_variance.min()
+        variance_max = dim_variance.max()
+
+        if variance_max > variance_min:
+            normalized = (dim_variance - variance_min) / (variance_max - variance_min)
+            weights = self.min_weight + normalized * (self.max_weight - self.min_weight)
+        else:
+            weights = torch.ones_like(dim_variance)
+
+        return weights
+
+    def _update_importance(self, target: torch.Tensor, valid_mask: torch.Tensor):
+        """Update dimension importance using exponential moving average."""
+        valid_target = target[valid_mask > 0]  # [M, D]
+
+        if valid_target.numel() == 0:
+            return
+
+        # Compute current importance (variance)
+        current_importance = valid_target.var(dim=0)  # [D]
+
+        # Initialize or update with EMA
+        if self.dim_importance is None:
+            self.dim_importance = current_importance
+        else:
+            self.dim_importance = (
+                self.momentum * self.dim_importance +
+                (1 - self.momentum) * current_importance
+            )
+
+        self.num_updates += 1
+
+    def _get_importance_weights(self, target: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """Get importance weights based on strategy."""
+        feature_dim = target.shape[1]
+
+        if self.weight_strategy == "uniform":
+            return torch.ones(feature_dim, device=target.device)
+
+        elif self.weight_strategy == "variance":
+            # Compute variance-based weights
+            weights = self._compute_variance_weights(target, valid_mask)
+            return weights
+
+        elif self.weight_strategy == "ema_variance":
+            # Update and use EMA variance
+            self._update_importance(target, valid_mask)
+
+            if self.dim_importance is None:
+                return torch.ones(feature_dim, device=target.device)
+
+            # Normalize to [min_weight, max_weight]
+            importance_min = self.dim_importance.min()
+            importance_max = self.dim_importance.max()
+
+            if importance_max > importance_min:
+                normalized = (self.dim_importance - importance_min) / (importance_max - importance_min)
+                weights = self.min_weight + normalized * (self.max_weight - self.min_weight)
+            else:
+                weights = torch.ones_like(self.dim_importance)
+
+            return weights
+
+        else:
+            raise ValueError(f"Unknown weight_strategy: {self.weight_strategy}")
+
+    def forward(self, pred, target, valid_feat_mask, **kwargs):
+        """
+        Compute weighted L1 loss.
+
+        Args:
+            pred: [N, D] predicted features
+            target: [N, D] target features
+            valid_feat_mask: [N] binary mask for valid features
+
+        Returns:
+            Weighted L1 loss
+        """
+        # Get dimension weights
+        dim_weights = self._get_importance_weights(target, valid_feat_mask)  # [D]
+
+        # Extract valid features
+        valid_pred = pred[valid_feat_mask > 0]  # [M, D]
+        valid_target = target[valid_feat_mask > 0]  # [M, D]
+
+        # Compute absolute difference
+        abs_diff = torch.abs(valid_pred - valid_target)  # [M, D]
+
+        # Apply dimension weights
+        weighted_diff = abs_diff * dim_weights.unsqueeze(0)  # [M, D]
+
+        # Sum over dimensions
+        loss = weighted_diff.sum(dim=1)  # [M]
+
+        if self.reduction == "mean":
+            # Average over both samples and dimensions (weighted)
+            valid_count = valid_feat_mask.sum()
+            if valid_count > 0:
+                loss = loss.sum() / valid_count
+            else:
+                loss = loss.sum()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        print(f"weighted l1 loss: {self.loss_weight * loss.item():.6f}, weights: [{dim_weights.min().item():.2f}, {dim_weights.max().item():.2f}]")
+        return self.loss_weight * loss
 
 
 @LOSSES.register_module()
@@ -253,6 +465,37 @@ class CosineSimilarity(nn.Module):
 
     def forward(self, pred, target, valid_feat_mask, **kwargs):
         # Compute cosine similarity along the feature dimension (assumed to be dim=1)
+
+        # RUNTIME VALIDATION: Ensure data integrity
+        assert pred.shape == target.shape, f"Shape mismatch: pred {pred.shape} vs target {target.shape}"
+        assert valid_feat_mask.shape[0] == pred.shape[0], f"Mask shape mismatch: {valid_feat_mask.shape} vs {pred.shape}"
+
+        # Enhanced NaN detection with diagnostic information
+        if torch.isnan(pred).any():
+            nan_count = torch.isnan(pred).sum().item()
+            nan_indices = torch.where(torch.isnan(pred).any(dim=1))[0][:10]
+            print(f"\n🚨 NaN DETECTED IN PRED (CosineSimilarity)!")
+            print(f"  Total NaN values: {nan_count}")
+            print(f"  Samples with NaN (first 10): {nan_indices.tolist()}")
+            print(f"  pred stats: min={pred.min().item():.6f}, max={pred.max().item():.6f}")
+            print(f"              mean={pred.mean().item():.6f}, std={pred.std().item():.6f}")
+            for dim in range(pred.shape[1]):
+                if torch.isnan(pred[:, dim]).any():
+                    print(f"    dim[{dim}] has NaN!")
+            assert False, "pred contains NaN! See diagnostic info above."
+
+        if torch.isnan(target).any():
+            print(f"\n🚨 NaN DETECTED IN TARGET (CosineSimilarity)!")
+            assert False, "target contains NaN!"
+
+        if torch.isinf(pred).any():
+            print(f"\n🚨 Inf DETECTED IN PRED (CosineSimilarity)!")
+            assert False, "pred contains Inf!"
+
+        if torch.isinf(target).any():
+            print(f"\n🚨 Inf DETECTED IN TARGET (CosineSimilarity)!")
+            assert False, "target contains Inf!"
+
         cos = nn.CosineSimilarity(dim=1)
         loss = 1 - cos(pred[valid_feat_mask], target[valid_feat_mask])
 
@@ -266,7 +509,7 @@ class CosineSimilarity(nn.Module):
         elif self.reduction == "sum":
             loss = loss.sum()
 
-        # print("cosine loss:", self.loss_weight * loss.item())
+        print("cosine loss:", self.loss_weight * loss.item())
         return self.loss_weight * loss
 
 
@@ -377,12 +620,17 @@ class AggregatedContrastiveLoss(nn.Module):
             group_a = features[perm[:split]]
             group_b = features[perm[split:]]
 
-            # Use average pooling to get a representative vector
-            # agg_a = group_a.mean(dim=0)
-            # agg_b = group_b.mean(dim=0)
-            # temp ablation, change to add operation
-            agg_a = group_a.sum(dim=0)
-            agg_b = group_b.sum(dim=0)
+            # IMPORTANT: Use mean() instead of sum() for aggregation
+            # Using sum() causes larger classes to dominate the contrastive loss,
+            # as their aggregated vectors have larger magnitudes before normalization.
+            # This leads to over-segmentation where the model overfits to large classes
+            # and produces noisy/fragmented predictions for smaller classes.
+            # mean() ensures equal contribution from all classes regardless of size.
+            agg_a = group_a.mean(dim=0)
+            agg_b = group_b.mean(dim=0)
+            # Alternative: sum() aggregation (causes class imbalance issues)
+            # agg_a = group_a.sum(dim=0)
+            # agg_b = group_b.sum(dim=0)
             aggregated_a.append(agg_a)
             aggregated_b.append(agg_b)
             used_labels.append(lab)
@@ -417,6 +665,93 @@ class AggregatedContrastiveLoss(nn.Module):
 
         # Optionally print or log the loss
         print("contrastive loss:", self.loss_weight * loss.item(), "classes:", len(used_labels))
+
+        return self.loss_weight * loss
+
+
+@LOSSES.register_module()
+class SVDWeightedL1Loss(nn.Module):
+    """
+    SVD-Weighted L1 Loss: Weights dimensions based on SVD ordering.
+
+    For SVD-compressed features, lower indices (dim 0, 1, 2, ...) capture more variance
+    (principal components), while higher indices (dim 13, 14, 15) capture less variance (noise).
+
+    This loss applies exponential decay weights: weight[i] = base * (decay_rate ^ i)
+    This ensures the model focuses on optimizing the most important dimensions first.
+
+    Args:
+        base_weight: Base weight for dimension 0 (most important)
+        decay_rate: Exponential decay rate per dimension (0 < decay_rate < 1)
+        min_weight: Minimum weight for any dimension (prevents zero gradients)
+        loss_weight: Overall loss weight multiplier
+        reduction: "mean" or "sum"
+    """
+    def __init__(
+        self,
+        base_weight=1.0,
+        decay_rate=0.85,
+        min_weight=0.05,
+        loss_weight=1.0,
+        reduction="mean",
+    ):
+        super(SVDWeightedL1Loss, self).__init__()
+        self.base_weight = base_weight
+        self.decay_rate = decay_rate
+        self.min_weight = min_weight
+        self.loss_weight = loss_weight
+        self.reduction = reduction
+
+    def forward(self, pred, target, valid_feat_mask, **kwargs):
+        """
+        Compute SVD-weighted L1 loss.
+
+        Args:
+            pred: [N, D] predicted features (typically 16-dim SVD compressed)
+            target: [N, D] target features (SVD compressed)
+            valid_feat_mask: [N] binary mask for valid features
+
+        Returns:
+            SVD-weighted L1 loss
+        """
+        # Extract valid features
+        valid_pred = pred[valid_feat_mask > 0]  # [M, D]
+        valid_target = target[valid_feat_mask > 0]  # [M, D]
+
+        if valid_pred.numel() == 0:
+            return torch.tensor(0.0, device=pred.device, requires_grad=pred.requires_grad)
+
+        D = valid_pred.shape[1]  # Feature dimension (typically 16)
+
+        # Compute dimension weights based on SVD ordering
+        # Early dimensions (low index) get higher weights
+        weights = torch.tensor(
+            [max(self.min_weight, self.base_weight * (self.decay_rate ** i)) for i in range(D)],
+            device=valid_pred.device,
+            dtype=valid_pred.dtype
+        )  # [D]
+
+        # Compute absolute difference
+        abs_diff = torch.abs(valid_pred - valid_target)  # [M, D]
+
+        # Apply dimension weights
+        weighted_diff = abs_diff * weights.unsqueeze(0)  # [M, D]
+
+        # Sum over dimensions
+        loss = weighted_diff.sum(dim=1)  # [M]
+
+        if self.reduction == "mean":
+            valid_count = valid_feat_mask.sum()
+            if valid_count > 0:
+                loss = loss.sum() / valid_count
+            else:
+                loss = loss.sum()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        print(f"svd_weighted_l1: {self.loss_weight * loss.item():.6f}, "
+              f"weight_range: [{weights[0]:.3f}, {weights[-1]:.3f}], "
+              f"decay_rate={self.decay_rate}")
 
         return self.loss_weight * loss
 

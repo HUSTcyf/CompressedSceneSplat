@@ -1222,7 +1222,6 @@ class LangFeatDownloadCompressor:
 
         # Download-only mode: only download, skip compression
         if self.download_only:
-            self._print_progress()
             if self._download_lang_feat_for_scene(scene_rel_path):
                 with self.lock:
                     self.stats['downloaded'] += 1
@@ -1235,7 +1234,6 @@ class LangFeatDownloadCompressor:
 
         # Skip download mode: directly compress
         if self.skip_download:
-            self._print_progress()
             if self._compress_scene(scene_rel_path, thread_id=thread_id):
                 with self.lock:
                     self.stats['compressed'] += 1
@@ -1248,7 +1246,6 @@ class LangFeatDownloadCompressor:
 
         # Normal mode: download then compress
         # Step 1: Download lang_feat.npy
-        self._print_progress()
         if self._download_lang_feat_for_scene(scene_rel_path):
             with self.lock:
                 self.stats['downloaded'] += 1
@@ -1390,6 +1387,7 @@ class LangFeatDownloadCompressor:
             print("Processing scenes (download + compress)...")
         print("=" * 60)
 
+        from tqdm import tqdm
         with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
             # Assign thread_id to each worker (round-robin based on submission order)
             futures = {}
@@ -1398,15 +1396,28 @@ class LangFeatDownloadCompressor:
                 future = executor.submit(self._download_and_compress_worker, scene, thread_id)
                 futures[future] = (scene, thread_id)
 
-            for future in as_completed(futures):
-                scene, thread_id = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"  [Error] Exception for {scene}: {e}")
-                    with self.lock:
-                        self.stats['failed'] += 1
-                        self.failed_scenes.append((scene, str(e)))
+            # Progress bar for all scenes
+            with tqdm(total=len(scenes), desc="Processing scenes", unit="scene") as pbar:
+                # Update progress bar postfix with current stats
+                def update_pbar():
+                    pbar.set_postfix({
+                        'downloaded': self.stats['downloaded'],
+                        'compressed': self.stats['compressed'],
+                        'failed': self.stats['failed']
+                    })
+
+                for future in as_completed(futures):
+                    scene, thread_id = futures[future]
+                    try:
+                        future.result()
+                        update_pbar()
+                    except Exception as e:
+                        print(f"\n  [Error] Exception for {scene}: {e}")
+                        with self.lock:
+                            self.stats['failed'] += 1
+                            self.failed_scenes.append((scene, str(e)))
+                        update_pbar()
+                    pbar.update(1)
 
         # Print summary
         self._print_summary()

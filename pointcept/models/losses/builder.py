@@ -46,22 +46,15 @@ class Criteria(object):
                     name = "ce_loss"
                 elif name == "aggregatedcontrastiveloss":
                     name = "contrast_loss"
+                elif name == "l1loss":
+                    name = "l1_loss"
                 loss_values[name] = loss_value.item()
-            # Print to stdout without buffering - include contrastive loss if present
-            # NOTE: For normalized features (||pred|| = ||target|| = 1):
-            #   L2_loss = 2 * Cosine_loss, so with weights 0.5 and 1.0, they are equal
-            l2_val = loss_values.get('l2_loss', 0)
-            cos_val = loss_values.get('cos_loss', 0)
-            contrast_val = loss_values.get('contrast_loss', None)
-
-            if contrast_val is not None:
-                print(f"L2: {l2_val:.6f}, Cos: {cos_val:.6f}, Contrast: {contrast_val:.6f}", flush=True, file=sys.stderr)
-            else:
-                print(f"L2: {l2_val:.6f}, Cos: {cos_val:.6f}", flush=True, file=sys.stderr)
+            # Return both total loss and individual loss values
+            return loss, loss_values
         else:
             for c in self.criteria:
                 loss += c(pred, target, **kwargs)
-        return loss
+            return loss
 
 
 def build_criteria(cfg, verbose_losses=False):
