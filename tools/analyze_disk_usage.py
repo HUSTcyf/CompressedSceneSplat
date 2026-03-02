@@ -537,6 +537,152 @@ def create_pie_chart(
     plt.close()
 
 
+def create_rank_pie_chart(
+    rank_npz_size: int,
+    rank_npz_count: int,
+    file_sizes: Dict[str, int],
+    file_counts: Dict[str, int],
+    rank: int,
+    dataset_name: str,
+    split_name: str,
+    output_path: Optional[Path] = None,
+    base10: bool = False,
+) -> None:
+    """
+    Create a pie chart visualization for a specific SVD rank.
+
+    Shows the rank's npz file vs all other files (excluding lang_feat.npy, lang_feat_index.npy, and grid_meta_data.json).
+
+    Args:
+        rank_npz_size: Size of the rank's npz files in bytes
+        rank_npz_count: Count of the rank's npz files
+        file_sizes: Dictionary mapping file names to sizes (all files)
+        file_counts: Dictionary mapping file names to counts (all files)
+        rank: SVD rank number
+        dataset_name: Name of the dataset
+        split_name: Name of the split
+        output_path: Path to save the figure (if None, uses current directory)
+        base10: If True, use base-10 units for display
+    """
+    # Calculate total size for this rank (only this rank's npz + other files, exclude other ranks' npz)
+    total_size = rank_npz_size
+
+    # Build "others" category (all files except: this rank's npz, lang_feat.npy, lang_feat_index.npy, grid_meta_data.json)
+    others_files = {}
+    excluded_files = {"lang_feat.npy", "lang_feat_index.npy", "grid_meta_data.json"}
+
+    for file_name, size in file_sizes.items():
+        # Skip excluded files
+        if file_name in excluded_files:
+            continue
+        # Skip other rank's npz files
+        if file_name.startswith("lang_feat_grid_svd"):
+            # Only include this rank's npz if it matches
+            expected_name = f"lang_feat_grid_svd_r{rank}.npz"
+            if file_name != expected_name:
+                continue
+            # This rank's npz is handled separately, skip here
+            continue
+        # Add to others
+        others_files[file_name] = size
+
+    others_total_size = sum(others_files.values())
+    total_size += others_total_size
+
+    if total_size == 0:
+        print(f"[WARNING] No data to visualize for rank {rank}")
+        return
+
+    # Prepare data for visualization
+    # Pie chart: rank npz vs others
+    pie_sizes = [rank_npz_size, others_total_size]
+    pie_labels = [f"R{rank} SVD (.npz)", "others"]
+    pie_colors = ['#FF6B6B', '#4ECDC4']
+
+    # Prepare bar chart data (detailed breakdown of others)
+    bar_file_names = list(others_files.keys())
+    bar_file_sizes = [others_files[name] for name in bar_file_names]
+
+    # Sort bar data by size (descending)
+    bar_data = sorted(zip(bar_file_names, bar_file_sizes), key=lambda x: x[1], reverse=True)
+    bar_file_names, bar_file_sizes = zip(*bar_data) if bar_data else ([], [])
+
+    # Create figure with subplots (same as non-grid-svd-stats mode)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+
+    # Pie chart
+    wedges, texts, autotexts = ax1.pie(
+        pie_sizes,
+        labels=pie_labels,
+        colors=pie_colors,
+        autopct='%1.1f%%',
+        startangle=90,
+        textprops={'fontsize': 12, 'weight': 'bold'},
+        explode=(0.05, 0),  # Slightly explode rank npz slice
+    )
+
+    # Make percentage text more readable
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontsize(14)
+        autotext.set_weight('bold')
+
+    # Set titles with consistent font size
+    ax1.set_title(f'{dataset_name.upper()} - {split_name} SET\nSVD Rank {rank} Distribution',
+                  fontsize=12, fontweight='bold', pad=20)
+    ax2.set_title(f'Detailed Breakdown of "others" (excluding SVD R{rank} .npz)',
+                  fontsize=12, fontweight='bold', pad=20)
+
+    # Bar chart for absolute sizes of others
+    # Convert to appropriate units
+    if others_total_size >= 1024**4:  # TiB/TB range
+        unit_factor = 1024**4 if not base10 else 1000**4
+        unit_label = "TiB" if not base10 else "TB"
+    elif others_total_size >= 1024**3:  # GiB/GB range
+        unit_factor = 1024**3 if not base10 else 1000**3
+        unit_label = "GiB" if not base10 else "GB"
+    else:
+        unit_factor = 1024**2 if not base10 else 1000**2
+        unit_label = "MiB" if not base10 else "MB"
+
+    sizes_in_unit = [s / unit_factor for s in bar_file_sizes]
+
+    # Define colors for bar chart
+    color_palette = plt.cm.Set3.colors
+    bar_colors = [color_palette[i % len(color_palette)] for i in range(len(bar_file_names))]
+
+    bars = ax2.barh(range(len(bar_file_names)), sizes_in_unit, color=bar_colors)
+    ax2.set_xlabel(f'Size ({unit_label})', fontsize=11, fontweight='bold')
+    ax2.set_yticks(range(len(bar_file_names)))
+    ax2.set_yticklabels(bar_file_names)
+    ax2.invert_yaxis()
+
+    # Add value labels on bars
+    for i, (bar, size) in enumerate(zip(bars, sizes_in_unit)):
+        width = bar.get_width()
+        ax2.text(width, bar.get_y() + bar.get_height()/2,
+                f' {size:.2f} {unit_label}',
+                ha='left', va='center', fontsize=9, fontweight='bold')
+
+    plt.tight_layout()
+
+    # Add total info at the bottom
+    total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
+    total_files = rank_npz_count + sum(file_counts.get(name, 0) for name in others_files.keys())
+    fig.text(0.5, 0.02, f'Total: {total_size_str} | Files: {total_files:,}',
+             ha='center', fontsize=12, fontweight='bold')
+
+    # Save figure
+    if output_path is None:
+        output_path = Path(f"{dataset_name}_{split_name.lower()}_svd_r{rank}.png")
+
+    # Use bbox_extra_artists to ensure footer is included
+    plt.savefig(output_path, dpi=150, bbox_inches='tight', pad_inches=0.3, facecolor='white')
+    print(f"\n[INFO] Saved SVD R{rank} visualization to: {output_path}")
+
+    plt.close()
+
+
 def analyze_directory(
     root_dir: Path,
     exclude_patterns: Optional[List[str]] = None,
@@ -1123,17 +1269,61 @@ def merge_all_datasets(args) -> int:
 
     # Create visualization if requested
     if args.save_plot:
-        output_path = Path(args.save_plot)
-        create_pie_chart(
-            merged_file_sizes,
-            merged_file_counts,
-            total_size_all,
-            "scenesplat",
-            "all_datasets",
-            output_path,
-            bar_chart=False,  # Pie chart only
-            detailed_pie=True,  # Show detailed breakdown with leader lines
-        )
+        # Handle grid SVD stats visualization (per-rank charts)
+        if args.grid_svd_stats:
+            # Group npz files by rank
+            rank_groups = {}
+            for file_name, size in merged_file_sizes.items():
+                if file_name.startswith("lang_feat_grid_svd") and file_name.endswith(".npz"):
+                    match = re.search(r'_r(\d+)\.npz$', file_name)
+                    if match:
+                        rank = int(match.group(1))
+                        count = merged_file_counts.get(file_name, 0)
+                        if rank not in rank_groups:
+                            rank_groups[rank] = {"size": 0, "count": 0}
+                        rank_groups[rank]["size"] += size
+                        rank_groups[rank]["count"] += count
+
+            # Create visualization for each rank
+            for rank in sorted(rank_groups.keys()):
+                rank_data = rank_groups[rank]
+                rank_size = rank_data["size"]
+                rank_count = rank_data["count"]
+
+                # Generate output path for this rank
+                output_path = Path(args.save_plot)
+                # If save_plot is a file (not directory), use it as base
+                if output_path.suffix:
+                    # Replace extension with _r{rank}.png
+                    stem = output_path.stem
+                    output_path = output_path.parent / f"{stem}_r{rank}.png"
+                else:
+                    # Directory path, create file name
+                    output_path = output_path / f"scenesplat_all_datasets_svd_r{rank}.png"
+
+                create_rank_pie_chart(
+                    rank_size,
+                    rank_count,
+                    merged_file_sizes,
+                    merged_file_counts,
+                    rank,
+                    "scenesplat",
+                    "all_datasets",
+                    output_path,
+                )
+        else:
+            # Standard visualization (non-grid-svd-stats mode)
+            output_path = Path(args.save_plot)
+            create_pie_chart(
+                merged_file_sizes,
+                merged_file_counts,
+                total_size_all,
+                "scenesplat",
+                "all_datasets",
+                output_path,
+                bar_chart=False,  # Pie chart only
+                detailed_pie=True,  # Show detailed breakdown with leader lines
+            )
 
     print("\n" + "=" * 80)
     print("Analysis complete!")
@@ -1537,28 +1727,80 @@ def main():
 
     # Create visualization if requested
     if args.save_plot:
-        # Only visualize merged data or the single split
-        splits_to_visualize = ["merged"] if args.merge_splits else args.splits
+        # Handle grid SVD stats visualization (per-rank charts)
+        if args.grid_svd_stats:
+            # Only visualize merged data or the single split
+            splits_to_visualize = ["merged"] if args.merge_splits else args.splits
 
-        for split in splits_to_visualize:
-            if split not in all_data:
-                continue
-            data = all_data[split]
-            split_name = split.upper()
-            output_path = Path(args.save_plot)
+            for split in splits_to_visualize:
+                if split not in all_data:
+                    continue
+                data = all_data[split]
 
-            # Get common_files if available (for merged splits)
-            common_files = data.get("common_files", None)
+                # Group npz files by rank
+                rank_groups = {}
+                for file_name, size in data["file_sizes"].items():
+                    if file_name.startswith("lang_feat_grid_svd") and file_name.endswith(".npz"):
+                        match = re.search(r'_r(\d+)\.npz$', file_name)
+                        if match:
+                            rank = int(match.group(1))
+                            count = data["file_counts"].get(file_name, 0)
+                            if rank not in rank_groups:
+                                rank_groups[rank] = {"size": 0, "count": 0}
+                            rank_groups[rank]["size"] += size
+                            rank_groups[rank]["count"] += count
 
-            create_pie_chart(
-                data["file_sizes"],
-                data["file_counts"],
-                data["total_size"],
-                args.dataset,
-                split_name,
-                output_path,
-                common_files=common_files,
-            )
+                # Create visualization for each rank
+                for rank in sorted(rank_groups.keys()):
+                    rank_data = rank_groups[rank]
+                    rank_size = rank_data["size"]
+                    rank_count = rank_data["count"]
+
+                    # Generate output path for this rank
+                    output_path = Path(args.save_plot)
+                    # If save_plot is a file (not directory), use it as base
+                    if output_path.suffix:
+                        # Replace extension with _r{rank}.png
+                        stem = output_path.stem
+                        output_path = output_path.parent / f"{stem}_r{rank}.png"
+                    else:
+                        # Directory path, create file name
+                        output_path = output_path / f"{args.dataset}_{split}_svd_r{rank}.png"
+
+                    create_rank_pie_chart(
+                        rank_size,
+                        rank_count,
+                        data["file_sizes"],
+                        data["file_counts"],
+                        rank,
+                        args.dataset,
+                        split.upper(),
+                        output_path,
+                    )
+        else:
+            # Standard visualization (non-grid-svd-stats mode)
+            # Only visualize merged data or the single split
+            splits_to_visualize = ["merged"] if args.merge_splits else args.splits
+
+            for split in splits_to_visualize:
+                if split not in all_data:
+                    continue
+                data = all_data[split]
+                split_name = split.upper()
+                output_path = Path(args.save_plot)
+
+                # Get common_files if available (for merged splits)
+                common_files = data.get("common_files", None)
+
+                create_pie_chart(
+                    data["file_sizes"],
+                    data["file_counts"],
+                    data["total_size"],
+                    args.dataset,
+                    split_name,
+                    output_path,
+                    common_files=common_files,
+                )
 
     return 0
 
