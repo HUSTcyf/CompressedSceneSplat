@@ -567,9 +567,10 @@ def create_rank_pie_chart(
     # Calculate total size for this rank (only this rank's npz + other files, exclude other ranks' npz)
     total_size = rank_npz_size
 
-    # Build "others" category (all files except: this rank's npz, lang_feat.npy, lang_feat_index.npy, grid_meta_data.json)
-    others_files = {}
+    # Build bar chart data (include this rank's npz + all other files except excluded ones)
+    bar_files = {}
     excluded_files = {"lang_feat.npy", "lang_feat_index.npy", "grid_meta_data.json"}
+    rank_label = f"lang_feat R{rank}"
 
     for file_name, size in file_sizes.items():
         # Skip excluded files
@@ -577,16 +578,17 @@ def create_rank_pie_chart(
             continue
         # Skip other rank's npz files
         if file_name.startswith("lang_feat_grid_svd"):
-            # Only include this rank's npz if it matches
             expected_name = f"lang_feat_grid_svd_r{rank}.npz"
             if file_name != expected_name:
                 continue
-            # This rank's npz is handled separately, skip here
+            # This rank's npz: add as "lang_feat R{rank}"
+            bar_files[rank_label] = size
             continue
         # Add to others
-        others_files[file_name] = size
+        bar_files[file_name] = size
 
-    others_total_size = sum(others_files.values())
+    # Calculate others_total_size for pie chart (excluding this rank's npz)
+    others_total_size = sum(size for name, size in bar_files.items() if name != rank_label)
     total_size += others_total_size
 
     if total_size == 0:
@@ -594,14 +596,14 @@ def create_rank_pie_chart(
         return
 
     # Prepare data for visualization
-    # Pie chart: rank npz vs others
+    # Pie chart: lang_feat R{rank} vs others
     pie_sizes = [rank_npz_size, others_total_size]
-    pie_labels = [f"R{rank} SVD (.npz)", "others"]
+    pie_labels = [f"lang_feat R{rank}", "others"]
     pie_colors = ['#FF6B6B', '#4ECDC4']
 
-    # Prepare bar chart data (detailed breakdown of others)
-    bar_file_names = list(others_files.keys())
-    bar_file_sizes = [others_files[name] for name in bar_file_names]
+    # Prepare bar chart data (include this rank's npz + all other files)
+    bar_file_names = list(bar_files.keys())
+    bar_file_sizes = [bar_files[name] for name in bar_file_names]
 
     # Sort bar data by size (descending)
     bar_data = sorted(zip(bar_file_names, bar_file_sizes), key=lambda x: x[1], reverse=True)
@@ -618,7 +620,7 @@ def create_rank_pie_chart(
         autopct='%1.1f%%',
         startangle=90,
         textprops={'fontsize': 12, 'weight': 'bold'},
-        explode=(0.05, 0),  # Slightly explode rank npz slice
+        explode=(0.05, 0),  # Slightly explode lang_feat R{rank} slice
     )
 
     # Make percentage text more readable
@@ -630,15 +632,15 @@ def create_rank_pie_chart(
     # Set titles with consistent font size
     ax1.set_title(f'{dataset_name.upper()} - {split_name} SET\nSVD Rank {rank} Distribution',
                   fontsize=12, fontweight='bold', pad=20)
-    ax2.set_title(f'Detailed Breakdown of "others" (excluding SVD R{rank} .npz)',
+    ax2.set_title('Detailed Breakdown of All Files',
                   fontsize=12, fontweight='bold', pad=20)
 
-    # Bar chart for absolute sizes of others
+    # Bar chart for absolute sizes
     # Convert to appropriate units
-    if others_total_size >= 1024**4:  # TiB/TB range
+    if total_size >= 1024**4:  # TiB/TB range
         unit_factor = 1024**4 if not base10 else 1000**4
         unit_label = "TiB" if not base10 else "TB"
-    elif others_total_size >= 1024**3:  # GiB/GB range
+    elif total_size >= 1024**3:  # GiB/GB range
         unit_factor = 1024**3 if not base10 else 1000**3
         unit_label = "GiB" if not base10 else "GB"
     else:
@@ -668,7 +670,11 @@ def create_rank_pie_chart(
 
     # Add total info at the bottom
     total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
-    total_files = rank_npz_count + sum(file_counts.get(name, 0) for name in others_files.keys())
+    # Count files: rank npz count + other files count
+    total_files = rank_npz_count + sum(
+        file_counts.get(name, 0) if name in file_sizes else 0
+        for name in bar_file_names if name != rank_label
+    )
     fig.text(0.5, 0.02, f'Total: {total_size_str} | Files: {total_files:,}',
              ha='center', fontsize=12, fontweight='bold')
 
