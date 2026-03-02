@@ -672,20 +672,22 @@ class AggregatedContrastiveLoss(nn.Module):
 @LOSSES.register_module()
 class SVDWeightedL1Loss(nn.Module):
     """
-    SVD-Weighted L1 Loss: Weights dimensions based on SVD ordering.
+    SVD-Weighted L1 Loss: Weights dimensions based on variance or SVD ordering.
 
-    For SVD-compressed features, lower indices (dim 0, 1, 2, ...) capture more variance
-    (principal components), while higher indices (dim 13, 14, 15) capture less variance (noise).
-
-    This loss applies exponential decay weights: weight[i] = base * (decay_rate ^ i)
-    This ensures the model focuses on optimizing the most important dimensions first.
+    Two modes supported:
+    1. "static": Exponential decay weights based on dimension index (d[0] > d[1] > ... > d[15])
+    2. "variance": Data-driven weights based on actual variance of each dimension
+       - Higher variance = more information = higher weight
+       - Uses EMA (exponential moving average) for stable variance estimation
 
     Args:
-        base_weight: Base weight for dimension 0 (most important)
-        decay_rate: Exponential decay rate per dimension (0 < decay_rate < 1)
+        base_weight: Base weight for the highest-variance dimension
+        decay_rate: Exponential decay rate per dimension (for "static" mode only)
         min_weight: Minimum weight for any dimension (prevents zero gradients)
         loss_weight: Overall loss weight multiplier
         reduction: "mean" or "sum"
+        weight_strategy: "static" (exponential decay) or "variance" (data-driven)
+        variance_momentum: EMA momentum for variance estimation (default: 0.99)
     """
     def __init__(
         self,
@@ -694,6 +696,8 @@ class SVDWeightedL1Loss(nn.Module):
         min_weight=0.05,
         loss_weight=1.0,
         reduction="mean",
+        weight_strategy="variance",  # "static" or "variance"
+        variance_momentum=0.99,
     ):
         super(SVDWeightedL1Loss, self).__init__()
         self.base_weight = base_weight
@@ -701,8 +705,85 @@ class SVDWeightedL1Loss(nn.Module):
         self.min_weight = min_weight
         self.loss_weight = loss_weight
         self.reduction = reduction
+        self.weight_strategy = weight_strategy
+        self.variance_momentum = variance_momentum
 
-    def forward(self, pred, target, valid_feat_mask, **kwargs):
+        # Running statistics for variance-based weighting
+        self.register_buffer("dim_variance", None)  # EMA of per-dimension variance
+        self.register_buffer("num_updates", torch.tensor(0.0))
+        self.register_buffer("weights", None)  # Cached weights
+
+    def _compute_variance_weights(self, target: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        """
+        Compute importance weights based on feature variance.
+
+        Dimensions with higher variance are considered more important
+        (they carry more information about the data).
+
+        Args:
+            target: [N, D] target features
+            valid_mask: [N] binary mask for valid features
+
+        Returns:
+            [D] weight tensor
+        """
+        # Extract valid target features
+        valid_target = target[valid_mask > 0]  # [M, D]
+
+        if valid_target.numel() == 0:
+            D = target.shape[1]
+            return torch.ones(D, device=target.device, dtype=target.dtype)
+
+        # Compute variance per dimension
+        dim_variance = valid_target.var(dim=0)  # [D]
+
+        # Update EMA of variance
+        if self.dim_variance is None:
+            self.dim_variance = dim_variance
+        else:
+            self.dim_variance = (
+                self.variance_momentum * self.dim_variance +
+                (1 - self.variance_momentum) * dim_variance
+            )
+
+        self.num_updates += 1
+
+        # Compute weights based on variance
+        # Higher variance -> higher weight
+        variance_min = self.dim_variance.min()
+        variance_max = self.dim_variance.max()
+
+        if variance_max > variance_min:
+            # Normalize variance to [min_weight, base_weight]
+            normalized = (self.dim_variance - variance_min) / (variance_max - variance_min)
+            weights = self.min_weight + normalized * (self.base_weight - self.min_weight)
+        else:
+            # All dimensions have the same variance
+            weights = torch.full_like(self.dim_variance, self.base_weight)
+
+        # Cache the weights
+        self.weights = weights.detach().clone()
+
+        return weights
+
+    def _compute_static_weights(self, D: int, device: torch.device) -> torch.Tensor:
+        """
+        Compute static exponential decay weights.
+
+        Early dimensions (low index) get higher weights.
+        """
+        weights = torch.tensor(
+            [max(self.min_weight, self.base_weight * (self.decay_rate ** i)) for i in range(D)],
+            device=device,
+            dtype=torch.float32
+        )
+
+        # Cache the weights
+        self.weights = weights.detach().clone()
+
+        return weights
+
+    def forward(self, pred, target, valid_feat_mask, return_per_dim=False, **kwargs):
         """
         Compute SVD-weighted L1 loss.
 
@@ -710,29 +791,36 @@ class SVDWeightedL1Loss(nn.Module):
             pred: [N, D] predicted features (typically 16-dim SVD compressed)
             target: [N, D] target features (SVD compressed)
             valid_feat_mask: [N] binary mask for valid features
+            return_per_dim: If True, also return per-dimension losses
 
         Returns:
-            SVD-weighted L1 loss
+            SVD-weighted L1 loss (or tuple with loss dict if return_per_dim=True)
         """
         # Extract valid features
         valid_pred = pred[valid_feat_mask > 0]  # [M, D]
         valid_target = target[valid_feat_mask > 0]  # [M, D]
 
         if valid_pred.numel() == 0:
-            return torch.tensor(0.0, device=pred.device, requires_grad=pred.requires_grad)
+            loss = torch.tensor(0.0, device=pred.device, requires_grad=pred.requires_grad)
+            if return_per_dim:
+                return (loss, {'per_dim_losses': torch.zeros(pred.shape[1], device=pred.device)})
+            return loss
 
         D = valid_pred.shape[1]  # Feature dimension (typically 16)
 
-        # Compute dimension weights based on SVD ordering
-        # Early dimensions (low index) get higher weights
-        weights = torch.tensor(
-            [max(self.min_weight, self.base_weight * (self.decay_rate ** i)) for i in range(D)],
-            device=valid_pred.device,
-            dtype=valid_pred.dtype
-        )  # [D]
+        # Compute dimension weights based on strategy
+        if self.weight_strategy == "variance":
+            weights = self._compute_variance_weights(target, valid_feat_mask)
+            strategy_str = f"variance (updates={self.num_updates.item():.0f})"
+        else:  # "static"
+            weights = self._compute_static_weights(D, valid_pred.device)
+            strategy_str = f"static (decay={self.decay_rate})"
 
         # Compute absolute difference
         abs_diff = torch.abs(valid_pred - valid_target)  # [M, D]
+
+        # Store per-dimension losses (before weighting) for visualization
+        per_dim_losses = abs_diff.mean(dim=0)  # [D]
 
         # Apply dimension weights
         weighted_diff = abs_diff * weights.unsqueeze(0)  # [M, D]
@@ -749,23 +837,961 @@ class SVDWeightedL1Loss(nn.Module):
         elif self.reduction == "sum":
             loss = loss.sum()
 
-        print(f"svd_weighted_l1: {self.loss_weight * loss.item():.6f}, "
-              f"weight_range: [{weights[0]:.3f}, {weights[-1]:.3f}], "
-              f"decay_rate={self.decay_rate}")
+        weighted_loss = self.loss_weight * loss
 
-        return self.loss_weight * loss
+        # Print with strategy info and variance statistics
+        if self.weight_strategy == "variance" and self.dim_variance is not None:
+            var_stats = self.dim_variance.detach().cpu().numpy()
+            print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
+                  f"weight_range=[{weights.min():.3f}, {weights.max():.3f}], "
+                  f"variance_range=[{var_stats.min():.6f}, {var_stats.max():.6f}]")
+        else:
+            print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
+                  f"weight_range=[{weights.min():.3f}, {weights.max():.3f}]")
+
+        if return_per_dim:
+            # Return tuple (loss, dict) for compatibility with verbose_losses
+            loss_dict = {
+                'per_dim_losses': per_dim_losses.detach().cpu(),  # [D] per-dimension loss (unweighted)
+                'per_dim_weights': weights.detach().cpu(),  # [D] weights applied to each dimension
+            }
+            return (weighted_loss, loss_dict)
+        return weighted_loss
+
+
+@LOSSES.register_module()
+class SpatialSmoothnessLoss(nn.Module):
+    """
+    Spatial Smoothness Loss for 3D Gaussian Feature Prediction.
+
+    This loss encourages spatial consistency by penalizing large feature differences
+    between neighboring 3D Gaussians. This prevents "salt-and-pepper" noise in the
+    predicted features.
+
+    The key insight: Features should vary smoothly across space for semantically
+    consistent regions. Sudden jumps indicate spatially inconsistent predictions.
+
+    Args:
+        neighbor_k: Number of nearest neighbors to consider (default: 16)
+        radius: Maximum distance for neighbors (default: 0.05, adjusted for grid_size)
+        reduction: Reduction method ("mean" or "sum")
+        loss_weight: Weight for this loss in the total loss
+        warmup_epochs: Epochs before applying this loss (default: 3)
+        decay_start: Epoch when weight starts decaying (default: 10)
+    """
+    def __init__(
+        self,
+        neighbor_k: int = 16,
+        radius: float = 0.05,
+        reduction: str = "mean",
+        loss_weight: float = 1.0,
+        warmup_epochs: int = 3,
+        decay_start: int = 10,
+    ):
+        super().__init__()
+        self.neighbor_k = neighbor_k
+        self.radius = radius
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.warmup_epochs = warmup_epochs
+        self.decay_start = decay_start
+
+    def forward(self, pred, target, valid_feat_mask, coord=None, epoch_progress=None, **kwargs):
+        """
+        Args:
+            pred: Predicted features [N, D]
+            target: Target features [N, D] (not used directly but for interface consistency)
+            valid_feat_mask: Valid feature mask [N]
+            coord: 3D coordinates [N, 3] for neighborhood computation
+            epoch_progress: Current epoch progress [0, 1] for weight scheduling
+
+        Returns:
+            Scalar loss value
+        """
+        if coord is None:
+            # If no coordinates provided, can't compute spatial smoothness
+            return torch.tensor(0.0, device=pred.device)
+
+        # Compute progressive weight based on epoch progress
+        # Start with 0 weight, ramp up, then decay
+        if epoch_progress is not None:
+            current_epoch = epoch_progress * 100  # Assuming max 100 epochs
+            if current_epoch < self.warmup_epochs:
+                weight = 0.0
+            elif current_epoch < self.decay_start:
+                # Linear ramp up
+                progress = (current_epoch - self.warmup_epochs) / (self.decay_start - self.warmup_epochs)
+                weight = progress * self.loss_weight
+            else:
+                # Linear decay after decay_start
+                decay_progress = min(1.0, (current_epoch - self.decay_start) / 20.0)
+                weight = self.loss_weight * (1.0 - 0.5 * decay_progress)
+        else:
+            weight = self.loss_weight
+
+        if weight == 0:
+            return torch.tensor(0.0, device=pred.device)
+
+        # Only consider valid points
+        valid_mask = (valid_feat_mask > 0)
+        if valid_mask.sum() < 2:
+            return torch.tensor(0.0, device=pred.device)
+
+        # Extract valid coordinates and predictions
+        valid_coord = coord[valid_mask]  # [M, 3]
+        valid_pred = pred[valid_mask]     # [M, D]
+
+        # Compute pairwise distances efficiently
+        # Use chunked computation to avoid O(N^2) memory blowup
+        M = valid_coord.shape[0]
+        if M > 100000:
+            # For large point clouds, sample random subset
+            indices = torch.randperm(M, device=pred.device)[:50000]
+            valid_coord = valid_coord[indices]
+            valid_pred = valid_pred[indices]
+            M = valid_coord.shape[0]
+
+        # Compute squared distances
+        dists = torch.cdist(valid_coord, valid_coord, p=2)  # [M, M]
+
+        # For each point, find k nearest neighbors (excluding self)
+        # Set diagonal to infinity so self is not selected
+        dists.fill_diagonal_(float('inf'))
+
+        # Find k nearest neighbors
+        knn_dists, knn_indices = torch.topk(dists, k=min(self.neighbor_k, M-1), dim=1, largest=False)
+
+        # Filter by radius
+        radius_mask = knn_dists < self.radius
+
+        # Compute feature differences for neighbors within radius
+        # valid_pred: [M, D]
+        # knn_indices: [M, K]
+        neighbor_feats = valid_pred[knn_indices]  # [M, K, D]
+
+        # Expand valid_pred for broadcasting
+        valid_pred_expanded = valid_pred.unsqueeze(1)  # [M, 1, D]
+
+        # Compute L2 distance between point and its neighbors
+        feat_diff = (valid_pred_expanded - neighbor_feats) ** 2  # [M, K, D]
+        feat_diff = feat_diff.sum(dim=2)  # [M, K] - L2 distance per neighbor
+
+        # Apply radius mask
+        feat_diff = feat_diff * radius_mask.float()
+
+        # Average over valid neighbors (those within radius)
+        valid_neighbor_count = radius_mask.sum(dim=1).clamp(min=1)  # [M], avoid div by zero
+        smoothness_loss = feat_diff.sum(dim=1) / valid_neighbor_count  # [M]
+
+        # Average over all points
+        if self.reduction == "mean":
+            loss = smoothness_loss.mean()
+        else:
+            loss = smoothness_loss.sum()
+
+        return weight * loss
+
+
+@LOSSES.register_module()
+class Rendered2DLoss(nn.Module):
+    """
+    Rendered 2D Loss using Gaussian Splatting for Spatially Consistent Feature Prediction.
+
+    This loss enforces spatial consistency by comparing 2D rendered features instead of
+    raw 3D features. The rendering process naturally aggregates spatial information through
+    Gaussian splatting - neighboring Gaussians contribute to the same pixels.
+
+    Key features:
+    - Loads pre-rendered GT feature maps from renders_npy folders
+    - Renders predicted features using gsplat's CUDA rasterization
+    - Computes L1 loss between rendered predicted and GT features
+    - Uses all available rendered views for each scene
+
+    Args:
+        gaussian_train_root: Root path to gaussian_train directory (default: "gaussian_train")
+        datasets_root: Root path to datasets directory (default: "datasets")
+        loss_weight: Maximum weight for this loss (default: 1.0)
+        warmup_progress: Training progress before applying this loss, 0-1 range (default: 0.015 for 3/200 epochs)
+        target_progress: Training progress when weight reaches loss_weight, 0-1 range (default: 0.5 for 50%)
+        max_num_views: Maximum number of views to use per scene (default: 4, to save memory)
+    """
+    def __init__(
+        self,
+        gaussian_train_root: str = "gaussian_train",
+        datasets_root: str = "datasets",
+        loss_weight: float = 1.0,
+        warmup_progress: float = 0.015,  # 3/200 = 0.015
+        target_progress: float = 0.5,  # 50% of training
+        max_num_views: int = 4,
+    ):
+        super().__init__()
+        self.gaussian_train_root = gaussian_train_root
+        self.datasets_root = datasets_root
+        self.loss_weight = loss_weight
+        self.warmup_progress = warmup_progress
+        self.target_progress = target_progress
+        self.max_num_views = max_num_views
+
+        # Cache for loaded GT renders and camera parameters
+        self._gt_renders_cache = {}
+        self._camera_params_cache = {}
+
+    def _load_gt_renders(self, scene_path: str) -> list:
+        """Load GT rendered feature maps from renders_npy folder."""
+        import os
+        import numpy as np
+
+        # Handle batched data: scene_path might be a list
+        if isinstance(scene_path, list):
+            if len(scene_path) == 0:
+                return []
+            scene_path = scene_path[0]  # Use first scene path
+
+        # Extract dataset and scene name from scene_path
+        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        # or relative: gaussian_train/3DOVS/train/sofa
+        # Find 'gaussian_train' in the path and extract dataset and scene after it
+        if 'gaussian_train' in scene_path:
+            # Split on 'gaussian_train' and take the second part
+            parts = scene_path.split('gaussian_train')
+            if len(parts) < 2:
+                return []
+            path_after = parts[1].lstrip('/')  # e.g., "3DOVS/train/sofa"
+            sub_parts = path_after.split('/')
+            if len(sub_parts) < 3:
+                return []
+            dataset = sub_parts[0]  # e.g., "3DOVS"
+            # The scene might be in 'train/{scene}' or just '{scene}'
+            if sub_parts[1] == 'train' and len(sub_parts) >= 3:
+                scene = sub_parts[2]  # e.g., "sofa"
+            else:
+                scene = sub_parts[1]  # Fallback
+        else:
+            # Fallback to original relative path logic
+            parts = scene_path.split('/')
+            if len(parts) < 4:
+                return []
+            dataset = parts[1]
+            scene = parts[3]
+
+        cache_key = f"{dataset}/{scene}"
+        if cache_key in self._gt_renders_cache:
+            return self._gt_renders_cache[cache_key]
+
+        # Build path to renders_npy folder
+        renders_npy_path = f"{self.gaussian_train_root}/{dataset}/train/{scene}/renders_npy"
+
+        if not os.path.exists(renders_npy_path):
+            self._gt_renders_cache[cache_key] = []
+            return []
+
+        # Load all .npy files in renders_npy folder
+        gt_renders = []
+        for fname in sorted(os.listdir(renders_npy_path)):
+            if fname.endswith('.npy'):
+                fpath = os.path.join(renders_npy_path, fname)
+                try:
+                    render_data = np.load(fpath)  # Shape: (H, W, D)
+                    gt_renders.append({
+                        'name': fname[:-4],  # Remove .npy extension
+                        'data': render_data.astype(np.float32),
+                    })
+                except Exception as e:
+                    print(f"Warning: Failed to load {fpath}: {e}")
+
+        self._gt_renders_cache[cache_key] = gt_renders
+        return gt_renders
+
+    def _load_camera_params(self, scene_path: str) -> dict:
+        """Load camera parameters from test cameras only.
+
+        Note: GT renders are pre-rendered from test views, so we only need test camera parameters.
+        This saves storage by not loading train camera parameters.
+
+        Priority order:
+        1. Scannet format: transforms_test.json
+        2. COLMAP format: sparse/0/ (filtered to match renders_npy files)
+        """
+        import os
+
+        # Handle batched data: scene_path might be a list
+        if isinstance(scene_path, list):
+            if len(scene_path) == 0:
+                return {}
+            scene_path = scene_path[0]  # Use first scene path
+
+        # Extract dataset and scene name from scene_path
+        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        if 'gaussian_train' in scene_path:
+            parts = scene_path.split('gaussian_train')
+            if len(parts) < 2:
+                return {}
+            path_after = parts[1].lstrip('/')  # e.g., "3DOVS/train/sofa"
+            sub_parts = path_after.split('/')
+            if len(sub_parts) < 3:
+                return {}
+            dataset = sub_parts[0]
+            if sub_parts[1] == 'train' and len(sub_parts) >= 3:
+                scene = sub_parts[2]
+            else:
+                scene = sub_parts[1]
+        else:
+            # Fallback to original relative path logic
+            parts = scene_path.split('/')
+            if len(parts) < 4:
+                return {}
+            dataset = parts[1]
+            scene = parts[3]
+
+        cache_key = f"{dataset}/{scene}"
+        if cache_key in self._camera_params_cache:
+            return self._camera_params_cache[cache_key]
+
+        import os
+
+        # First, get list of GT render names (from renders_npy folder)
+        gt_render_names = self._get_gt_render_names(scene_path)
+
+        # Try Scannet format: transforms_test.json
+        possible_json_paths = [
+            f"{self.datasets_root}/{dataset}/{scene}/transforms_test.json",
+            f"{self.datasets_root}/{dataset}/label/{scene}/transforms_test.json",
+        ]
+
+        camera_params = None
+        for json_path in possible_json_paths:
+            if os.path.exists(json_path):
+                try:
+                    import json
+                    with open(json_path, 'r') as f:
+                        camera_params = json.load(f)
+                    self._camera_params_cache[cache_key] = camera_params
+                    return camera_params
+                except Exception as e:
+                    pass
+
+        # Try COLMAP format: sparse/0/ directory (filtered to test views only)
+        possible_colmap_paths = [
+            f"{self.datasets_root}/{dataset}/{scene}/sparse/0/",
+            f"{self.datasets_root}/{dataset}/{scene}/undistorted/sparse/0/",
+            f"{self.datasets_root}/{dataset}/{scene}/distorted/sparse/0/",
+        ]
+
+        for colmap_dir in possible_colmap_paths:
+            if os.path.exists(colmap_dir):
+                camera_params = self._load_colmap_params(colmap_dir, test_frame_names=gt_render_names)
+                if camera_params is not None and len(camera_params.get('frames', [])) > 0:
+                    self._camera_params_cache[cache_key] = camera_params
+                    return camera_params
+
+        self._camera_params_cache[cache_key] = {}
+        return {}
+
+    def _get_gt_render_names(self, scene_path: str) -> set:
+        """Get set of GT render filenames (without extension) from renders_npy folder."""
+        import os
+
+        # Handle batched data: scene_path might be a list
+        if isinstance(scene_path, list):
+            if len(scene_path) == 0:
+                return set()
+            scene_path = scene_path[0]  # Use first scene path
+
+        # Extract dataset and scene name from scene_path
+        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        if 'gaussian_train' in scene_path:
+            parts = scene_path.split('gaussian_train')
+            if len(parts) < 2:
+                return set()
+            path_after = parts[1].lstrip('/')  # e.g., "3DOVS/train/sofa"
+            sub_parts = path_after.split('/')
+            if len(sub_parts) < 3:
+                return set()
+            dataset = sub_parts[0]
+            if sub_parts[1] == 'train' and len(sub_parts) >= 3:
+                scene = sub_parts[2]
+            else:
+                scene = sub_parts[1]
+        else:
+            # Fallback to original relative path logic
+            parts = scene_path.split('/')
+            if len(parts) < 4:
+                return set()
+            dataset = parts[1]
+            scene = parts[3]
+
+        # Build path to renders_npy folder
+        renders_npy_path = f"{self.gaussian_train_root}/{dataset}/train/{scene}/renders_npy"
+
+        if not os.path.exists(renders_npy_path):
+            return set()
+
+        # Get all .npy filenames and remove extension
+        render_names = set()
+        for fname in os.listdir(renders_npy_path):
+            if fname.endswith('.npy'):
+                # Remove .npy extension and any directory prefix
+                name = os.path.splitext(fname)[0]
+                render_names.add(name)
+
+        return render_names
+
+    def _load_colmap_params(self, colmap_dir: str, test_frame_names: set = None) -> dict:
+        """Load camera parameters from COLMAP sparse directory.
+
+        Uses custom binary reader to avoid pycolmap dependency.
+
+        Args:
+            colmap_dir: Path to COLMAP sparse directory (e.g., sparse/0/)
+            test_frame_names: Set of test frame names to filter (e.g., from renders_npy)
+
+        Returns a dict with the same format as Scannet transforms_test.json:
+        {
+            'w': width,
+            'h': height,
+            'fl_x': focal_length_x,
+            'fl_y': focal_length_y,
+            'cx': principal_point_x,
+            'cy': principal_point_y,
+            'frames': [
+                {
+                    'file_path': image_name,
+                    'transform_matrix': 4x4 world-to-camera matrix
+                },
+                ...
+            ]
+        }
+        """
+        import os
+        import numpy as np
+        import struct
+        import collections
+
+        # Define COLMAP camera models (minimal set for PINHOLE)
+        CameraModel = collections.namedtuple(
+            "CameraModel", ["model_id", "model_name", "num_params"]
+        )
+        CAMERA_MODELS = {
+            CameraModel(model_id=0, model_name="SIMPLE_PINHOLE", num_params=3),
+            CameraModel(model_id=1, model_name="PINHOLE", num_params=4),
+            CameraModel(model_id=2, model_name="SIMPLE_RADIAL", num_params=4),
+            CameraModel(model_id=3, model_name="RADIAL", num_params=5),
+            CameraModel(model_id=4, model_name="OPENCV", num_params=8),
+        }
+        CAMERA_MODEL_IDS = dict([(camera_model.model_id, camera_model)
+                                for camera_model in CAMERA_MODELS])
+
+        def read_next_bytes(fid, num_bytes, format_char_sequence, endian_character="<"):
+            """Read and unpack the next bytes from a binary file."""
+            data = fid.read(num_bytes)
+            return struct.unpack(endian_character + format_char_sequence, data)
+
+        def qvec2rotmat(qvec):
+            """Convert quaternion to rotation matrix."""
+            return np.array([
+                [1 - 2 * qvec[2]**2 - 2 * qvec[3]**2,
+                 2 * qvec[1] * qvec[2] - 2 * qvec[0] * qvec[3],
+                 2 * qvec[3] * qvec[1] + 2 * qvec[0] * qvec[2]],
+                [2 * qvec[1] * qvec[2] + 2 * qvec[0] * qvec[3],
+                 1 - 2 * qvec[1]**2 - 2 * qvec[3]**2,
+                 2 * qvec[2] * qvec[3] - 2 * qvec[0] * qvec[1]],
+                [2 * qvec[3] * qvec[1] - 2 * qvec[0] * qvec[2],
+                 2 * qvec[2] * qvec[3] + 2 * qvec[0] * qvec[1],
+                 1 - 2 * qvec[1]**2 - 2 * qvec[2]**2]
+            ])
+
+        if not os.path.exists(colmap_dir):
+            return None
+
+        # Try binary format first
+        cameras_file = os.path.join(colmap_dir, "cameras.bin")
+        images_file = os.path.join(colmap_dir, "images.bin")
+
+        # Fall back to text format
+        if not os.path.exists(cameras_file) or not os.path.exists(images_file):
+            cameras_file = os.path.join(colmap_dir, "cameras.txt")
+            images_file = os.path.join(colmap_dir, "images.txt")
+            if not os.path.exists(cameras_file) or not os.path.exists(images_file):
+                return None
+
+        try:
+            # Read cameras
+            cameras = {}
+            if cameras_file.endswith('.bin'):
+                with open(cameras_file, "rb") as fid:
+                    num_cameras = read_next_bytes(fid, 8, "Q")[0]
+                    for _ in range(num_cameras):
+                        camera_properties = read_next_bytes(
+                            fid, num_bytes=24, format_char_sequence="iiQQ"
+                        )
+                        camera_id = camera_properties[0]
+                        model_id = camera_properties[1]
+                        model_name = CAMERA_MODEL_IDS[camera_properties[1]].model_name
+                        width = camera_properties[2]
+                        height = camera_properties[3]
+                        num_params = CAMERA_MODEL_IDS[model_id].num_params
+                        params = read_next_bytes(
+                            fid,
+                            num_bytes=8 * num_params,
+                            format_char_sequence="d" * num_params,
+                        )
+                        cameras[camera_id] = {
+                            'id': camera_id,
+                            'model': model_name,
+                            'width': width,
+                            'height': height,
+                            'params': np.array(params),
+                        }
+            else:  # .txt format
+                with open(cameras_file, "r") as fid:
+                    for line in fid:
+                        line = line.strip()
+                        if len(line) > 0 and line[0] != "#":
+                            elems = line.split()
+                            camera_id = int(elems[0])
+                            model = elems[1]
+                            width = int(elems[2])
+                            height = int(elems[3])
+                            params = np.array(tuple(map(float, elems[4:])))
+                            cameras[camera_id] = {
+                                'id': camera_id,
+                                'model': model,
+                                'width': width,
+                                'height': height,
+                                'params': params,
+                            }
+
+            # Read images
+            images = {}
+            if images_file.endswith('.bin'):
+                with open(images_file, "rb") as fid:
+                    num_reg_images = read_next_bytes(fid, 8, "Q")[0]
+                    for _ in range(num_reg_images):
+                        binary_image_properties = read_next_bytes(
+                            fid, num_bytes=64, format_char_sequence="idddddddi"
+                        )
+                        image_id = binary_image_properties[0]
+                        qvec = np.array(binary_image_properties[1:5])
+                        tvec = np.array(binary_image_properties[5:8])
+                        camera_id = binary_image_properties[8]
+                        image_name = ""
+                        current_char = read_next_bytes(fid, 1, "c")[0]
+                        while current_char != b"\x00":
+                            image_name += current_char.decode("utf-8")
+                            current_char = read_next_bytes(fid, 1, "c")[0]
+                        num_points2D = read_next_bytes(fid, num_bytes=8, format_char_sequence="Q")[0]
+                        # Skip 2D points
+                        fid.read(24 * num_points2D)
+                        images[image_id] = {
+                            'id': image_id,
+                            'qvec': qvec,
+                            'tvec': tvec,
+                            'camera_id': camera_id,
+                            'name': image_name,
+                        }
+            else:  # .txt format
+                with open(images_file, "r") as fid:
+                    while True:
+                        line = fid.readline()
+                        if not line:
+                            break
+                        line = line.strip()
+                        if len(line) > 0 and line[0] != "#":
+                            elems = line.split()
+                            image_id = int(elems[0])
+                            qvec = np.array(tuple(map(float, elems[1:5])))
+                            tvec = np.array(tuple(map(float, elems[5:8])))
+                            camera_id = int(elems[8])
+                            image_name = elems[9]
+                            # Skip the next line with 2D points
+                            fid.readline()
+                            images[image_id] = {
+                                'id': image_id,
+                                'qvec': qvec,
+                                'tvec': tvec,
+                                'camera_id': camera_id,
+                                'name': image_name,
+                            }
+
+            if len(images) == 0:
+                return None
+
+            # Get intrinsics from the first camera (assuming single camera setup)
+            first_image_id = list(images.keys())[0]
+            first_image = images[first_image_id]
+            cam = cameras[first_image['camera_id']]
+
+            # Image dimensions and intrinsics
+            w = cam['width']
+            h = cam['height']
+            params = cam['params']
+
+            # Extract intrinsics based on camera model
+            if cam['model'] in ['PINHOLE', 'OPENCV']:
+                fl_x = params[0]
+                fl_y = params[1]
+                cx = params[2]
+                cy = params[3]
+            elif cam['model'] == 'SIMPLE_PINHOLE':
+                fl_x = fl_y = params[0]
+                cx = params[1]
+                cy = params[2]
+            elif cam['model'] == 'SIMPLE_RADIAL':
+                fl_x = fl_y = params[0]
+                cx = params[1]
+                cy = params[2]
+            else:
+                # Default fallback
+                fl_x = fl_y = params[0] if len(params) > 0 else w / 2
+                cx = params[1] if len(params) > 1 else w / 2
+                cy = params[2] if len(params) > 2 else h / 2
+
+            # Build frames list (filtered to test frames only if test_frame_names provided)
+            frames = []
+            for img_id in images:
+                im = images[img_id]
+
+                # Extract frame name from image path
+                image_name = os.path.basename(im['name'])
+                frame_name = os.path.splitext(image_name)[0]  # Remove extension
+
+                # Filter to test frames only
+                if test_frame_names is not None:
+                    if frame_name not in test_frame_names:
+                        continue
+
+                # Get world-to-camera matrix from quaternion
+                rot = qvec2rotmat(im['qvec'])  # 3x3 rotation matrix
+                trans = im['tvec'].reshape(3, 1)  # 3x1 translation vector
+
+                # Construct 4x4 world-to-camera matrix
+                bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
+                w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
+
+                frames.append({
+                    'file_path': frame_name,
+                    'transform_matrix': w2c.tolist(),
+                })
+
+            if len(frames) == 0:
+                return None
+
+            return {
+                'w': w,
+                'h': h,
+                'fl_x': fl_x,
+                'fl_y': fl_y,
+                'cx': cx,
+                'cy': cy,
+                'frames': frames,
+            }
+
+        except Exception as e:
+            print(f"Warning: Failed to load COLMAP cameras from {colmap_dir}: {e}")
+            return None
+
+    def forward(
+        self,
+        pred,
+        target,
+        valid_feat_mask,
+        coord=None,
+        opacity=None,
+        quat=None,
+        scale=None,
+        scene_path=None,
+        epoch_progress=None,
+        **kwargs
+    ):
+        """
+        Args:
+            pred: Predicted features [N, D]
+            target: Target features [N, D] (not used, we use GT renders)
+            valid_feat_mask: Valid feature mask [N]
+            coord: 3D coordinates [N, 3]
+            opacity: Gaussian opacity [N, 1]
+            quat: Gaussian rotation quaternions [N, 4]
+            scale: Gaussian scale [N, 3]
+            scene_path: Path to scene directory (for loading GT renders and cameras)
+            epoch_progress: Current epoch progress [0, 1]
+
+        Returns:
+            Scalar loss value
+        """
+        import torch
+        import math
+        import os
+        import numpy as np
+        from gsplat import rasterization
+
+        device = pred.device
+
+        # Debug: Check which parameters are missing (only print once)
+        if not hasattr(self, '_debug_printed'):
+            missing = []
+            if coord is None:
+                missing.append("coord")
+            if opacity is None:
+                missing.append("opacity")
+            if quat is None:
+                missing.append("quat")
+            if scale is None:
+                missing.append("scale")
+            if scene_path is None:
+                missing.append("scene_path")
+            if missing:
+                print(f"\n[Rendered2DLoss] Missing parameters: {missing}")
+                print(f"  coord: {coord is not None}")
+                print(f"  opacity: {opacity is not None}")
+                print(f"  quat: {quat is not None}")
+                print(f"  scale: {scale is not None}")
+                print(f"  scene_path: {scene_path is not None}")
+            else:
+                print(f"\n[Rendered2DLoss] All parameters available!")
+                # Also print epoch_progress if available
+                if epoch_progress is not None:
+                    print(f"  epoch_progress: {epoch_progress:.6f}")
+                    print(f"  warmup_progress: {self.warmup_progress:.6f}")
+                    print(f"  target_progress: {self.target_progress:.6f}")
+                else:
+                    print(f"  epoch_progress: None")
+            self._debug_printed = True
+
+        # Check if all required Gaussian parameters are provided
+        if coord is None or opacity is None or quat is None or scale is None or scene_path is None:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        # Compute progressive weight: ramp up from 0 to loss_weight by target_progress
+        # DEBUG: Temporarily set weight to loss_weight (1.0) for debugging
+        weight = self.loss_weight  # TODO: restore progressive scheduling after debug
+
+        # Original progressive scheduling (disabled for debug)
+        # if epoch_progress is not None:
+        #     if epoch_progress < self.warmup_progress:
+        #         weight = 0.0
+        #     elif epoch_progress < self.target_progress:
+        #         # Linear ramp from 0 to loss_weight
+        #         # Add small epsilon to avoid weight=0 at start when warmup_progress=0
+        #         eps = 1e-6
+        #         effective_progress = max(epoch_progress, self.warmup_progress + eps)
+        #         progress = (effective_progress - self.warmup_progress) / (self.target_progress - self.warmup_progress)
+        #         weight = progress * self.loss_weight
+        #     else:
+        #         # Maintain at maximum weight
+        #         weight = self.loss_weight
+        # else:
+        #     weight = self.loss_weight
+
+        # Print when in warmup phase (only print once)
+        if weight == 0 and not hasattr(self, '_warmup_printed'):
+            print(f"\n[Rendered2DLoss] In warmup phase (weight=0)")
+            if epoch_progress is not None:
+                print(f"  epoch_progress: {epoch_progress:.6f}")
+            else:
+                print(f"  epoch_progress: None")
+            print(f"  warmup_progress: {self.warmup_progress:.6f}")
+            print(f"  Loss will activate after epoch_progress >= {self.warmup_progress:.3f}")
+            self._warmup_printed = True
+
+        if weight == 0:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        # Load GT renders and camera parameters
+        gt_renders = self._load_gt_renders(scene_path)
+        camera_params = self._load_camera_params(scene_path)
+
+        # Debug: Print loading status (only print once)
+        if not hasattr(self, '_load_debug_printed'):
+            print(f"\n[Rendered2DLoss] Loading status:")
+            if isinstance(scene_path, list):
+                print(f"  scene_path (list): {scene_path}")
+            else:
+                print(f"  scene_path: {scene_path}")
+            print(f"  GT renders loaded: {len(gt_renders)}")
+            print(f"  Camera params loaded: {'Yes' if camera_params else 'No'}")
+            if camera_params:
+                print(f"  Camera has 'frames': {'frames' in camera_params}")
+                if 'frames' in camera_params:
+                    print(f"  Number of frames: {len(camera_params['frames'])}")
+            self._load_debug_printed = True
+
+        if len(gt_renders) == 0 or 'frames' not in camera_params:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        # Only consider valid points for rendering
+        valid_mask = (valid_feat_mask > 0)
+        if valid_mask.sum() < 10:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        # Print info on first activation
+        if not hasattr(self, '_printed_init_info'):
+            import os
+            # Parse scene_path correctly for display
+            if isinstance(scene_path, list):
+                display_path = scene_path[0] if scene_path else 'unknown'
+            else:
+                display_path = scene_path
+
+            if 'gaussian_train' in display_path:
+                parts = display_path.split('gaussian_train')
+                if len(parts) >= 2:
+                    path_after = parts[1].lstrip('/')
+                    sub_parts = path_after.split('/')
+                    if len(sub_parts) >= 3:
+                        dataset = sub_parts[0]
+                        scene = sub_parts[2] if sub_parts[1] == 'train' else sub_parts[1]
+                    else:
+                        dataset = 'unknown'
+                        scene = 'unknown'
+                else:
+                    dataset = 'unknown'
+                    scene = 'unknown'
+            else:
+                dataset = 'unknown'
+                scene = 'unknown'
+
+            print(f"\n[Rendered2DLoss] Initialized:")
+            print(f"  Dataset: {dataset}, Scene: {scene}")
+            print(f"  GT renders loaded: {len(gt_renders)}")
+            print(f"  Camera params loaded: {len(camera_params.get('frames', []))} frames")
+            print(f"  Max num views: {self.max_num_views}")
+            print(f"  Warmup progress: {self.warmup_progress:.3f}, Target progress: {self.target_progress:.3f}")
+            print(f"  Loss weight: {self.loss_weight}")
+            self._printed_init_info = True
+
+        # Print per-iteration info occasionally
+        _print_counter = getattr(self, '_print_counter', 0)
+        _print_counter += 1
+        self._print_counter = _print_counter
+        if _print_counter % 100 == 1:  # Print every ~100 iterations
+            progress_pct = epoch_progress * 100 if epoch_progress is not None else 0
+            print(f"[Rendered2DLoss] progress={progress_pct:.1f}%, weight={weight:.4f}, num_gaussians={valid_mask.sum()}")
+
+        # Filter to valid Gaussians
+        means3D = coord[valid_mask]  # [M, 3]
+        pred_feat = pred[valid_mask]  # [M, D]
+        opacity_filtered = opacity[valid_mask]  # [M, 1]
+        quat_filtered = quat[valid_mask]  # [M, 4]
+        scale_filtered = scale[valid_mask]  # [M, 3]
+
+        # Get camera intrinsics
+        w = camera_params.get('w', 1296)
+        h = camera_params.get('h', 968)
+        fl_x = camera_params.get('fl_x', 1170.187988)
+        fl_y = camera_params.get('fl_y', 1170.187988)
+        cx = camera_params.get('cx', w / 2)
+        cy = camera_params.get('cy', h / 2)
+
+        # Build camera intrinsic matrix
+        K = torch.tensor([
+            [fl_x, 0, cx],
+            [0, fl_y, cy],
+            [0, 0, 1],
+        ], device=device, dtype=torch.float32)
+
+        # Limit number of views to save memory
+        num_frames = min(len(gt_renders), self.max_num_views)
+
+        # Accumulate loss over all views
+        total_loss = 0.0
+        valid_views = 0
+
+        for i in range(num_frames):
+            gt_render = gt_renders[i]
+            frame_name = gt_render['name']
+
+            # Find corresponding frame in camera_params
+            frame_idx = None
+            for j, frame in enumerate(camera_params['frames']):
+                # Extract frame name from file_path
+                file_path = frame.get('file_path', '')
+                frame_name_from_cam = os.path.basename(file_path)
+                if frame_name_from_cam == frame_name or frame_name in file_path:
+                    frame_idx = j
+                    break
+
+            if frame_idx is None:
+                continue
+
+            # Get camera extrinsics
+            transform_matrix = np.array(camera_params['frames'][frame_idx]['transform_matrix'])
+            viewmat = torch.from_numpy(transform_matrix).float().to(device)  # [4, 4]
+
+            # Prepare Gaussian parameters for gsplat
+            means = means3D  # [M, 3]
+            quats = quat_filtered  # [M, 4]
+            scales = scale_filtered  # [M, 3]
+            opacities = opacity_filtered.squeeze(-1)  # [M]
+            colors = pred_feat  # [M, D] - features to render
+
+            # Get GT render dimensions
+            gt_data = gt_render['data']  # (H_gt, W_gt, D)
+            H_gt, W_gt, D_gt = gt_data.shape
+
+            # Render predicted features using gsplat
+            try:
+                # Use gsplat.rasterization to render features
+                render_colors, render_alphas, info = rasterization(
+                    means=means,
+                    quats=quats,
+                    scales=scales,
+                    opacities=opacities,
+                    colors=colors,  # [M, D]
+                    viewmats=viewmat.unsqueeze(0),  # [1, 4, 4]
+                    Ks=K.unsqueeze(0),  # [1, 3, 3]
+                    width=W_gt,
+                    height=H_gt,
+                    packed=False,
+                    sh_degree=None,  # Use raw features, not SH
+                )
+
+                # render_colors shape: [1, H, W, D] -> [H, W, D]
+                rendered_pred = render_colors[0]  # [H, W, D]
+
+                # Get GT render as tensor
+                gt_tensor = torch.from_numpy(gt_data).to(device)  # [H, W, D]
+
+                # Create mask for valid pixels (where alpha > 0)
+                valid_pixel_mask = render_alphas[0, ..., 0] > 0.01  # [H, W]
+
+                if valid_pixel_mask.sum() < 100:
+                    continue
+
+                # Compute L1 loss on valid pixels only
+                pred_valid = rendered_pred[valid_pixel_mask]  # [N_valid, D]
+                gt_valid = gt_tensor[valid_pixel_mask]
+
+                view_loss = torch.abs(pred_valid - gt_valid).mean()
+                total_loss += view_loss
+                valid_views += 1
+
+            except Exception as e:
+                print(f"Warning: Rendering failed for {frame_name}: {e}")
+                continue
+
+        if valid_views == 0:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        # Average loss over all valid views
+        avg_loss = total_loss / valid_views
+
+        # Print loss value (similar to cosine loss)
+        final_loss = weight * avg_loss
+        print(f"rendered2d loss: {final_loss.item():.6f} (weight={weight:.4f}, views={valid_views})")
+
+        return final_loss
 
 
 @LOSSES.register_module()
 class ValidNonValidContrastiveLoss(nn.Module):
     """
     Contrastive loss between valid and non-valid Gaussians.
-    
+
     This loss encourages the model to:
     1. Make valid Gaussians' features similar to target features
     2. Make non-valid Gaussians' features different from target features
     3. Separate valid and non-valid features in the embedding space
-    
+
     Args:
         temperature: Temperature parameter for contrastive learning (default: 0.1)
         margin: Minimum margin for separating valid from non-valid (default: 0.5)
@@ -784,7 +1810,7 @@ class ValidNonValidContrastiveLoss(nn.Module):
         self.margin = margin
         self.reduction = reduction
         self.loss_weight = loss_weight
-    
+
     def forward(self, pred, target, valid_feat_mask, **kwargs):
         """
         Args:

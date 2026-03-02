@@ -41,9 +41,11 @@ from typing import Tuple, Dict, List, Optional
 
 
 # Default paths
+dataset = "lerf_ovs"
+dataset = "3DOVS"
 DATA_ROOT = "/new_data/cyf/projects/SceneSplat"
-TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/lerf_ovs/train"
-CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/lerf_ovs"
+TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/{dataset}/train"
+CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"
 OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 
 # SVD compression rank

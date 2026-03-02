@@ -814,7 +814,10 @@ class DensityInvariantTrainer(TrainerBase):
 
         # Per-scene loss tracking for debugging and visualization
         # Dictionary structure: {scene_name: {'total_loss': [], 'l1_loss': [], 'cosine_loss': [], 'iterations': []}}
+        # Tracks REAL 3D scene names (from dataset), not training scenarios
         self.per_scene_losses = {}
+        # Track all unique scene names discovered during training
+        self._all_real_scenes = set()
 
         self.logger.info("=> Building hooks ...")
         self.register_hooks(cfg.hooks)
@@ -1135,6 +1138,11 @@ class DensityInvariantTrainer(TrainerBase):
             origin_coord=input_dict.get('origin_coord'),
             name=input_dict.get('name'),
             lang_feat=lang_feat,  # Pass lang_feat for sampling
+            # Pass Gaussian parameters for Rendered2DLoss
+            opacity=input_dict.get('opacity'),
+            quat=input_dict.get('quat'),
+            scale=input_dict.get('scale'),
+            scene_path=input_dict.get('scene_path'),
         )
         sampling_time = time.time() - sampling_start
 
@@ -1324,26 +1332,22 @@ class DensityInvariantTrainer(TrainerBase):
                     print(f"  feat_max: {feat_max:.2f}, feat_mean: {feat_mean:.2f}")
                     print(f"  This may lead to numerical instability or NaN in loss computation.")
 
-                # DEBUG: Verify scaling was applied (only print once at iter 0)
-                if self.comm_info["iter"] == 0:
-                    feat_before = point_feat["feat"]
-                    print(f"\n[DEBUG IN TRAINER] Applying dim_scale in batched forward:")
-                    print(f"  feat_before mean: {feat_before.mean():.6f}, std: {feat_before.std():.6f}")
-                    print(f"  feat_after mean: {batched_features.mean():.6f}, std: {batched_features.std():.6f}")
-                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
-                    print(f"  Reduction ratio: {batched_features.mean().item() / (feat_before.mean().item() + 1e-8):.4f}")
-
             # Clean up large intermediate tensors to free memory before loss computation
             del point, point_feat, batched_input
 
             # Now compute loss for each scenario separately
             # (Each scenario has its own lang_feat target)
 
-            # Collect all scene names for consistent loss tracking across all scenes
-            all_scene_names = [s.get('scenario', f'scene_{i}') for i, s in enumerate(scenario_samples)]
+            # Get REAL 3D scene name from input_dict (e.g., "figurines", "kitchen", etc.)
+            # This is the actual scene name from the dataset, NOT the training scenario (dense/single)
+            real_scene_name = scene_name  # Already extracted above at line 1150-1155
 
-            # Track current iteration's losses for each scene being trained
-            current_iteration_losses = {}  # {scene_name: {'total': float, 'l1': float, 'cos': float}}
+            # Track all unique real scene names discovered during training
+            self._all_real_scenes.add(real_scene_name)
+
+            # Aggregate losses from all scenarios for this real scene
+            # We'll average the losses across scenarios for the final loss value
+            scenario_losses_for_real_scene = {}  # {scenario: {'total': float, 'l1': float, 'cos': float}}
 
             start_idx = 0
             for i, sample_dict in enumerate(scenario_samples):
@@ -1384,8 +1388,18 @@ class DensityInvariantTrainer(TrainerBase):
                 if 'labels' in sample_dict:
                     scenario_input['segment'] = sample_dict['labels']
 
-                # Get scene name for tracking
-                scene_name = scenario_input.get('scenario', all_scene_names[i])
+                # Add Gaussian parameters for Rendered2DLoss
+                if 'opacity' in sample_dict:
+                    scenario_input['opacity'] = sample_dict['opacity']
+                if 'quat' in sample_dict:
+                    scenario_input['quat'] = sample_dict['quat']
+                if 'scale' in sample_dict:
+                    scenario_input['scale'] = sample_dict['scale']
+                if 'scene_path' in sample_dict:
+                    scenario_input['scene_path'] = sample_dict['scene_path']
+
+                # Get scenario name for debug/info
+                scenario_name = sample_dict.get('scenario', f'scenario_{i}')
 
                 # Compute loss using criteria
                 with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
@@ -1398,105 +1412,84 @@ class DensityInvariantTrainer(TrainerBase):
                     segment = scenario_input.get("segment")
                     lang_feat = scenario_input.get('lang_feat')
 
-                    # VALIDATION: Verify target (lang_feat) correctness before loss computation
-                    if self.comm_info["iter"] == 0 and i == 0:
-                        print(f"\n[VALIDATION] Target Correctness Check - Scenario {i} (batched mode):")
-                        print(f"  pred (scenario_feat) shape: {scenario_feat.shape}")
-                        print(f"  target (lang_feat) shape: {lang_feat.shape if lang_feat is not None else 'None'}")
-                        print(f"  valid_feat_mask shape: {scenario_input['valid_feat_mask'].shape}")
-
-                        # Check learnable dim_scale parameters
-                        if hasattr(self.model, 'module'):
-                            dim_scale = self.model.module.dim_scale
-                        else:
-                            dim_scale = self.model.dim_scale
-                        print(f"\n  [LEARNABLE] dim_scale parameters:")
-                        print(f"    dim[0]: {dim_scale[0].item():.4f} (init=1.0, DC component)")
-                        print(f"    dim[1]: {dim_scale[1].item():.4f} (init=0.3)")
-                        print(f"    dim[2]: {dim_scale[2].item():.4f}")
-                        print(f"    dim[3]: {dim_scale[3].item():.4f}")
-                        print(f"    mean(all): {dim_scale.mean().item():.4f}")
-
-                        # DEBUG: Check if scaling was actually applied to scenario_feat
-                        # If dim_scale is working, we should see much smaller pred values
-                        print(f"\n  [DEBUG] Checking if dim_scale was applied:")
-                        print(f"    scenario_feat (after scaling) first 3 values: {scenario_feat[0, :3].detach().cpu().numpy()}")
-                        # Expected: if dim_scale=[0.1, 0.5, 0.5], values should be ~0.1x, 0.5x smaller
-
-                        if lang_feat is not None:
-                            # Check 1: NaN/Inf in target
-                            has_nan = torch.isnan(lang_feat).any().item()
-                            has_inf = torch.isinf(lang_feat).any().item()
-                            print(f"  Target has NaN: {has_nan}, has Inf: {has_inf}")
-
-                            # Check 2: Target scale statistics
-                            print(f"  Target statistics:")
-                            print(f"    mean: {lang_feat.mean().item():.6f}, std: {lang_feat.std().item():.6f}")
-                            print(f"    min: {lang_feat.min().item():.6f}, max: {lang_feat.max().item():.6f}")
-
-                            # Check 3: Pred statistics for comparison
-                            print(f"  Pred statistics:")
-                            print(f"    mean: {scenario_feat.mean().item():.6f}, std: {scenario_feat.std().item():.6f}")
-                            print(f"    min: {scenario_feat.min().item():.6f}, max: {scenario_feat.max().item():.6f}")
-
-                            # Check 4: Scale difference (important for convergence)
-                            target_scale = lang_feat.abs().mean().item()
-                            pred_scale = scenario_feat.abs().mean().item()
-                            scale_ratio = pred_scale / (target_scale + 1e-8)
-                            print(f"  Scale ratio (pred/target): {scale_ratio:.4f}")
-                            if scale_ratio > 100 or scale_ratio < 0.01:
-                                print(f"    WARNING: Large scale mismatch! This may prevent convergence.")
-
-                            # Check if scaling is working: if dim_scale is applied with mean=0.475,
-                            # and before scaling mean≈0.055, after scaling should be ≈0.026
-                            # But we see 0.0546, which means NO scaling was applied!
-
-                            # Check 5: point_to_grid validity
-                            point_to_grid = sample_dict.get('point_to_grid')
-                            if point_to_grid is not None:
-                                print(f"  point_to_grid range: [{point_to_grid.min()}, {point_to_grid.max()}]")
-                                # Check if indices match lang_feat length
-                                if point_to_grid.shape[0] != lang_feat.shape[0]:
-                                    print(f"    ERROR: point_to_grid length {point_to_grid.shape[0]} != lang_feat length {lang_feat.shape[0]}")
-                                else:
-                                    print(f"    ✓ point_to_grid length matches lang_feat")
-
-                            # Check 6: Valid mask coverage
-                            valid_mask = scenario_input['valid_feat_mask']
-                            valid_ratio = valid_mask.float().mean().item()
-                            print(f"  Valid feat mask coverage: {valid_ratio:.2%}")
-                            if valid_ratio < 0.5:
-                                print(f"    WARNING: Less than 50% of features are valid!")
-
-                            # Check 7: Per-dimension statistics (for 16-dim SVD)
-                            if lang_feat.shape[1] == 16:
-                                print(f"  Per-dimension target stats:")
-                                for dim in range(min(4, 16)):  # Show first 4 dims
-                                    dim_mean = lang_feat[:, dim].mean().item()
-                                    dim_std = lang_feat[:, dim].std().item()
-                                    print(f"    dim[{dim}]: mean={dim_mean:.4f}, std={dim_std:.4f}")
+                    # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
+                    criteria_kwargs = {
+                        'valid_feat_mask': scenario_input['valid_feat_mask'],
+                        'segment': segment,
+                        'epoch_progress': epoch_progress,
+                    }
+                    # Add optional parameters for Rendered2DLoss
+                    if 'coord' in scenario_input:
+                        criteria_kwargs['coord'] = scenario_input['coord']
+                    if 'opacity' in scenario_input:
+                        criteria_kwargs['opacity'] = scenario_input['opacity']
+                    if 'quat' in scenario_input:
+                        criteria_kwargs['quat'] = scenario_input['quat']
+                    if 'scale' in scenario_input:
+                        criteria_kwargs['scale'] = scenario_input['scale']
+                    if 'scene_path' in scenario_input:
+                        criteria_kwargs['scene_path'] = scenario_input['scene_path']
 
                     # Compute loss (returns tuple when verbose_losses=True)
                     loss_result = criteria(
                         scenario_feat,
                         lang_feat,  # Use raw features, not normalized
-                        valid_feat_mask=scenario_input['valid_feat_mask'],
-                        segment=segment,
-                        epoch_progress=epoch_progress,
+                        **criteria_kwargs,
                     )
 
-                    # Handle both return formats: (loss, loss_dict) or just loss
+                    # Handle return formats:
+                    # - (loss, loss_dict) or (loss, loss_dict, per_dim_losses, per_dim_weights) when verbose_losses=True
+                    # - just loss when verbose_losses=False
                     if isinstance(loss_result, tuple):
-                        loss, loss_dict = loss_result
+                        loss = loss_result[0]
+                        if len(loss_result) == 2:
+                            loss_dict = loss_result[1]
+                            per_dim_losses = None
+                            per_dim_weights = None
+                        elif len(loss_result) == 4:
+                            loss_dict = loss_result[1]
+                            per_dim_losses = loss_result[2]
+                            per_dim_weights = loss_result[3]
+                        else:
+                            loss_dict = None
+                            per_dim_losses = None
+                            per_dim_weights = None
                     else:
                         loss = loss_result
                         loss_dict = None
+                        per_dim_losses = None
+                        per_dim_weights = None
 
-                    # Store this scene's loss for current iteration
-                    current_iteration_losses[scene_name] = {
-                        'total': loss.item(),
+                    # DEBUG: Verify loss calculation consistency (first iteration of first scenario)
+                    if self.comm_info["iter"] == 0 and i == 0:
+                        print(f"\n[DEBUG] Loss calculation verification - Scenario: {scenario_name}")
+                        print(f"  loss_result type: {type(loss_result)}")
+                        print(f"  loss (total): {loss.item():.6f}")
+                        if loss_dict:
+                            l1_val = loss_dict.get('l1_loss', 0.0)
+                            cos_val = loss_dict.get('cos_loss', 0.0)
+                            print(f"  l1_loss: {l1_val:.6f}")
+                            print(f"  cos_loss: {cos_val:.6f}")
+                            print(f"  l1 + cos: {l1_val + cos_val:.6f}")
+                            print(f"  Match (|l1+cos - total| < 0.01): {abs((l1_val + cos_val) - loss.item()) < 0.01}")
+                            # Check if loss weights are applied correctly
+                            # Expected: Total = L1_raw*1.0 + Cos_raw*0.5
+                            # If loss_dict already contains weighted values, then Total should equal L1 + Cos
+                        else:
+                            print(f"  WARNING: loss_dict is None! verbose_losses may be disabled!")
+                        if per_dim_losses and 'per_dim_l1' in per_dim_losses:
+                            print(f"  Per-dimension L1 losses available for visualization")
+
+                    # Store this scenario's loss for current iteration (will be averaged later)
+                    # NOTE: This is only this scenario's individual loss, NOT the total training loss
+                    # The actual total_loss used for backprop is computed later (sum of all scenarios + consistency)
+                    scenario_losses_for_real_scene[scenario_name] = {
+                        'total': loss.item(),  # Single scenario loss
                         'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
                         'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
+                        'rendered2d': loss_dict.get('rendered2d_loss', 0.0) if loss_dict else 0.0,
+                        'per_dim_l1': per_dim_losses.get('per_dim_l1') if per_dim_losses else None,
+                        'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
                     }
 
                 output = dict(loss=loss, feat=scenario_feat)
@@ -1508,10 +1501,10 @@ class DensityInvariantTrainer(TrainerBase):
 
                 start_idx = end_idx
 
-            # UNIFIED LOSS TRACKING: Record losses for ALL scenes at each iteration
-            # For the scene(s) trained this iteration: use newly computed loss
+            # UNIFIED LOSS TRACKING: Record losses for ALL real scenes at each iteration
+            # For the scene trained this iteration: use the newly computed loss (averaged across scenarios)
             # For other scenes: repeat the last recorded loss value
-            # This ensures all scenes have aligned loss curves for comparison
+            # This ensures all scenes have aligned loss curves for comparison and averaging
             #
             # CRITICAL FIX: Calculate TRUE global iteration that continues across epochs
             # self.comm_info["iter"] resets to 0 at the start of each epoch
@@ -1520,39 +1513,89 @@ class DensityInvariantTrainer(TrainerBase):
             iters_per_epoch = len(self.train_loader)
             true_global_iter = self.epoch * iters_per_epoch + local_iter
 
-            for scene_name in all_scene_names:
+            # Aggregate losses from all scenarios for the current real scene
+            # Average the losses across scenarios (dense, single) for a single value per real scene
+            if scenario_losses_for_real_scene:
+                avg_total = sum(v['total'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+                avg_l1 = sum(v['l1'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+                avg_cos = sum(v['cos'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+                avg_rendered2d = sum(v['rendered2d'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+
+                # Aggregate per-dimension L1 losses (average across scenarios)
+                per_dim_l1_list = [v['per_dim_l1'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1'] is not None]
+                if per_dim_l1_list:
+                    # Stack and average per-dimension losses
+                    avg_per_dim_l1 = torch.stack(per_dim_l1_list).mean(dim=0)  # [D]
+                else:
+                    avg_per_dim_l1 = None
+
+                # Aggregate per-dimension weights (take first scenario's weights, as they should be the same)
+                per_dim_weights_list = [v['per_dim_l1_weights'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1_weights'] is not None]
+                avg_per_dim_l1_weights = per_dim_weights_list[0] if per_dim_weights_list else None
+            else:
+                avg_total = avg_l1 = avg_cos = avg_rendered2d = 0.0
+                avg_per_dim_l1 = None
+                avg_per_dim_l1_weights = None
+
+            # Update loss tracking for ALL known real scenes
+            # For the current scene being trained: append the averaged loss
+            # For other scenes: append their last loss value (repeat)
+            for scene_name in self._all_real_scenes:
                 # Initialize loss tracking dict for this scene if needed
                 if scene_name not in self.per_scene_losses:
                     self.per_scene_losses[scene_name] = {
                         'total_loss': [],
                         'l1_loss': [],
                         'cos_loss': [],
+                        'rendered2d_loss': [],
+                        'per_dim_l1': [],  # List of tensors, each [D]
+                        'per_dim_l1_weights': [],  # List of tensors, each [D]
                         'iterations': [],
                         'epochs': [],
                     }
 
+                # Migrate old format (if per_dim_l1 keys are missing, add them)
+                if 'per_dim_l1' not in self.per_scene_losses[scene_name]:
+                    self.per_scene_losses[scene_name]['per_dim_l1'] = []
+                if 'per_dim_l1_weights' not in self.per_scene_losses[scene_name]:
+                    self.per_scene_losses[scene_name]['per_dim_l1_weights'] = []
+                if 'rendered2d_loss' not in self.per_scene_losses[scene_name]:
+                    self.per_scene_losses[scene_name]['rendered2d_loss'] = []
+
                 # Get the loss values for this iteration
-                if scene_name in current_iteration_losses:
-                    # This scene was trained this iteration - use new values
-                    total_loss = current_iteration_losses[scene_name]['total']
-                    l1_loss = current_iteration_losses[scene_name]['l1']
-                    cos_loss = current_iteration_losses[scene_name]['cos']
+                if scene_name == real_scene_name:
+                    # This is the scene being trained this iteration - use new averaged values
+                    total_loss = avg_total
+                    l1_loss = avg_l1
+                    cos_loss = avg_cos
+                    rendered2d_loss = avg_rendered2d
+                    per_dim_l1 = avg_per_dim_l1
+                    per_dim_l1_weights = avg_per_dim_l1_weights
                 else:
                     # This scene was NOT trained this iteration - repeat last values
                     if self.per_scene_losses[scene_name]['total_loss']:
                         total_loss = self.per_scene_losses[scene_name]['total_loss'][-1]
                         l1_loss = self.per_scene_losses[scene_name]['l1_loss'][-1]
                         cos_loss = self.per_scene_losses[scene_name]['cos_loss'][-1]
+                        rendered2d_loss = self.per_scene_losses[scene_name]['rendered2d_loss'][-1] if self.per_scene_losses[scene_name]['rendered2d_loss'] else 0.0
+                        per_dim_l1 = self.per_scene_losses[scene_name]['per_dim_l1'][-1] if self.per_scene_losses[scene_name]['per_dim_l1'] else None
+                        per_dim_l1_weights = self.per_scene_losses[scene_name]['per_dim_l1_weights'][-1] if self.per_scene_losses[scene_name]['per_dim_l1_weights'] else None
                     else:
                         # No previous loss - this shouldn't happen, but handle gracefully
                         total_loss = 0.0
                         l1_loss = 0.0
                         cos_loss = 0.0
+                        rendered2d_loss = 0.0
+                        per_dim_l1 = None
+                        per_dim_l1_weights = None
 
                 # Record the loss for this scene at this iteration
                 self.per_scene_losses[scene_name]['total_loss'].append(total_loss)
                 self.per_scene_losses[scene_name]['l1_loss'].append(l1_loss)
                 self.per_scene_losses[scene_name]['cos_loss'].append(cos_loss)
+                self.per_scene_losses[scene_name]['rendered2d_loss'].append(rendered2d_loss)
+                self.per_scene_losses[scene_name]['per_dim_l1'].append(per_dim_l1)
+                self.per_scene_losses[scene_name]['per_dim_l1_weights'].append(per_dim_l1_weights)
                 self.per_scene_losses[scene_name]['iterations'].append(true_global_iter)
                 self.per_scene_losses[scene_name]['epochs'].append(self.epoch)
 

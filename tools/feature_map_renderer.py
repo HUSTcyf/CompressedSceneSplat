@@ -82,7 +82,7 @@ def render_set(model_path, name, iteration, source_path, views, gaussians, pipel
                 reduced_rendering = render_normalized.reshape(H, W, 3)
 
                 rendering_vis = torch.tensor(reduced_rendering).permute(2, 0, 1)
-                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name + ".jpg"))
+                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name.split('.')[0] + ".jpg"))
             else:
                 # Same dimension: use combined PCA
                 gt = gt.reshape(gt_feat_dim, -1).T.cpu().numpy()
@@ -100,8 +100,8 @@ def render_set(model_path, name, iteration, source_path, views, gaussians, pipel
                 rendering_vis = torch.tensor(reduced_rendering).permute(2, 0, 1)
                 gt_vis = torch.tensor(reduced_gt).permute(2, 0, 1)
 
-                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name + ".jpg"))
-                torchvision.utils.save_image(gt_vis, os.path.join(gts_path, view.image_name + ".jpg"))
+                torchvision.utils.save_image(rendering_vis, os.path.join(render_path, view.image_name.split('.')[0] + ".jpg"))
+                torchvision.utils.save_image(gt_vis, os.path.join(gts_path, view.image_name.split('.')[0] + ".jpg"))
 
 def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, feature_level : int, src_dim: int = -1, use_siglip_sam2_format: bool = False, lang_checkpoint_path: str = "", visualize: bool = False):
 

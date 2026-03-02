@@ -87,7 +87,11 @@ model = dict(
         dec_attn=(False, False, False, True),
         dec_rope_freq=(100.0, 100.0, 100.0, 100.0),
         # Common settings
-        mlp_ratio=4,
+        # REDUCED mlp_ratio from 4 to 2 for stability
+        # - Prevents gradient explosion in low-dimensional decoder stages (e.g., dec0 with 16-dim)
+        # - Reduces parameter count by ~50% in MLP layers
+        # - Maintains expressiveness while improving training stability
+        mlp_ratio=2,
         qkv_bias=True,
         qk_scale=None,
         attn_drop=0.0,
@@ -99,30 +103,61 @@ model = dict(
     ),
     # Language pretraining losses for compressed features
     #
-    # STANDARD REGRESSION LOSSES for 16-dimensional SVD features
+    # PER-DIMENSION WEIGHTED REGRESSION LOSSES for 16-dimensional SVD features
     # ------------------------------------------------------------------
-    # Using standard L1 + Cosine similarity losses:
-    # - L1Loss: Element-wise absolute difference (optimizes magnitude)
-    # - CosineSimilarity: Angular similarity (optimizes direction)
+    # FIX: Use data-driven variance-based weighting to handle skewed SVD distribution
     #
-    # This combination provides:
-    # - Magnitude matching via L1
-    # - Directional alignment via Cosine
-    # - Simple, stable training without complex weighting schemes
+    # Two weighting strategies available:
+    #   1. "static": Exponential decay based on dimension index (d[0] > d[1] > ... > d[15])
+    #   2. "variance": Data-driven - higher variance = higher weight (DEFAULT)
+    #
+    # Variance-based weighting (current config):
+    #   - Automatically computes per-dimension variance from GT data
+    #   - Uses EMA (exponential moving average) for stable estimates
+    #   - Higher variance = more information = higher weight
+    #   - Adapts to different datasets automatically
+    #
+    # Weight configuration:
+    #   - base_weight=1.0: Maximum weight for highest-variance dimension
+    #   - min_weight=0.1: Minimum weight (prevents zero gradients)
+    #   - variance_momentum=0.99: EMA smoothing for variance estimation
+    #
+    # Expected behavior:
+    #   - Early SVD dimensions (d[0]-d[4]) typically have high variance → high weight
+    #   - Later SVD dimensions (d[10]-d[15]) typically have low variance → low weight
+    #   - But the actual weights are determined by DATA, not by assumption
     #
     criteria=[
-        # L1Loss: PRIMARY loss for element-wise feature matching
+        # SVDWeightedL1Loss: Variance-based dimension weighting
         dict(
-            type="L1Loss",
+            type="SVDWeightedL1Loss",
+            loss_weight=0.3,  # Overall loss weight
+            reduction="mean",
+            base_weight=1.0,  # Maximum weight
+            min_weight=0.1,  # Minimum weight (prevents zero gradients)
+            weight_strategy="variance",  # "variance" (data-driven) or "static" (exponential decay)
+            variance_momentum=0.99,  # EMA momentum for stable variance estimation
+        ),
+
+        # CosineSimilarity: Focus on directional alignment (not weighted)
+        dict(
+            type="CosineSimilarity",
             loss_weight=1.0,
             reduction="mean",
         ),
 
-        # CosineSimilarity: SECONDARY loss for angular alignment
+        # Rendered2DLoss: Spatial consistency via Gaussian splatting rendering
+        # Enforces spatially consistent predictions by comparing rendered 2D features
+        # Uses gsplat rasterization with pre-rendered GT feature maps
+        # Weight schedule: ramps up from 0 to 1.0 by 50% training progress
         dict(
-            type="CosineSimilarity",
-            loss_weight=0.5,
-            reduction="mean",
+            type="Rendered2DLoss",
+            loss_weight=1.0,  # Maximum weight
+            gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
+            datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
+            warmup_progress=0.0,  # Start immediately (no warmup)
+            target_progress=0.5,  # Reach max weight at 50% training progress
+            max_num_views=10,  # Use up to 10 views per scene to save memory
         ),
 
         # AggregatedContrastiveLoss: DISABLED for 16-dim training
@@ -179,21 +214,85 @@ density_invariant = dict(
 eval_epoch = 20  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 
-# Optimizer settings with gradient clipping for stability
-optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
+# ============================================================================
+# Optimizer settings with mode-collapse prevention
+# ============================================================================
+# Base optimizer configuration
+optimizer = dict(type="AdamW", lr=0.0003, weight_decay=0.05)
+
 # Gradient clipping (configured separately, used in trainer)
 clip_grad = 1.0
+
+# Scheduler configuration
 scheduler = dict(
     type="OneCycleLR",
-    max_lr=[0.001, 0.0001, 0.0001],  # dim_scale lr increased to 0.0001
-    pct_start=0.05,
+    # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dim_scale, dec0, dec0.mlp, dec0.fc]
+    max_lr=[0.001, 0.001, 0.0001, 0.001, 0.00005, 0.00002, 0.00001],
+    pct_start=0.1,
     anneal_strategy="cos",
     div_factor=10.0,
     final_div_factor=1000.0,
 )
+
+# ============================================================================
+# Layer-specific parameter groups for mode-collapse prevention
+# ============================================================================
+# Based on mode collapse analysis: dec0/block1/fc1 has the highest weight norms
+# (L2 norm max=6.87) causing the collapse chain.
+#
+# Strategy: Apply higher weight decay and lower learning rate to the problematic
+# decoder MLP layers to prevent weight explosion while maintaining normal
+# training for other parts of the model.
+#
+# Parameter groups are matched by keyword in parameter names (prefix matching):
+# - "block": Matches all encoder/decoder transformer blocks (default group)
+# - "dim_scale": Learnable dimension-wise scaling factor
+# - "dec0.block1.mlp": The problematic decoder stage 0, block 1 MLP layers
+# - "dec0.block1.mlp.0.fc": Specifically targets fc1/fc2 in the MLP
+#
+# Layer naming in LitePT:
+#   backbone.dec.dec{s}.block{i}.mlp.{j}.fc{k}.{weight|bias}
+#   where: s=stage (3,2,1,0), i=block_index (0,1), j=mlp_index (0), k=fc_layer (1,2)
+#   Problematic layers: dec0.block1.mlp.0.fc1, dec0.block1.mlp.0.fc2
+# ============================================================================
 param_dicts = [
-    dict(keyword="block", lr=0.001),
-    dict(keyword="dim_scale", lr=0.0001),  # dim_scale lr increased to 0.0001 (same as block)
+    # Group 1: Encoder transformer blocks
+    # Keep original learning rate for encoder (features extraction is stable)
+    dict(keyword="enc.block", lr=0.001, weight_decay=0.05),
+
+    # Group 2: Decoder transformer blocks (higher stages: dec3, dec2, dec1)
+    # Reduced learning rate for decoder blocks to prevent collapse
+    dict(keyword="dec.block", lr=0.0001, weight_decay=0.05),
+
+    # Group 3: Dimension-wise scaling (for SVD feature magnitude compensation)
+    dict(keyword="dim_scale", lr=0.001, weight_decay=0.05),
+
+    # Group 4: Final decoder stage (dec4/s=0 in code, outputs 16-dim features)
+    # This is the bottleneck stage with extreme gradient amplification
+    # Channels: 126→64→32→16, causing 8× gradient amplification
+    dict(
+        keyword="dec0",  # Matches all layers in final decoder stage (s=0)
+        lr=0.00005,  # 95% lower than encoder block lr
+        weight_decay=0.15,  # 3× higher weight decay for regularization
+    ),
+
+    # Group 5: dec0.block1 MLP (specific problematic layer)
+    # The MLP with mlp_ratio=2 on 16-dim features: 16→32→16 (reduced from 16→64→16)
+    # Lower expansion ratio reduces gradient amplification while maintaining capacity
+    dict(
+        keyword="dec0.block1.mlp",
+        lr=0.00002,  # 98% lower than encoder block lr
+        weight_decay=0.2,  # 4× higher weight decay
+    ),
+
+    # Group 6: Specifically target fc1/fc2 linear layers in dec0.block1.mlp
+    # These are the layers where weight explosion was observed (L2 norm max=6.87)
+    # fc1: [32,16], fc2: [16,32] - gradient amplification reduced due to lower mlp_ratio
+    dict(
+        keyword="dec0.block1.mlp.0.fc",
+        lr=0.00001,  # 99% lower than encoder block lr (minimum viable)
+        weight_decay=0.3,  # 6× higher weight decay for strongest regularization
+    ),
 ]
 
 # ============================================================================
@@ -264,11 +363,12 @@ data = dict(
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
                     # Collect features - grid_coord is required by LitePT's GridPooling
-                    # Also collect name and scene_path for SVD file loading
+                    # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
                     dict(
                         type="Collect",
-                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
-                        feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
+                               "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
+                        feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels for model input
                     ),
                 ],
                 test_mode=False,
@@ -324,10 +424,11 @@ data = dict(
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
                     # Collect features - grid_coord is required by LitePT's GridPooling
-                    # Also collect name and scene_path for SVD file loading
+                    # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
                     dict(
                         type="Collect",
-                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
+                               "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
                         feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
                     ),
                 ],
@@ -357,10 +458,10 @@ data = dict(
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
             # grid_coord is required by LitePT's GridPooling
-            # Also collect name and scene_path for SVD file loading
+            # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path"),
+                keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "opacity", "quat", "scale"),
                 feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
             ),
         ],
@@ -401,7 +502,8 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+                    keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
+                           "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
                     feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
                 ),
             ],

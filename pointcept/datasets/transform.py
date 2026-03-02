@@ -1585,6 +1585,14 @@ class GridSample(object):
                         data_dict[key] = point_to_grid_original[idx_unique]
                     else:
                         data_dict[key] = data_dict[key][idx_unique]
+
+            # Preserve non-array metadata keys (like scene_path, name) that are not in self.keys
+            metadata_keys_to_preserve = ["scene_path", "name", "dataset"]
+            for key in metadata_keys_to_preserve:
+                if key in data_dict and key not in self.keys:
+                    # Keep metadata as-is (not subsampled since it's not per-point data)
+                    pass  # Already in data_dict, no action needed
+
             return data_dict
 
         elif self.mode == "test":  # test mode

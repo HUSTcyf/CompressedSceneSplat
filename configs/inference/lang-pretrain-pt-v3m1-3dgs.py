@@ -79,6 +79,8 @@ collect_keys_test = (
 
 inference = dict(
     transform=[
+        # FilterCoordOutliers is applied in load_scene_data() before transforms
+        # This allows proper expansion of features back to original size
         dict(type="CenterShift", apply_z=True),
         dict(type="NormalizeColor"),
         dict(

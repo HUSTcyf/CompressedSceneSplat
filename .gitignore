@@ -22,6 +22,7 @@ outputs/
 Dockerfile
 .pre-commit-config.yaml
 
+eval_results/
 gaussian_results/
 gaussian_train/
 grid_sim/

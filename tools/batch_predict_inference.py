@@ -453,10 +453,15 @@ class BatchPredictorWithInference:
             data_dict[key] = np.load(file_path)
 
         # Handle SVD-compressed language features
-        # Check if config specifies SVD rank and compressed file exists
+        # Only load SVD features when using LitePT model, NOT for original PT-v3m1
         cfg = self.inference.cfg
         svd_rank = getattr(cfg, 'svd_rank', None)
-        if svd_rank is not None and 'lang_feat' in data_dict:
+        model_type = cfg.model.get('backbone', {}).get('type', '')
+
+        # Only load SVD-compressed features for LitePT models (not PT-v3m1)
+        is_litept = 'litept' in model_type.lower()
+
+        if svd_rank is not None and 'lang_feat' in data_dict and is_litept:
             svd_file = scene_path / f"lang_feat_grid_svd_r{svd_rank}.npz"
             if svd_file.exists():
                 print(f"Loading SVD-{svd_rank} compressed lang_feat from {svd_file}")
@@ -474,9 +479,15 @@ class BatchPredictorWithInference:
                     print(f"  Loaded compressed features: {point_lang_feat.shape}")
                 except Exception as e:
                     print(f"  Warning: Failed to load SVD file: {e}")
+            else:
+                print(f"Warning: SVD rank {svd_rank} configured but file not found: {svd_file}")
+                print(f"  Using original lang_feat.npy instead")
+        elif svd_rank is not None and 'lang_feat' in data_dict and not is_litept:
+            print(f"Note: Using original PT-v3m1 model, ignoring SVD config (using full 768-dim features)")
 
         # Filter coordinate outliers to prevent PointOctree depth overflow
-        # This is the same logic as FilterCoordOutliers transform
+        # This filtering happens BEFORE the transform pipeline
+        # The transform pipeline does NOT include FilterCoordOutliers to avoid duplicate filtering
         if "coord" in data_dict:
             coord = data_dict["coord"]
             n_points = coord.shape[0]
@@ -499,7 +510,7 @@ class BatchPredictorWithInference:
                       f"y=[{coord[:, 1].min():.2f}, {coord[:, 1].max():.2f}], "
                       f"z=[{coord[:, 2].min():.2f}, {coord[:, 2].max():.2f}]")
 
-                # Store original point count and filtered indices
+                # Store original point count and filtered indices for expansion
                 data_dict["_n_original_points_before_filter"] = n_points
                 data_dict["_filtered_out_indices"] = np.where(~mask)[0]
 

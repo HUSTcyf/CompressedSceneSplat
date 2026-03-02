@@ -620,6 +620,7 @@ class PerSceneLossVisualizer(HookBase):
         self.save_at_end = save_at_end
         # Accumulated loss history (persists across epochs)
         self._accumulated_losses = {}
+        self._scene_epoch_iter_counts = {}
 
     def _load_accumulated_losses(self):
         """Load accumulated loss history from previous runs."""
@@ -685,6 +686,7 @@ class PerSceneLossVisualizer(HookBase):
                 'total_loss': list(new_loss_data['total_loss']),
                 'l1_loss': list(new_loss_data.get('l1_loss', [])),
                 'cos_loss': list(new_loss_data.get('cos_loss', [])),
+                'rendered2d_loss': list(new_loss_data.get('rendered2d_loss', [])),
                 'iterations': list(new_loss_data['iterations']),  # Already global!
                 'epochs': list(new_loss_data['epochs']),  # Already set by trainer!
             }
@@ -702,6 +704,8 @@ class PerSceneLossVisualizer(HookBase):
                         accumulated['l1_loss'].append(new_loss_data['l1_loss'][i])
                     if new_loss_data.get('cos_loss'):
                         accumulated['cos_loss'].append(new_loss_data['cos_loss'][i])
+                    if new_loss_data.get('rendered2d_loss'):
+                        accumulated['rendered2d_loss'].append(new_loss_data['rendered2d_loss'][i])
                     existing_iters.add(global_iter)
 
     def after_epoch(self):
@@ -739,12 +743,48 @@ class PerSceneLossVisualizer(HookBase):
         if self.save_at_end:
             self._generate_plots("final")
 
+    def _verify_loss_data_consistency(self):
+        """Verify that loss data is consistent: Total should equal L1 + Cos (approximately)."""
+        import numpy as np
+
+        for scene_name, loss_data in self._accumulated_losses.items():
+            total = np.array(loss_data['total_loss'])
+            l1 = np.array(loss_data.get('l1_loss', []))
+            cos = np.array(loss_data.get('cos_loss', []))
+
+            if len(l1) > 0 and len(cos) > 0:
+                # Check consistency for first 10 points
+                inconsistent_count = 0
+                for i in range(min(10, len(total))):
+                    expected = l1[i] + cos[i]
+                    actual = total[i]
+                    if abs(expected - actual) > 0.01 and actual > 0:  # Allow small numerical errors
+                        inconsistent_count += 1
+
+                if inconsistent_count > 0:
+                    self.trainer.logger.warning(
+                        f"[PerSceneLossVisualizer] Scene '{scene_name}': "
+                        f"{inconsistent_count}/10 data points have Total != L1 + Cos"
+                    )
+                    # Print first 5 points for debugging
+                    for i in range(min(5, len(total))):
+                        expected = l1[i] + cos[i] if i < len(l1) and i < len(cos) else None
+                        if expected is not None:
+                            self.trainer.logger.info(
+                                f"  Point {i}: Total={total[i]:.6f}, L1={l1[i]:.6f}, "
+                                f"Cos={cos[i]:.6f}, L1+Cos={expected:.6f}, "
+                                f"Diff={expected-total[i]:.6f}"
+                            )
+
     def _generate_plots(self, suffix):
         """Generate and save loss curves with given suffix."""
         # Check if trainer has per_scene_losses
         if not hasattr(self.trainer, 'per_scene_losses') or not self.trainer.per_scene_losses:
             self.trainer.logger.info("[PerSceneLossVisualizer] No per-scene losses tracked, skipping visualization.")
             return
+
+        # DEBUG: Verify loss data consistency before plotting
+        self._verify_loss_data_consistency()
 
         try:
             import matplotlib
@@ -786,6 +826,7 @@ class PerSceneLossVisualizer(HookBase):
                     'total_loss': [loss_data['total_loss'][-1]],
                     'l1_loss': [loss_data['l1_loss'][-1]],
                     'cos_loss': [loss_data['cos_loss'][-1]],
+                    'rendered2d_loss': [loss_data.get('rendered2d_loss', [0.0])[-1]] if loss_data.get('rendered2d_loss') else [0.0],
                     'iterations': [loss_data['iterations'][-1]],
                     'epochs': [loss_data['epochs'][-1]],
                 }
@@ -819,13 +860,49 @@ class PerSceneLossVisualizer(HookBase):
         epochs = np.array(loss_data['epochs'])
         total_loss = np.array(loss_data['total_loss'])
 
+        # DEBUG: Check data consistency before plotting
+        if 'l1_loss' in loss_data and len(loss_data['l1_loss']) > 0:
+            l1_loss = np.array(loss_data['l1_loss'])
+            cos_loss = np.array(loss_data.get('cos_loss', []))
+
+            # Check if lengths match
+            if len(total_loss) != len(l1_loss) or len(total_loss) != len(cos_loss):
+                self.trainer.logger.warning(
+                    f"[PerSceneLossVisualizer] Scene '{scene_name}': "
+                    f"Data length mismatch! total={len(total_loss)}, l1={len(l1_loss)}, cos={len(cos_loss)}"
+                )
+
+            # Check first 10 points for consistency
+            mismatch_count = 0
+            for i in range(min(10, len(total_loss), len(l1_loss), len(cos_loss))):
+                expected = l1_loss[i] + cos_loss[i]
+                actual = total_loss[i]
+                if abs(expected - actual) > 0.01 and actual > 0:
+                    mismatch_count += 1
+
+            if mismatch_count > 5:
+                self.trainer.logger.warning(
+                    f"[PerSceneLossVisualizer] Scene '{scene_name}': "
+                    f"{mismatch_count}/10 points have Total != L1 + Cos. "
+                    f"This indicates a data recording bug!"
+                )
+
         # Add initial point (0, 0) so all curves start from origin
         iterations = np.concatenate([[0], iterations])
         epochs = np.concatenate([[0], epochs])
         total_loss = np.concatenate([[0], total_loss])
 
-        # Create figure with subplots
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+        # Check if per-dimension data is available
+        has_per_dim = ('per_dim_l1' in loss_data and
+                       loss_data['per_dim_l1'] and
+                       loss_data['per_dim_l1'][0] is not None)
+
+        # Check if rendered2d_loss is available
+        has_rendered2d = 'rendered2d_loss' in loss_data and loss_data['rendered2d_loss']
+
+        # Create figure with subplots (5 rows if per-dim data available, otherwise 4)
+        n_rows = 5 if has_per_dim else 4
+        fig, axes = plt.subplots(n_rows, 1, figsize=(12, 4 * n_rows))
         # Update title with epoch info
         title_suffix = f" (Epoch {epochs.max()})" if len(epochs) > 0 else ""
         fig.suptitle(f'Scene: {scene_name}{title_suffix}', fontsize=14, fontweight='bold')
@@ -869,6 +946,61 @@ class PerSceneLossVisualizer(HookBase):
         ax.grid(True, alpha=0.3)
         ax.set_title('Cosine Loss over Training', fontsize=12)
 
+        # Plot 4: Rendered2D Loss (if available)
+        ax = axes[3]
+        if has_rendered2d:
+            rendered2d_loss = np.concatenate([[0], np.array(loss_data['rendered2d_loss'])])
+            ax.plot(iterations, rendered2d_loss, 'c-', linewidth=1, alpha=0.7, label='Rendered2D Loss')
+            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        else:
+            ax.text(0.5, 0.5, 'Rendered2D Loss data not available',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        ax.set_xlabel('Iteration', fontsize=10)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        ax.set_title('Rendered2D Loss over Training', fontsize=12)
+
+        # Plot 5: Per-Dimension L1 Loss (if available)
+        if has_per_dim:
+            ax = axes[4]
+            per_dim_data = loss_data['per_dim_l1']
+
+            # Filter out None values and stack tensors
+            per_dim_tensors = [t.numpy() if hasattr(t, 'numpy') else np.array(t)
+                              for t in per_dim_data if t is not None]
+
+            if per_dim_tensors:
+                # Stack: [num_iterations, num_dims]
+                per_dim_matrix = np.stack(per_dim_tensors, axis=0)
+                num_dims = per_dim_matrix.shape[1]
+
+                # Pad with zeros at the beginning to match iterations length
+                per_dim_padded = np.vstack([np.zeros((1, num_dims)), per_dim_matrix])
+
+                # Plot each dimension as a separate line
+                colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
+                for dim in range(num_dims):
+                    ax.plot(iterations, per_dim_padded[:, dim],
+                           color=colors[dim], alpha=0.7, linewidth=1, label=f'd[{dim}]')
+
+                ax.set_ylabel('Per-Dim L1 Loss', fontsize=11)
+                ax.set_xlabel('Iteration', fontsize=10)
+                ax.legend(loc='upper right', ncol=4, fontsize=8)
+                ax.grid(True, alpha=0.3)
+                ax.set_title('Per-Dimension L1 Loss (Unweighted) over Training', fontsize=12)
+
+                # Add dimension weight info if available
+                if 'per_dim_l1_weights' in loss_data and loss_data['per_dim_l1_weights']:
+                    weights_data = loss_data['per_dim_l1_weights']
+                    weights_tensor = weights_data[-1]  # Get latest weights
+                    if weights_tensor is not None:
+                        weights_np = weights_tensor.numpy() if hasattr(weights_tensor, 'numpy') else np.array(weights_tensor)
+                        weight_info = f"Latest Weights: d[0]={weights_np[0]:.2f}, d[1]={weights_np[1]:.2f}, d[15]={weights_np[15]:.2f}"
+                        ax.text(0.02, 0.02, weight_info, transform=ax.transAxes,
+                               fontsize=8, verticalalignment='bottom',
+                               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
         # Add statistics text box
         stats_text = f"Statistics:\n"
         stats_text += f"  Min Total Loss: {total_loss.min():.4f}\n"
@@ -899,15 +1031,39 @@ class PerSceneLossVisualizer(HookBase):
             json_path = output_dir / f"{scene_name}_loss_data.json"
         with open(json_path, 'w') as f:
             # Convert numpy arrays to lists for JSON serialization
+            # CRITICAL FIX: Use original unmodified data, not the plotting arrays with prepended 0
+            # The plotting arrays (iterations, epochs, total_loss) have been modified with
+            # np.concatenate([[0], ...]) for visualization, but we need to save the raw data.
             json_data = {
-                'iterations': iterations.tolist(),
-                'epochs': epochs.tolist(),
-                'total_loss': total_loss.tolist(),
+                'iterations': loss_data['iterations'],  # Original data (no prepended 0)
+                'epochs': loss_data['epochs'],          # Original data (no prepended 0)
+                'total_loss': loss_data['total_loss'],  # Original data (no prepended 0)
             }
             if loss_data['l1_loss']:
                 json_data['l1_loss'] = [float(x) for x in loss_data['l1_loss']]
             if loss_data['cos_loss']:
                 json_data['cos_loss'] = [float(x) for x in loss_data['cos_loss']]
+
+            # Save per-dimension loss data if available
+            if 'per_dim_l1' in loss_data and loss_data['per_dim_l1']:
+                per_dim_list = []
+                for t in loss_data['per_dim_l1']:
+                    if t is not None:
+                        per_dim_list.append(t.tolist() if hasattr(t, 'tolist') else list(t))
+                    else:
+                        per_dim_list.append(None)
+                json_data['per_dim_l1'] = per_dim_list
+
+            # Save per-dimension weights if available
+            if 'per_dim_l1_weights' in loss_data and loss_data['per_dim_l1_weights']:
+                weights_list = []
+                for t in loss_data['per_dim_l1_weights']:
+                    if t is not None:
+                        weights_list.append(t.tolist() if hasattr(t, 'tolist') else list(t))
+                    else:
+                        weights_list.append(None)
+                json_data['per_dim_l1_weights'] = weights_list
+
             json.dump(json_data, f, indent=2)
 
     def _plot_average_losses(self, plot_data, output_dir, suffix=""):

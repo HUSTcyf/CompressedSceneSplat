@@ -134,7 +134,7 @@ class LangPretrainerInference:
                     input_dict[key] = value.to(self.device, non_blocking=True)
 
             with torch.no_grad():
-                forward_kwargs = {"return_backbone": True}
+                forward_kwargs = {}
                 if self.chunk_size:
                     forward_kwargs["chunk_size"] = self.chunk_size
                 out_dict = self.model(input_dict, **forward_kwargs)
