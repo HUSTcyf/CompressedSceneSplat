@@ -11,6 +11,7 @@ FEAT_FOLDER_NAME="ours_30000_langfeat_0"
 
 # Source dimension (768 for SigLIP2 features from checkpoint_with_features_s.pth)
 SRC_DIM=768
+SRC_DIM=16
 
 # Evaluation parameters
 STABILITY_THRESH=0.3

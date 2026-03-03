@@ -139,11 +139,27 @@ def compute_dynamic_threshold(valid_map, object_name, eval_params=None, thresh_r
         # Calculate stability metrics
         stability = calculate_stability_metrics(scores, pixel_counts, thresh_range, eval_params=eval_params)
         stable_regions = find_stable_regions(stability, eval_params=eval_params)
-        
         if len(stable_regions) == 0:
-            print(f"Warning: Found {len(stable_regions)} stable regions for {object_name} head {head_idx}")
-            score_gradients.append(999)
-            thresholds.append(0.5)
+            # Try with relaxed threshold if no stable regions found
+            print(f"  Warning: Found 0 stable regions with thresh={eval_params['stability_thresh']}, trying relaxed threshold...")
+            relaxed_params = eval_params.copy()
+            relaxed_params['stability_thresh'] = 1.0  # Very relaxed
+            stable_regions = find_stable_regions(stability, eval_params=relaxed_params)
+            if len(stable_regions) == 0:
+                print(f"  Warning: Still 0 stable regions with thresh=1.0, using fallback")
+                score_gradients.append(999)
+                thresholds.append(0.5)
+            else:
+                print(f"  Found {len(stable_regions)} stable regions with relaxed threshold")
+                valid_mask = stability['valid_regions']
+                (start_idx, end_idx) = stable_regions[-1]
+                if np.any(valid_mask[start_idx:end_idx+1]):
+                    score_sensitivity = (scores[end_idx]- scores[start_idx]) / (thresh_range[end_idx] - thresh_range[start_idx] + 1e-9)
+                    score_gradients.append(score_sensitivity)
+                    thresholds.append((thresh_range[start_idx] + thresh_range[end_idx]) / 2)
+                else:
+                    score_gradients.append(999)
+                    thresholds.append(0.5)
         else:
             valid_mask = stability['valid_regions']
             # Find the last stable region

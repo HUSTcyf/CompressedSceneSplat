@@ -25,6 +25,7 @@ Dockerfile
 eval_results/
 gaussian_results/
 gaussian_train/
+gaussian_train_clip/
 grid_sim/
 grid_svd_output/
 langfeat_visualizations

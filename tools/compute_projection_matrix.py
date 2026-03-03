@@ -67,7 +67,7 @@ def load_paired_features(scene_path: str, sample_size: int = None) -> Tuple[np.n
     """
     # Load data
     lang_feat_orig = np.load(os.path.join(scene_path, 'lang_feat.npy'))  # [N_total, 768]
-    valid_mask = np.load(os.path.join(scene_path, 'valid_feat_mask.npy'))
+    # valid_mask = np.load(os.path.join(scene_path, 'valid_feat_mask.npy'))
     svd_data = np.load(os.path.join(scene_path, 'lang_feat_grid_svd_r16.npz'))
 
     # Extract compressed features and indices
@@ -75,7 +75,7 @@ def load_paired_features(scene_path: str, sample_size: int = None) -> Tuple[np.n
     indices = svd_data['indices']            # [N_valid] - indices mapping
 
     # Get paired data for valid points
-    feat_768 = lang_feat_orig[valid_mask]  # [N_valid, 768]
+    feat_768 = lang_feat_orig  # [N_valid, 768]
     feat_16 = compressed_grid[indices]      # [N_valid, 16]
 
     # Sample if requested
@@ -89,7 +89,7 @@ def load_paired_features(scene_path: str, sample_size: int = None) -> Tuple[np.n
 
 def compute_projection_matrix(
     scenes: List[str],
-    max_samples_per_scene: int = 100000,
+    max_samples_per_scene: int = 1000000,
     method: str = 'ls',
 ) -> np.ndarray:
     """
@@ -133,11 +133,11 @@ def compute_projection_matrix(
         print(f"  Y shape: {Y_all.shape}")
 
         # Use subset if too large (to avoid memory issues)
-        if len(X_all) > 500000:
-            print(f"  Subsampling to 500,000 for memory efficiency...")
-            idx = np.random.choice(len(X_all), 500000, replace=False)
-            X_all = X_all[idx]
-            Y_all = Y_all[idx]
+        # if len(X_all) > 500000:
+        #     print(f"  Subsampling to 500,000 for memory efficiency...")
+        #     idx = np.random.choice(len(X_all), 500000, replace=False)
+        #     X_all = X_all[idx]
+        #     Y_all = Y_all[idx]
 
         print("\nComputing projection matrix (least squares)...")
         W, residuals, rank, s = np.linalg.lstsq(X_all, Y_all, rcond=None)
@@ -223,7 +223,7 @@ def main():
     parser.add_argument(
         "--max_samples",
         type=int,
-        default=100000,
+        default=1000000,
         help="Maximum samples per scene",
     )
     parser.add_argument(

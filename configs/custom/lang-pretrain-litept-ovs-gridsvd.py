@@ -131,7 +131,7 @@ model = dict(
         # SVDWeightedL1Loss: Variance-based dimension weighting
         dict(
             type="SVDWeightedL1Loss",
-            loss_weight=0.3,  # Overall loss weight
+            loss_weight=1.0,  # Overall loss weight
             reduction="mean",
             base_weight=1.0,  # Maximum weight
             min_weight=0.1,  # Minimum weight (prevents zero gradients)
@@ -150,15 +150,16 @@ model = dict(
         # Enforces spatially consistent predictions by comparing rendered 2D features
         # Uses gsplat rasterization with pre-rendered GT feature maps
         # Weight schedule: ramps up from 0 to 1.0 by 50% training progress
-        dict(
-            type="Rendered2DLoss",
-            loss_weight=1.0,  # Maximum weight
-            gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
-            datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
-            warmup_progress=0.0,  # Start immediately (no warmup)
-            target_progress=0.5,  # Reach max weight at 50% training progress
-            max_num_views=10,  # Use up to 10 views per scene to save memory
-        ),
+        # INCREASED WEIGHT for better spatial smoothness and feature consistency
+        # dict(
+        #     type="Rendered2DLoss",
+        #     loss_weight=1.0,
+        #     gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
+        #     datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
+        #     warmup_progress=0.0,  # Start immediately (no warmup)
+        #     target_progress=0.5,  # Reach max weight at 50% training progress
+        #     max_num_views=10,  # Use up to 10 views per scene to save memory
+        # ),
 
         # AggregatedContrastiveLoss: DISABLED for 16-dim training
         # Re-enable only when using SVD rank 32 or higher
@@ -211,14 +212,14 @@ density_invariant = dict(
 # ============================================================================
 # Scheduler settings
 # ============================================================================
-eval_epoch = 20  # total eval & checkpoint epoch
+eval_epoch = 10  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 
 # ============================================================================
 # Optimizer settings with mode-collapse prevention
 # ============================================================================
 # Base optimizer configuration
-optimizer = dict(type="AdamW", lr=0.0003, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
 
 # Gradient clipping (configured separately, used in trainer)
 clip_grad = 1.0
@@ -304,8 +305,12 @@ dataset_type = "GenericGSDataset"
 data_root_ovs_1 = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs"
 data_root_ovs_2 = "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS"
 
+# Single scene for debugging
+single_scene_train_root = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train/figurines"
+single_scene_val_root = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val/figurines"
+
 data = dict(
-    num_classes=100,  # Placeholder for pretraining (not used)
+    num_classes=100,
     ignore_index=-1,
     train=dict(
         type="ConcatDataset",  # Use ConcatDataset to combine multiple data sources
@@ -320,30 +325,16 @@ data = dict(
                 transform=[
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),
-                    # dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
-                    # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
-                    # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
-                    # dict(type="RandomScale", scale=[0.9, 1.1]),
-                    # dict(type="RandomFlip", p=0.5),
-                    # dict(type="RandomJitter", sigma=0.005, clip=0.02),
-                    # dict(type="NormalizeCoord"),  # Normalize after GridSample
-                    # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
-                    # Color augmentation
-                    # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
-                    # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
-                    # dict(type="ChromaticJitter", p=0.95, std=0.05),
                     # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
                     # Step 2: Filter valid points (those with valid language features)
                     dict(type="FilterValidPoints", key="valid_feat_mask"),
                     # Step 3: Re-center coordinates to the filtered dense region
-                    # This shifts coordinates so the dense region is centered around origin
-                    # GridSample then operates on these centered coordinates for better spatial distribution
                     dict(type="CenterShift", apply_z=True),
-                    # Step 4: GridSample for representative sampling
+                    # Step 4: GridSampleAveraged for representative sampling (with feature averaging)
                     dict(
-                        type="GridSample",
-                        grid_size=0.01,  # Smaller grid_size to preserve more valid points
+                        type="GridSampleAveraged",
+                        grid_size=0.01,
                         hash_type="fnv",
                         mode="train",
                         keys=(
@@ -354,21 +345,19 @@ data = dict(
                             "scale",
                             "lang_feat",
                             "valid_feat_mask",
-                            "point_to_grid",  # Sampled along with other data
-                            "segment",  # Required for AggregatedContrastiveLoss
+                            "point_to_grid",
+                            "segment",
                         ),
-                        return_grid_coord=True,  # Required by LitePT's GridPooling
+                        return_grid_coord=True,
+                        average_keys=("color", "opacity", "quat", "scale"),
+                        first_keys=("coord",),
                     ),
-                    # dict(type="SphereCrop", point_max=204800, mode="random"),
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
-                    # Collect features - grid_coord is required by LitePT's GridPooling
-                    # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
                     dict(
                         type="Collect",
-                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
-                               "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
-                        feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels for model input
+                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+                        feat_keys=("color", "opacity", "quat", "scale"),
                     ),
                 ],
                 test_mode=False,
@@ -383,27 +372,16 @@ data = dict(
                 transform=[
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),
-                    # dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
-                    # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
-                    # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
-                    # dict(type="RandomScale", scale=[0.9, 1.1]),
-                    # dict(type="RandomFlip", p=0.5),
-                    # dict(type="RandomJitter", sigma=0.005, clip=0.02),
-                    # dict(type="NormalizeCoord"),  # Normalize after GridSample
-                    # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
-                    # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
-                    # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
-                    # dict(type="ChromaticJitter", p=0.95, std=0.05),
                     # Step 1: Filter outliers (same as train pipeline)
                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
                     # Step 2: Filter valid points
                     dict(type="FilterValidPoints", key="valid_feat_mask"),
                     # Step 3: Re-center coordinates to the filtered dense region
                     dict(type="CenterShift", apply_z=True),
-                    # Step 4: GridSample for representative sampling
+                    # Step 4: GridSampleAveraged for representative sampling (with feature averaging)
                     dict(
-                        type="GridSample",
-                        grid_size=0.01,  # Smaller grid_size to preserve more valid points
+                        type="GridSampleAveraged",
+                        grid_size=0.01,
                         hash_type="fnv",
                         mode="train",
                         keys=(
@@ -414,22 +392,19 @@ data = dict(
                             "scale",
                             "lang_feat",
                             "valid_feat_mask",
-                            "point_to_grid",  # Sampled along with other data
-                            "segment",  # Required for AggregatedContrastiveLoss
+                            "point_to_grid",
+                            "segment",
                         ),
-                        return_grid_coord=True,  # Required by LitePT's GridPooling
+                        return_grid_coord=True,
+                        average_keys=("color", "opacity", "quat", "scale"),
+                        first_keys=("coord",),
                     ),
-                    # Optional: SphereCrop for additional point reduction if needed
-                    # dict(type="SphereCrop", point_max=204800, mode="random"),
                     dict(type="NormalizeColor"),
                     dict(type="ToTensor"),
-                    # Collect features - grid_coord is required by LitePT's GridPooling
-                    # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
                     dict(
                         type="Collect",
-                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
-                               "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
-                        feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+                        feat_keys=("color", "opacity", "quat", "scale"),
                     ),
                 ],
                 test_mode=False,
@@ -445,24 +420,24 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             # Step 1: Filter to only valid points
             dict(type="FilterValidPoints", key="valid_feat_mask"),
-            # Step 2: Grid sample (before NormalizeCoord) - required for GridPooling
+            # Step 2: GridSampleAveraged (before NormalizeCoord) - required for GridPooling
             dict(
-                type="GridSample",
+                type="GridSampleAveraged",
                 grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
                 keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"),
                 return_grid_coord=True,
+                average_keys=("color", "opacity", "quat", "scale"),
+                first_keys=("coord",),
             ),
             dict(type="CenterShift", apply_z=False),
             dict(type="NormalizeColor"),
             dict(type="ToTensor"),
-            # grid_coord is required by LitePT's GridPooling
-            # Also collect name, scene_path, and Gaussian params for Rendered2DLoss
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "opacity", "quat", "scale"),
-                feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+                keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path"),
+                feat_keys=("color", "opacity", "quat", "scale"),
             ),
         ],
         test_mode=False,
@@ -474,16 +449,19 @@ data = dict(
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),
+            dict(type="Copy", keys_dict={"segment": "origin_segment", "coord": "origin_coord", "valid_feat_mask": "origin_feat_mask"}),
             # Step 1: Filter to only valid points
             dict(type="FilterValidPoints", key="valid_feat_mask"),
-            # Step 2: Grid sample for initial point reduction (test_cfg.voxelize does further processing)
+            # Step 2: GridSampleAveraged for initial point reduction (test_cfg.voxelize does further processing)
             dict(
-                type="GridSample",
+                type="GridSampleAveraged",
                 grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
-                keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"),
+                keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask"),
                 return_inverse=True,
+                average_keys=("color", "opacity", "quat", "scale"),
+                first_keys=("coord",),
             ),
         ],
         test_mode=True,
@@ -502,133 +480,328 @@ data = dict(
                 dict(type="ToTensor"),
                 dict(
                     type="Collect",
-                    keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment",
-                           "opacity", "quat", "scale"),  # Also keep Gaussian params separate for Rendered2DLoss
-                    feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+                    keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+                    feat_keys=("color", "opacity", "quat", "scale"),
                 ),
             ],
             aug_transform=[
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[0],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[3 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[0],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[0.95, 0.95]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[0.95, 0.95]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[0.95, 0.95]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[3 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[0.95, 0.95]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[0],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[1.05, 1.05]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[1.05, 1.05]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[1],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[1.05, 1.05]),
-                ],
-                [
-                    dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[3 / 2],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    ),
-                    dict(type="RandomScale", scale=[1.05, 1.05]),
-                ],
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
+                [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1)],
+                [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1)],
+                [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1)],
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+                [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+                [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+                [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+                [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+                [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+                [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+                [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
                 [dict(type="RandomFlip", p=1)],
             ],
         ),
     ),
 )
+
+# SINGLE SCENE CONFIGURATION (commented out, kept for debugging only)
+# data = dict(
+#     num_classes=100,
+#     ignore_index=-1,
+#     train=dict(
+#         type=dataset_type,
+#         split="",
+#         data_root=single_scene_train_root,
+#         sample_tail_classes=False,
+#         load_compressed_lang_feat=True,
+#         svd_rank=16,
+#         transform=[
+#             dict(type="CenterShift", apply_z=True),
+#             dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+#             dict(type="FilterValidPoints", key="valid_feat_mask"),
+#             dict(type="CenterShift", apply_z=True),
+#             dict(type="GridSampleAveraged", grid_size=0.01, hash_type="fnv", mode="train", keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"), return_grid_coord=True, average_keys=("color", "opacity", "quat", "scale"), first_keys=("coord",)),
+#             dict(type="NormalizeColor"),
+#             dict(type="ToTensor"),
+#             dict(type="Collect", keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"), feat_keys=("color", "opacity", "quat", "scale")),
+#         ],
+#         test_mode=False,
+#     ),
+#     val=dict(
+#         type=dataset_type,
+#         split="",
+#         data_root=single_scene_val_root,
+#         sample_tail_classes=False,
+#         load_compressed_lang_feat=True,
+#         svd_rank=16,
+#         transform=[
+#             dict(type="CenterShift", apply_z=True),
+#             dict(type="FilterValidPoints", key="valid_feat_mask"),
+#             dict(type="GridSampleAveraged", grid_size=0.01, hash_type="fnv", mode="train", keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"), return_grid_coord=True, average_keys=("color", "opacity", "quat", "scale"), first_keys=("coord",)),
+#             dict(type="CenterShift", apply_z=False),
+#             dict(type="NormalizeColor"),
+#             dict(type="ToTensor"),
+#             dict(type="Collect", keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path"), feat_keys=("color", "opacity", "quat", "scale")),
+#         ],
+#         test_mode=False,
+#     ),
+#     test=dict(
+#         type=dataset_type,
+#         split="",
+#         data_root=single_scene_val_root,
+#         sample_tail_classes=False,
+#         load_compressed_lang_feat=True,
+#         svd_rank=16,
+#         transform=[
+#             dict(type="CenterShift", apply_z=True),
+#             dict(type="NormalizeColor"),
+#             dict(type="Copy", keys_dict={"segment": "origin_segment", "coord": "origin_coord", "valid_feat_mask": "origin_feat_mask"}),
+#             dict(type="GridSampleAveraged", grid_size=0.01, hash_type="fnv", mode="train", keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask"), return_inverse=True, average_keys=("color", "opacity", "quat", "scale"), first_keys=("coord",)),
+#         ],
+#         test_mode=True,
+#         test_cfg=dict(
+#             voxelize=dict(type="GridSample", grid_size=0.02, hash_type="fnv", mode="test", keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "point_to_grid"), return_grid_coord=True),
+#             crop=None,
+#             post_transform=[
+#                 dict(type="CenterShift", apply_z=False),
+#                 dict(type="ToTensor"),
+#                 dict(type="Collect", keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"), feat_keys=("color", "opacity", "quat", "scale")),
+#             ],
+#             aug_transform=[
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomFlip", p=1)],
+#             ],
+#         ),
+#     ),
+# )
+# data = dict(
+#     num_classes=100,
+#     ignore_index=-1,
+#     train=dict(
+#         type="ConcatDataset",  # Use ConcatDataset to combine multiple data sources
+#         datasets=[
+#             dict(
+#                 type=dataset_type,
+#                 split="train",  # Use 'train' subdirectory (matches train/* pattern)
+#                 data_root=data_root_ovs_1,  # First data source: lerf_ovs
+#                 sample_tail_classes=False,
+#                 load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
+#                 svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
+#                 transform=[
+#                     # Initial preprocessing
+#                     dict(type="CenterShift", apply_z=True),
+#                     # dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+#                     # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
+#                     # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
+#                     # dict(type="RandomScale", scale=[0.9, 1.1]),
+#                     # dict(type="RandomFlip", p=0.5),
+#                     # dict(type="RandomJitter", sigma=0.005, clip=0.02),
+#                     # dict(type="NormalizeCoord"),  # Normalize after GridSample
+#                     # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
+#                     # Color augmentation
+#                     # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+#                     # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+#                     # dict(type="ChromaticJitter", p=0.95, std=0.05),
+#                     # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
+#                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+#                     # Step 2: Filter valid points (those with valid language features)
+#                     dict(type="FilterValidPoints", key="valid_feat_mask"),
+#                     # Step 3: Re-center coordinates to the filtered dense region
+#                     # This shifts coordinates so the dense region is centered around origin
+#                     # GridSample then operates on these centered coordinates for better spatial distribution
+#                     dict(type="CenterShift", apply_z=True),
+#                     # Step 4: GridSample for representative sampling
+#                     dict(
+#                         type="GridSample",
+#                         grid_size=0.01,  # Smaller grid_size to preserve more valid points
+#                         hash_type="fnv",
+#                         mode="train",
+#                         keys=(
+#                             "coord",
+#                             "color",
+#                             "opacity",
+#                             "quat",
+#                             "scale",
+#                             "lang_feat",
+#                             "valid_feat_mask",
+#                             "point_to_grid",  # Sampled along with other data
+#                             "segment",  # Required for AggregatedContrastiveLoss
+#                         ),
+#                         return_grid_coord=True,  # Required by LitePT's GridPooling
+#                     ),
+#                     # dict(type="SphereCrop", point_max=204800, mode="random"),
+#                     dict(type="NormalizeColor"),
+#                     dict(type="ToTensor"),
+#                     # Collect features - grid_coord is required by LitePT's GridPooling
+#                     # Gaussian params (opacity, quat, scale) are extracted from feat in trainer
+#                     dict(
+#                         type="Collect",
+#                         keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+#                         feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels for model input
+#                     ),
+#                 ],
+#                 test_mode=False,
+#             ),
+#             dict(
+#                 type=dataset_type,
+#                 split="train",  # Use 'train' subdirectory (matches train/* pattern)
+#                 data_root=data_root_ovs_2,  # Second data source: 3DOVS
+#                 sample_tail_classes=False,
+#                 load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
+#                 svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
+#                 transform=[
+#                     # Initial preprocessing
+#                     dict(type="CenterShift", apply_z=True),
+#                     # dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
+#                     # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
+#                     # dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
+#                     # dict(type="RandomScale", scale=[0.9, 1.1]),
+#                     # dict(type="RandomFlip", p=0.5),
+#                     # dict(type="RandomJitter", sigma=0.005, clip=0.02),
+#                     # dict(type="NormalizeCoord"),  # Normalize after GridSample
+#                     # dict(type="ElasticDistortion", distortion_params=[[0.2, 0.4], [0.8, 1.6]]),
+#                     # dict(type="ChromaticAutoContrast", p=0.2, blend_factor=None),
+#                     # dict(type="ChromaticTranslation", p=0.95, ratio=0.05),
+#                     # dict(type="ChromaticJitter", p=0.95, std=0.05),
+#                     # Step 1: Filter outliers (same as train pipeline)
+#                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+#                     # Step 2: Filter valid points
+#                     dict(type="FilterValidPoints", key="valid_feat_mask"),
+#                     # Step 3: Re-center coordinates to the filtered dense region
+#                     dict(type="CenterShift", apply_z=True),
+#                     # Step 4: GridSample for representative sampling
+#                     dict(
+#                         type="GridSample",
+#                         grid_size=0.01,  # Smaller grid_size to preserve more valid points
+#                         hash_type="fnv",
+#                         mode="train",
+#                         keys=(
+#                             "coord",
+#                             "color",
+#                             "opacity",
+#                             "quat",
+#                             "scale",
+#                             "lang_feat",
+#                             "valid_feat_mask",
+#                             "point_to_grid",  # Sampled along with other data
+#                             "segment",  # Required for AggregatedContrastiveLoss
+#                         ),
+#                         return_grid_coord=True,  # Required by LitePT's GridPooling
+#                     ),
+#                     # Optional: SphereCrop for additional point reduction if needed
+#                     # dict(type="SphereCrop", point_max=204800, mode="random"),
+#                     dict(type="NormalizeColor"),
+#                     dict(type="ToTensor"),
+#                     # Collect features - grid_coord is required by LitePT's GridPooling
+#                     # Gaussian params (opacity, quat, scale) are extracted from feat in trainer
+#                     dict(
+#                         type="Collect",
+#                         keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+#                         feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+#                     ),
+#                 ],
+#                 test_mode=False,
+#             ),
+#         ],
+#         loop=1,  # ConcatDataset loop parameter
+#     ),
+#     val=dict(
+#         type=dataset_type,
+#         split="val",  # Use 'val' subdirectory
+#         data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
+#         transform=[
+#             dict(type="CenterShift", apply_z=True),
+#             # Step 1: Filter to only valid points
+#             dict(type="FilterValidPoints", key="valid_feat_mask"),
+#             # Step 2: Grid sample (before NormalizeCoord) - required for GridPooling
+#             dict(
+#                 type="GridSample",
+#                 grid_size=0.01,
+#                 hash_type="fnv",
+#                 mode="train",
+#                 keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"),
+#                 return_grid_coord=True,
+#             ),
+#             dict(type="CenterShift", apply_z=False),
+#             dict(type="NormalizeColor"),
+#             dict(type="ToTensor"),
+#             # grid_coord is required by LitePT's GridPooling
+#             # Gaussian params (opacity, quat, scale) are extracted from feat in trainer
+#             dict(
+#                 type="Collect",
+#                 keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path"),
+#                 feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+#             ),
+#         ],
+#         test_mode=False,
+#     ),
+#     test=dict(
+#         type=dataset_type,
+#         split="val",  # Use 'val' subdirectory
+#         data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
+#         transform=[
+#             dict(type="CenterShift", apply_z=True),
+#             dict(type="NormalizeColor"),
+#             # Step 1: Filter to only valid points
+#             dict(type="FilterValidPoints", key="valid_feat_mask"),
+#             # Step 2: Grid sample for initial point reduction (test_cfg.voxelize does further processing)
+#             dict(
+#                 type="GridSample",
+#                 grid_size=0.01,
+#                 hash_type="fnv",
+#                 mode="train",
+#                 keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"),
+#                 return_inverse=True,
+#             ),
+#         ],
+#         test_mode=True,
+#         test_cfg=dict(
+#             voxelize=dict(
+#                 type="GridSample",
+#                 grid_size=0.02,
+#                 hash_type="fnv",
+#                 mode="test",
+#                 keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "point_to_grid"),
+#                 return_grid_coord=True,
+#             ),
+#             crop=None,
+#             post_transform=[
+#                 dict(type="CenterShift", apply_z=False),
+#                 dict(type="ToTensor"),
+#                 dict(
+#                     type="Collect",
+#                     keys=("coord", "grid_coord", "index", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+#                     feat_keys=("color", "opacity", "quat", "scale"),  # 11 channels
+#                 ),
+#             ],
+#             aug_transform=[
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1)],
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[0.95, 0.95])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[0], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[1], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomRotateTargetAngle", angle=[3 / 2], axis="z", center=[0, 0, 0], p=1), dict(type="RandomScale", scale=[1.05, 1.05])],
+#                 [dict(type="RandomFlip", p=1)],
+#             ],
+#         ),
+#     ),
+# )
 
 # ============================================================================
 # Hooks

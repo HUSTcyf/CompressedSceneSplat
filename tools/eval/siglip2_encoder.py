@@ -66,18 +66,26 @@ class SigLIP2Network:
         },
     }
 
-    def __init__(self, device, model_variant="siglip2_base_512"):
+    def __init__(self, device, model_variant="siglip2_base_512", projection_matrix=None, target_dim=None):
         """
         Initialize SigLIP2 model and tokenizer from open_clip.
 
         Args:
             device: torch device (e.g., 'cuda:0', 'cuda:1', 'cpu')
             model_variant: which SigLIP2 model variant to use ('siglip2_base' or 'siglip2_large')
+            projection_matrix: numpy array of shape [target_dim, 768] to project 768-dim features to target_dim
+            target_dim: target dimension after projection (e.g., 16 for SVD-compressed features)
         """
         self.device = device
         config = self.MODEL_CONFIGS.get(model_variant, self.MODEL_CONFIGS["siglip2_base"])
 
         self.clip_n_dims = config["n_dims"]
+        self._projection_matrix = None
+        self._target_dim = None
+
+        # Set projection matrix if provided
+        if projection_matrix is not None:
+            self.set_projection_matrix(projection_matrix, target_dim)
 
         # Image preprocessing for SigLIP2
         self.process = torchvision.transforms.Compose([
@@ -121,6 +129,11 @@ class SigLIP2Network:
             self.pos_embeds = self.model.encode_text(tok_phrases)
             tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.negatives]).to(self.device)
             self.neg_embeds = self.model.encode_text(tok_phrases)
+
+            # Apply projection if set
+            if hasattr(self, '_projection_matrix') and self._projection_matrix is not None:
+                self.pos_embeds = self._apply_projection(self.pos_embeds)
+                self.neg_embeds = self._apply_projection(self.neg_embeds)
 
         self.pos_embeds = self.pos_embeds / self.pos_embeds.norm(dim=-1, keepdim=True)
         self.neg_embeds = self.neg_embeds / self.neg_embeds.norm(dim=-1, keepdim=True)
@@ -180,6 +193,39 @@ class SigLIP2Network:
         text = self.tokenizer(text_list).to(device)
         return self.model.encode_text(text)
 
+    def set_projection_matrix(self, projection_matrix, target_dim):
+        """
+        Set projection matrix to project 768-dim embeddings to target dimension.
+
+        Args:
+            projection_matrix: numpy array of shape [target_dim, 768]
+            target_dim: target dimension after projection
+        """
+        import numpy as np
+        # Use half precision to match SigLIP2 model's fp16 precision
+        self._projection_matrix = torch.from_numpy(projection_matrix).half().to(self.device)
+        self._target_dim = target_dim
+        # Update clip_n_dims to reflect the projected dimension
+        self.clip_n_dims = target_dim
+        print(f"Projection matrix set: 768-dim -> {target_dim}-dim (dtype: {self._projection_matrix.dtype})")
+
+        # Re-encode and project negative prompts to match dimension (if already initialized)
+        if hasattr(self, 'negatives') and hasattr(self, 'tokenizer') and hasattr(self, 'model'):
+            with torch.no_grad():
+                tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.negatives]).to(self.device)
+                self.neg_embeds = self.model.encode_text(tok_phrases)
+                self.neg_embeds = self._apply_projection(self.neg_embeds)
+            self.neg_embeds = self.neg_embeds / self.neg_embeds.norm(dim=-1, keepdim=True)
+            print(f"Re-encoded negative prompts with projection, shape: {self.neg_embeds.shape}")
+
+    def _apply_projection(self, embeds):
+        """Apply projection matrix to embeddings if set."""
+        if self._projection_matrix is not None:
+            # embeds: [n, 768], projection_matrix: [target_dim, 768]
+            # Result: [n, target_dim]
+            embeds = embeds @ self._projection_matrix.T
+        return embeds
+
     def set_positives(self, text_list):
         """
         Set and encode positive text prompts.
@@ -193,6 +239,8 @@ class SigLIP2Network:
                 [self.tokenizer(phrase) for phrase in self.positives]
                 ).to(self.neg_embeds.device)
             self.pos_embeds = self.model.encode_text(tok_phrases)
+            # Apply projection if set
+            self.pos_embeds = self._apply_projection(self.pos_embeds)
         self.pos_embeds = self.pos_embeds / self.pos_embeds.norm(dim=-1, keepdim=True)
 
     def set_semantics(self, text_list):

@@ -10,10 +10,10 @@ scenes = ['figurines', 'ramen', 'teatime', 'waldo_kitchen']
 feat_levels = [0]
 res = 1
 
-dataset = "3DOVS"
-scenes = ['lawn', 'bench', 'sofa', 'room', 'bed']
-feat_levels = [0]
-res = 4
+# dataset = "3DOVS"
+# scenes = ['lawn', 'bench', 'sofa', 'room', 'bed']
+# feat_levels = [0]
+# res = 4
 
 src_path = f"./datasets/{dataset}"
 dst_path = f"./gaussian_results/{dataset}"
@@ -25,7 +25,7 @@ for scene in scenes:
         # os.system(cmd)
 
         cmd = f"CUDA_VISIBLE_DEVICES={device} python tools/feature_map_renderer.py -m {dst_path}/{scene} --iteration {iteration} --eval --skip_train --feature_level {f} --src_dim {src_dim} -r {res}" \
-        f" --lang_checkpoint /new_data/cyf/projects/SceneSplat/output_features/{scene}/checkpoint_with_features.pth --visualize --use_siglip_sam2_format"
+        f" --lang_checkpoint /new_data/cyf/projects/SceneSplat/output_features/{scene}/checkpoint_with_features_p.pth --visualize --use_siglip_sam2_format"
         print(cmd)
         os.system(cmd)
 

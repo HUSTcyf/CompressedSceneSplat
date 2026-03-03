@@ -139,7 +139,7 @@ def activate_stream(sem_map,
     return chosen_iou_list, chosen_lvl_list
 
 
-def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512):
+def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, projection_matrix_path=None):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # colormap_options = colormaps.ColormapOptions(
@@ -150,27 +150,46 @@ def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512):
     # )
 
     gt_ann, image_shape, image_paths = eval_gt_lerfdata(Path(gt_path), Path(output_path))
-     
+
     eval_index_list = [int(idx) for idx in list(gt_ann.keys())]
-    feat_paths_lvl = []   
+    feat_paths_lvl = []
     for i in range(len(feat_dir)):
         # Create a mapping of index to file path
         index_to_file = {}
         for file_path in glob.glob(os.path.join(feat_dir[i], '*.npy')):
             file_idx = int(os.path.basename(file_path).split(".npy")[0].split('_')[1]) - 1
             index_to_file[file_idx] = file_path
-        
+
         feat_paths_lvl.append(index_to_file)
-    
-    assert len(feat_paths_lvl) == len(feat_dir)   
-    
-    # instantiate encoder: use SigLIP2Network for 768-dim features, OpenCLIPNetwork otherwise
+
+    assert len(feat_paths_lvl) == len(feat_dir)
+
+    # Load projection matrix for non-768 features (e.g., 16-dim SVD)
+    projection_matrix = None
+    if src_dim != 768:
+        if projection_matrix_path is None:
+            # Use default path if not provided
+            projection_matrix_path = "/new_data/cyf/projects/SceneSplat/gaussian_train/projection_matrix_768_to_16_lerf.npy"
+            logging.info(f"No projection matrix specified, using default: {projection_matrix_path}")
+
+        if os.path.exists(projection_matrix_path):
+            projection_matrix = np.load(projection_matrix_path)
+            logging.info(f"Loaded projection matrix from {projection_matrix_path}, shape: {projection_matrix.shape}")
+        else:
+            raise ValueError(f"Projection matrix required for {src_dim}-dim features but not found at {projection_matrix_path}. "
+                           f"Please compute it first using: python tools/compute_projection_matrix.py --dataset lerf_ovs")
+
+    # instantiate encoder: use SigLIP2Network for all features
     if src_dim == 768:
         clip_model = SigLIP2Network(device)
         logging.info(f"Using SigLIP2Network for 768-dimensional features")
     else:
-        clip_model = OpenCLIPNetwork(device)
-        logging.info(f"Using OpenCLIPNetwork for {src_dim}-dimensional features")
+        # Fallback to OpenCLIPNetwork for other dimensions without projection
+        # clip_model = OpenCLIPNetwork(device)
+        # logging.info(f"Using OpenCLIPNetwork for {src_dim}-dimensional features (no projection)")
+        # Use SigLIP2Network with projection for non-768 features (e.g., 16-dim SVD)
+        clip_model = SigLIP2Network(device, projection_matrix=projection_matrix, target_dim=src_dim)
+        logging.info(f"Using SigLIP2Network with projection matrix for {src_dim}-dimensional features")
 
     chosen_iou_all, chosen_lvl_list = [], []
     for j, idx in enumerate(tqdm(eval_index_list)):
@@ -235,7 +254,8 @@ if __name__ == "__main__":
     parser.add_argument("--stability_thresh", type=float, default=0.3)
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
-    parser.add_argument("--src_dim", type=int, default=512, help="Source dimension of language features to load (e.g., 512 for OpenCLIP, 768 for SigLIP2)")
+    parser.add_argument("--src_dim", type=int, default=512, help="Source dimension of language features to load (e.g., 512 for OpenCLIP, 768 for SigLIP2, 16 for SVD-compressed)")
+    parser.add_argument("--projection_matrix", type=str, default=None, help="Path to projection matrix (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/projection_matrix_768_to_16_lerf.npy)")
     args = parser.parse_args()
 
     eval_params = {
@@ -269,4 +289,4 @@ if __name__ == "__main__":
     log_file = os.path.join(output_path, f'{dataset_name}.log')
     logger = get_logger(f'{dataset_name}', log_file=log_file, log_level=logging.INFO)
 
-    evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=args.src_dim)
+    evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=args.src_dim, projection_matrix_path=args.projection_matrix)

@@ -1389,12 +1389,26 @@ class DensityInvariantTrainer(TrainerBase):
                     scenario_input['segment'] = sample_dict['labels']
 
                 # Add Gaussian parameters for Rendered2DLoss
-                if 'opacity' in sample_dict:
-                    scenario_input['opacity'] = sample_dict['opacity']
-                if 'quat' in sample_dict:
-                    scenario_input['quat'] = sample_dict['quat']
-                if 'scale' in sample_dict:
-                    scenario_input['scale'] = sample_dict['scale']
+                # Extract from feat tensor (11 channels: color(3) + opacity(1) + quat(4) + scale(3))
+                feat = sample_dict['feat']
+
+                # Always extract from feat if it has 11 channels
+                if feat.shape[-1] == 11:
+                    # Extract opacity from feat channels [3:4]
+                    scenario_input['opacity'] = feat[:, 3:4]
+                    # Extract quat from feat channels [4:8]
+                    scenario_input['quat'] = feat[:, 4:8]
+                    # Extract scale from feat channels [8:11]
+                    scenario_input['scale'] = feat[:, 8:11]
+                else:
+                    # Fallback: try to get from sample_dict
+                    if 'opacity' in sample_dict:
+                        scenario_input['opacity'] = sample_dict['opacity']
+                    if 'quat' in sample_dict:
+                        scenario_input['quat'] = sample_dict['quat']
+                    if 'scale' in sample_dict:
+                        scenario_input['scale'] = sample_dict['scale']
+
                 if 'scene_path' in sample_dict:
                     scenario_input['scene_path'] = sample_dict['scene_path']
 
@@ -1417,6 +1431,7 @@ class DensityInvariantTrainer(TrainerBase):
                         'valid_feat_mask': scenario_input['valid_feat_mask'],
                         'segment': segment,
                         'epoch_progress': epoch_progress,
+                        'scenario': scenario_name,  # Pass scenario for Rendered2DLoss (only dense computes loss)
                     }
                     # Add optional parameters for Rendered2DLoss
                     if 'coord' in scenario_input:
@@ -1468,13 +1483,15 @@ class DensityInvariantTrainer(TrainerBase):
                         if loss_dict:
                             l1_val = loss_dict.get('l1_loss', 0.0)
                             cos_val = loss_dict.get('cos_loss', 0.0)
+                            r2d_val = loss_dict.get('rendered2d_loss', 0.0)
                             print(f"  l1_loss: {l1_val:.6f}")
                             print(f"  cos_loss: {cos_val:.6f}")
-                            print(f"  l1 + cos: {l1_val + cos_val:.6f}")
-                            print(f"  Match (|l1+cos - total| < 0.01): {abs((l1_val + cos_val) - loss.item()) < 0.01}")
+                            print(f"  rendered2d_loss: {r2d_val:.6f}")
+                            print(f"  l1 + cos + r2d: {l1_val + cos_val + r2d_val:.6f}")
+                            print(f"  Match (|l1+cos+r2d - total| < 0.01): {abs((l1_val + cos_val + r2d_val) - loss.item()) < 0.01}")
                             # Check if loss weights are applied correctly
-                            # Expected: Total = L1_raw*1.0 + Cos_raw*0.5
-                            # If loss_dict already contains weighted values, then Total should equal L1 + Cos
+                            # Expected: Total = L1_raw*1.0 + Cos_raw*0.5 + Rendered2D_raw*1.0
+                            # If loss_dict already contains weighted values, then Total should equal L1 + Cos + Rendered2D
                         else:
                             print(f"  WARNING: loss_dict is None! verbose_losses may be disabled!")
                         if per_dim_losses and 'per_dim_l1' in per_dim_losses:

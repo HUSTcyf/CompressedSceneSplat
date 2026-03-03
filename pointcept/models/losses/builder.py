@@ -66,9 +66,11 @@ class Criteria(object):
                     name = "l1_loss"
                 elif name == "svdweightedl1loss":
                     name = "l1_loss"
-                elif name == "rendered2dlloss":
+                elif name == "rendered2dloss":
                     name = "rendered2d_loss"
-                loss_values[name] = loss_value.item()
+
+                # Always call detach() before item() to avoid issues with non-leaf tensors
+                loss_values[name] = loss_value.detach().item()
 
             # Return total loss, individual loss values, and per-dimension losses
             return loss, loss_values, per_dim_losses, per_dim_weights

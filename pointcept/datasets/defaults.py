@@ -68,12 +68,19 @@ class DefaultDataset(Dataset):
         )
 
     def get_data_list(self, filtered_scene=None):
-        if isinstance(self.split, str):
+        # Handle single scene mode: when split is empty, data_root is the scene path
+        if isinstance(self.split, str) and self.split == "":
+            data_list = [self.data_root] if os.path.isdir(self.data_root) else []
+        elif isinstance(self.split, str):
             data_list = glob.glob(os.path.join(self.data_root, self.split, "*"))
+            # Filter to only include directories (skip files like lang_label_mapping.json)
+            data_list = [d for d in data_list if os.path.isdir(d)]
         elif isinstance(self.split, Sequence):
             data_list = []
             for split in self.split:
                 data_list += glob.glob(os.path.join(self.data_root, split, "*"))
+            # Filter to only include directories
+            data_list = [d for d in data_list if os.path.isdir(d)]
         else:
             raise NotImplementedError
         if filtered_scene is not None:

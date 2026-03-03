@@ -1717,6 +1717,224 @@ class GridSample(object):
 
 
 @TRANSFORMS.register_module()
+class GridSampleAveraged(object):
+    """
+    GridSample with feature averaging instead of random sampling.
+
+    Unlike GridSample which randomly selects one point per grid cell,
+    this transform averages the input features (color, opacity, quat, scale)
+    within each grid cell. This ensures:
+
+    1. Consistent input-output pairs during training (same geometry -> same GT)
+    2. More stable training convergence
+    3. Smooth feature representations
+
+    Critical for SVD-compressed features where all points in a grid share
+    identical GT features.
+    """
+
+    def __init__(
+        self,
+        grid_size=0.01,
+        hash_type="fnv",
+        mode="train",
+        keys=("coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask", "point_to_grid", "segment"),
+        return_inverse=False,
+        return_grid_coord=True,
+        return_min_coord=False,
+        return_displacement=False,
+        project_displacement=False,
+        apply_to_pc=True,
+        # Keys to average within each grid (input features only, not GT!)
+        average_keys=("color", "opacity", "quat", "scale"),
+        # Keys to keep first value (metadata)
+        first_keys=("coord",),
+    ):
+        self.grid_size = grid_size
+        self.hash = self.fnv_hash_vec if hash_type == "fnv" else self.ravel_hash_vec
+        assert mode in ["train", "test"]
+        self.mode = mode
+        self.keys = keys
+        self.return_inverse = return_inverse
+        self.return_grid_coord = return_grid_coord
+        self.return_min_coord = return_min_coord
+        self.return_displacement = return_displacement
+        self.project_displacement = project_displacement
+        self.apply_to_pc = apply_to_pc
+        self.average_keys = average_keys
+        self.first_keys = first_keys
+
+    def __call__(self, data_dict):
+        assert "coord" in data_dict.keys()
+        scaled_coord = data_dict["coord"] / np.array(self.grid_size)
+        grid_coord = np.floor(scaled_coord).astype(int)
+        min_coord = grid_coord.min(0)
+        grid_coord -= min_coord
+        scaled_coord -= min_coord
+        min_coord = min_coord * np.array(self.grid_size)
+        key = self.hash(grid_coord)
+        idx_sort = np.argsort(key)
+        key_sort = key[idx_sort]
+        _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
+
+        # Handle pc_coord if present (for evaluation)
+        if "pc_coord" in data_dict and self.apply_to_pc:
+            pc_coord = data_dict["pc_coord"]
+            pc_scaled_coord = pc_coord / np.asarray(self.grid_size)
+            pc_grid_coord = np.floor(pc_scaled_coord).astype(int)
+            pc_grid_coord -= pc_grid_coord.min(0)
+            pc_key = self.hash(pc_grid_coord)
+            pc_idx_sort = np.argsort(pc_key, kind="stable")
+            pc_key_sorted = pc_key[pc_idx_sort]
+            first_idx = np.nonzero(
+                np.concatenate(([True], pc_key_sorted[1:] != pc_key_sorted[:-1]))
+            )[0]
+            pc_segment = data_dict.get("pc_segment", None)
+            chosen_idx = []
+            for i, start in enumerate(first_idx):
+                end = first_idx[i + 1] if i + 1 < len(first_idx) else len(pc_idx_sort)
+                cell_idx = pc_idx_sort[start:end]
+                if pc_segment is not None:
+                    valid = cell_idx[pc_segment[cell_idx] != -1]
+                    chosen_idx.append(valid[0] if len(valid) else cell_idx[0])
+                else:
+                    chosen_idx.append(cell_idx[0])
+            chosen_idx = np.asarray(chosen_idx, dtype=np.int64)
+            data_dict["pc_coord"] = data_dict["pc_coord"][chosen_idx]
+            if "pc_segment" in data_dict:
+                data_dict["pc_segment"] = data_dict["pc_segment"][chosen_idx]
+
+        if self.mode == "train":
+            # Get one representative index per grid (first point in each grid)
+            grid_splits = np.cumsum(np.insert(count, 0, 0)[0:-1])
+            idx_representative = idx_sort[grid_splits]
+
+            # Average features within each grid cell
+            averaged_data = {}
+            for avg_key in self.average_keys:
+                if avg_key not in data_dict.keys():
+                    continue
+                # Compute average for each grid cell
+                feature_array = data_dict[avg_key]
+                averaged_feature = np.zeros((len(count),) + feature_array.shape[1:],
+                                           dtype=feature_array.dtype)
+
+                for i, (start, end) in enumerate(zip(grid_splits, np.append(grid_splits[1:], len(idx_sort)))):
+                    cell_indices = idx_sort[start:end]
+                    # Average features in this grid cell
+                    averaged_feature[i] = feature_array[cell_indices].mean(axis=0)
+
+                averaged_data[avg_key] = averaged_feature
+
+            # Keep first value for coord and other first_keys
+            for first_key in self.first_keys:
+                if first_key in data_dict.keys():
+                    averaged_data[first_key] = data_dict[first_key][idx_representative]
+
+            # For non-averaged, non-first keys (like lang_feat, point_to_grid), keep first value
+            # These are GT features that are already shared across all points in a grid
+            remaining_keys = set(self.keys) - set(self.average_keys) - set(self.first_keys)
+            for key in remaining_keys:
+                if key in data_dict.keys():
+                    averaged_data[key] = data_dict[key][idx_representative]
+
+            # Update data_dict with averaged/selected values
+            for key, value in averaged_data.items():
+                data_dict[key] = value
+
+            # Additional outputs
+            if self.return_inverse:
+                data_dict["inverse"] = np.zeros_like(inverse)
+                data_dict["inverse"][idx_sort] = inverse
+
+            if self.return_grid_coord:
+                data_dict["grid_coord"] = grid_coord[idx_representative]
+
+            if self.return_min_coord:
+                data_dict["min_coord"] = min_coord.reshape([1, 3])
+
+            if self.return_displacement:
+                displacement = (scaled_coord - grid_coord - 0.5)
+                if self.project_displacement and "normal" in data_dict:
+                    displacement = np.sum(displacement * data_dict["normal"], axis=-1, keepdims=True)
+                data_dict["displacement"] = displacement[idx_representative]
+
+            # Preserve non-array metadata keys
+            metadata_keys_to_preserve = ["scene_path", "name", "dataset"]
+            for key in metadata_keys_to_preserve:
+                if key in data_dict and key not in self.keys:
+                    pass  # Already in data_dict
+
+            return data_dict
+
+        elif self.mode == "test":
+            # Test mode: return all points (one slice per grid cell)
+            data_part_list = []
+            for i in range(count.max()):
+                idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + i % count
+                idx_part = idx_sort[idx_select]
+                data_part = dict(index=idx_part)
+
+                if self.return_inverse:
+                    data_dict["inverse"] = np.zeros_like(inverse)
+                    data_dict["inverse"][idx_sort] = inverse
+
+                if self.return_grid_coord:
+                    data_part["grid_coord"] = grid_coord[idx_part]
+
+                if self.return_min_coord:
+                    data_part["min_coord"] = min_coord.reshape([1, 3])
+
+                if self.return_displacement:
+                    displacement = (scaled_coord - grid_coord - 0.5)
+                    if self.project_displacement:
+                        displacement = np.sum(displacement * data_dict["normal"], axis=-1, keepdims=True)
+                    data_part["displacement"] = displacement[idx_part]
+
+                for key in data_dict.keys():
+                    if key in self.keys:
+                        data_part[key] = data_dict[key][idx_part]
+                    else:
+                        data_part[key] = data_dict[key]
+
+                data_part_list.append(data_part)
+
+            return data_part_list
+        else:
+            raise NotImplementedError
+
+    @staticmethod
+    def ravel_hash_vec(arr):
+        """Ravel the coordinates after subtracting the min coordinates."""
+        assert arr.ndim == 2
+        arr = arr.copy()
+        arr -= arr.min(0)
+        arr = arr.astype(np.uint64, copy=False)
+        arr_max = arr.max(0).astype(np.uint64) + 1
+
+        keys = np.zeros(arr.shape[0], dtype=np.uint64)
+        for j in range(arr.shape[1] - 1):
+            keys += arr[:, j]
+            keys *= arr_max[j + 1]
+        keys += arr[:, -1]
+        return keys
+
+    @staticmethod
+    def fnv_hash_vec(arr):
+        """FNV64-1A hash function."""
+        assert arr.ndim == 2
+        arr = arr.copy()
+        arr = arr.astype(np.uint64, copy=False)
+        hashed_arr = np.uint64(14695981039346656037) * np.ones(
+            arr.shape[0], dtype=np.uint64
+        )
+        for j in range(arr.shape[1]):
+            hashed_arr *= np.uint64(1099511628211)
+            hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
+        return hashed_arr
+
+
+@TRANSFORMS.register_module()
 class SphereCrop(object):
     """
     reduce the point cloud to a fixed maximum number of points

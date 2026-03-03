@@ -1501,6 +1501,7 @@ class Rendered2DLoss(nn.Module):
         scale=None,
         scene_path=None,
         epoch_progress=None,
+        scenario=None,
         **kwargs
     ):
         """
@@ -1514,6 +1515,7 @@ class Rendered2DLoss(nn.Module):
             scale: Gaussian scale [N, 3]
             scene_path: Path to scene directory (for loading GT renders and cameras)
             epoch_progress: Current epoch progress [0, 1]
+            scenario: Training scenario ('dense', 'half', 'single') - only compute loss for 'dense'
 
         Returns:
             Scalar loss value
@@ -1525,6 +1527,10 @@ class Rendered2DLoss(nn.Module):
         from gsplat import rasterization
 
         device = pred.device
+
+        # Only compute rendered2d loss for dense scenario to avoid Gaussian sampling issues
+        if scenario is not None and scenario != 'dense':
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
 
         # Debug: Check which parameters are missing (only print once)
         if not hasattr(self, '_debug_printed'):

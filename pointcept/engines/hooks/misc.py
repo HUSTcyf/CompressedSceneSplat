@@ -3,6 +3,8 @@ import glob
 import os
 import shutil
 import time
+import json
+import datetime
 import torch
 import torch.utils.data
 from collections import OrderedDict
@@ -23,7 +25,6 @@ from .builder import HOOKS
 from pathlib import Path
 
 from numpy.core.multiarray import scalar
-import torch
 
 # allow the numpy scalar in weights_only loads
 torch.serialization.add_safe_globals([scalar])
@@ -150,18 +151,22 @@ class InformationWriter(HookBase):
 @HOOKS.register_module()
 class CheckpointSaver(HookBase):
     def __init__(self, save_freq=None):
-        self.save_freq = save_freq  # None → only ‘model_last’
+        self.save_freq = save_freq  # None → only 'model_last'
 
     def after_epoch(self):
         # ---------------  COMPUTE (all ranks) ---------------
         # gather best‑metric bookkeeping exactly as before
         is_best = False
+        best_type = "validation"
+        best_value = None
+
         if is_main_process() and self.trainer.cfg.evaluate:
             cur_val = self.trainer.comm_info["current_metric_value"]
             cur_name = self.trainer.comm_info["current_metric_name"]
             if cur_val > self.trainer.best_metric_value:
                 self.trainer.best_metric_value = cur_val
                 is_best = True
+                best_value = cur_val
                 self.trainer.logger.info(
                     f"Best validation {cur_name} updated to: {cur_val:.4f}"
                 )
@@ -178,30 +183,67 @@ class CheckpointSaver(HookBase):
             ckpt_dir = Path(self.trainer.cfg.save_path) / "model"
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             fname_last = ckpt_dir / "model_last.pth"
+            best_epoch_json_path = Path(self.trainer.cfg.save_path) / "best_epoch.json"
 
+            # Prepare checkpoint data
+            current_epoch = self.trainer.epoch + 1
+            checkpoint_data = {
+                "epoch": current_epoch,
+                "state_dict": self.trainer.model.state_dict(),
+                "optimizer": self.trainer.optimizer.state_dict(),
+                "scheduler": self.trainer.scheduler.state_dict(),
+                "scaler": (
+                    self.trainer.scaler.state_dict()
+                    if self.trainer.cfg.enable_amp
+                    else None
+                ),
+                "best_metric_value": self.trainer.best_metric_value,
+            }
+
+            # Save checkpoint
             self.trainer.logger.info(f"Saving checkpoint to: {fname_last}")
-            torch.save(
-                {
-                    "epoch": self.trainer.epoch + 1,
-                    "state_dict": self.trainer.model.state_dict(),
-                    "optimizer": self.trainer.optimizer.state_dict(),
-                    "scheduler": self.trainer.scheduler.state_dict(),
-                    "scaler": (
-                        self.trainer.scaler.state_dict()
-                        if self.trainer.cfg.enable_amp
-                        else None
-                    ),
-                    "best_metric_value": self.trainer.best_metric_value,
-                },
-                f"{fname_last}.tmp",
-            )
+            torch.save(checkpoint_data, f"{fname_last}.tmp")
             os.replace(f"{fname_last}.tmp", fname_last)
 
+            # Save best model and update best_epoch.json
             if is_best:
                 shutil.copyfile(fname_last, ckpt_dir / "model_best.pth")
-            if self.save_freq and (self.trainer.epoch + 1) % self.save_freq == 0:
+
+                # Save best epoch information to JSON
+                best_epoch_info = {
+                    "best_epoch": current_epoch,
+                    "best_type": best_type,
+                    "best_value": float(best_value) if best_value is not None else float(self.trainer.best_metric_value),
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "checkpoint_path": str(ckpt_dir / "model_best.pth"),
+                }
+
+                # Add validation metric details
+                if self.trainer.cfg.evaluate and "current_metric_name" in self.trainer.comm_info:
+                    best_epoch_info["validation_metric_name"] = self.trainer.comm_info["current_metric_name"]
+                    best_epoch_info["validation_metric_value"] = float(self.trainer.comm_info["current_metric_value"])
+
+                # Save to best_epoch.json
+                with open(best_epoch_json_path, 'w') as f:
+                    json.dump(best_epoch_info, f, indent=2)
+
+                self.trainer.logger.info(
+                    f"Best epoch info saved to: {best_epoch_json_path}"
+                )
+                self.trainer.logger.info(
+                    f"  - Best epoch: {best_epoch_info['best_epoch']}"
+                )
+                self.trainer.logger.info(
+                    f"  - Best type: {best_epoch_info['best_type']}"
+                )
+                self.trainer.logger.info(
+                    f"  - Best value: {best_epoch_info['best_value']:.6f}"
+                )
+
+            # Save periodic checkpoints
+            if self.save_freq and current_epoch % self.save_freq == 0:
                 shutil.copyfile(
-                    fname_last, ckpt_dir / f"epoch_{self.trainer.epoch + 1}.pth"
+                    fname_last, ckpt_dir / f"epoch_{current_epoch}.pth"
                 )
 
         # ---------------  RESUME TRAINING (all ranks) ---------------
@@ -606,6 +648,9 @@ class PerSceneLossVisualizer(HookBase):
     Saves plots to {save_path}/loss_curves/ directory.
     Updates plots after each epoch (configurable frequency).
     Accumulates loss history across epochs (no duplicate iterations).
+
+    Note: Per-scene plots are only saved for OVS datasets (lerf_ovs, 3DOVS).
+    For other datasets (e.g., ScanNet), only the average loss plot is saved.
     """
 
     def __init__(self, enabled=True, save_every_n_epochs=1, save_at_end=True):
@@ -621,6 +666,38 @@ class PerSceneLossVisualizer(HookBase):
         # Accumulated loss history (persists across epochs)
         self._accumulated_losses = {}
         self._scene_epoch_iter_counts = {}
+        # Cache for OVS dataset detection (renamed to avoid recursion)
+        self._is_ovs_dataset_cache = None
+
+    def _is_ovs_dataset(self):
+        """Check if the current dataset is an OVS dataset (lerf_ovs, 3DOVS, etc.)."""
+        if self._is_ovs_dataset_cache is not None:
+            return self._is_ovs_dataset_cache
+
+        cfg = self.trainer.cfg
+
+        # Check if train dataset is ConcatDataset with OVS data sources
+        train_cfg = cfg.data.train if hasattr(cfg.data, 'train') else cfg.data.get('train', {})
+
+        # Method 1: Check if it's a ConcatDataset with specific OVS paths
+        if isinstance(train_cfg, dict) and train_cfg.get('type') == 'ConcatDataset':
+            datasets = train_cfg.get('datasets', [])
+            for dataset in datasets:
+                data_root = dataset.get('data_root', '')
+                if any(keyword in data_root.lower() for keyword in ['lerf_ovs', '3dovs', 'ovs']):
+                    self._is_ovs_dataset_cache = True
+                    return True
+
+        # Method 2: Check data_root directly for single dataset
+        if isinstance(train_cfg, dict):
+            data_root = train_cfg.get('data_root', '')
+            if any(keyword in data_root.lower() for keyword in ['lerf_ovs', '3dovs', 'ovs']):
+                self._is_ovs_dataset_cache = True
+                return True
+
+        # Default: not an OVS dataset (e.g., ScanNet, ScanNet200)
+        self._is_ovs_dataset_cache = False
+        return False
 
     def _load_accumulated_losses(self):
         """Load accumulated loss history from previous runs."""
@@ -842,14 +919,23 @@ class PerSceneLossVisualizer(HookBase):
         self.trainer.logger.info(f"  Total scenes: {len(plot_data)}")
         self.trainer.logger.info(f"  Output directory: {loss_curves_dir}")
 
-        # Generate plot for each scene
-        for scene_name, loss_data in plot_data.items():
-            self._plot_scene_losses(scene_name, loss_data, loss_curves_dir, suffix)
+        # Check if this is an OVS dataset
+        is_ovs = self._is_ovs_dataset()
+        self.trainer.logger.info(f"  OVS Dataset: {is_ovs} (per-scene plots: {'enabled' if is_ovs else 'disabled'})")
 
-        # Generate average loss plot across all scenes
+        # Generate plot for each scene (only for OVS datasets)
+        if is_ovs:
+            for scene_name, loss_data in plot_data.items():
+                self._plot_scene_losses(scene_name, loss_data, loss_curves_dir, suffix)
+
+        # Generate average loss plot across all scenes (always saved)
         self._plot_average_losses(plot_data, loss_curves_dir, suffix)
 
-        self.trainer.logger.info(f"[PerSceneLossVisualizer] Saved {len(plot_data)} loss curve plots ({suffix}).")
+        # Update log message based on dataset type
+        if is_ovs:
+            self.trainer.logger.info(f"[PerSceneLossVisualizer] Saved {len(plot_data)} per-scene + 1 average loss curve plots ({suffix}).")
+        else:
+            self.trainer.logger.info(f"[PerSceneLossVisualizer] Saved 1 average loss curve plot ({suffix}). Per-scene plots disabled for non-OVS dataset.")
 
     def _plot_scene_losses(self, scene_name, loss_data, output_dir, suffix=""):
         """Generate and save a single scene's loss curves."""
@@ -1096,6 +1182,8 @@ class PerSceneLossVisualizer(HookBase):
                 scene_losses[scene_name]['l1_loss'] = np.array(loss_data['l1_loss'])
             if loss_data.get('cos_loss'):
                 scene_losses[scene_name]['cos_loss'] = np.array(loss_data['cos_loss'])
+            if loss_data.get('rendered2d_loss'):
+                scene_losses[scene_name]['rendered2d_loss'] = np.array(loss_data['rendered2d_loss'])
 
         # Interpolate losses for all scenes at common iteration points
         # Use iteration 0 as the starting point (loss = 0)
@@ -1103,11 +1191,13 @@ class PerSceneLossVisualizer(HookBase):
         avg_total_loss = []
         avg_l1_loss = []
         avg_cos_loss = []
+        avg_rendered2d_loss = []
 
         for iter_val in interp_iterations:
             total_losses_at_iter = []
             l1_losses_at_iter = []
             cos_losses_at_iter = []
+            rendered2d_losses_at_iter = []
 
             for scene_name, scene_data in scene_losses.items():
                 iter_idx = np.searchsorted(scene_data['iterations'], iter_val)
@@ -1163,15 +1253,35 @@ class PerSceneLossVisualizer(HookBase):
                             loss = (1 - t) * cos_loss[iter_idx - 1] + t * cos_loss[iter_idx]
                     cos_losses_at_iter.append(loss)
 
+                # Same for Rendered2D loss
+                if 'rendered2d_loss' in scene_data:
+                    rendered2d_loss = scene_data['rendered2d_loss']
+                    if iter_idx == 0:
+                        loss = 0
+                    elif iter_idx >= len(rendered2d_loss):
+                        loss = rendered2d_loss[-1]
+                    else:
+                        iter_prev = scene_data['iterations'][iter_idx - 1]
+                        iter_next = scene_data['iterations'][iter_idx]
+                        if iter_next == iter_prev:
+                            loss = rendered2d_loss[iter_idx - 1]
+                        else:
+                            t = (iter_val - iter_prev) / (iter_next - iter_prev)
+                            loss = (1 - t) * rendered2d_loss[iter_idx - 1] + t * rendered2d_loss[iter_idx]
+                    rendered2d_losses_at_iter.append(loss)
+
             avg_total_loss.append(np.mean(total_losses_at_iter))
             if l1_losses_at_iter:
                 avg_l1_loss.append(np.mean(l1_losses_at_iter))
             if cos_losses_at_iter:
                 avg_cos_loss.append(np.mean(cos_losses_at_iter))
+            if rendered2d_losses_at_iter:
+                avg_rendered2d_loss.append(np.mean(rendered2d_losses_at_iter))
 
         avg_total_loss = np.array(avg_total_loss)
         avg_l1_loss = np.array(avg_l1_loss) if avg_l1_loss else None
         avg_cos_loss = np.array(avg_cos_loss) if avg_cos_loss else None
+        avg_rendered2d_loss = np.array(avg_rendered2d_loss) if avg_rendered2d_loss else None
 
         # Get max epoch info
         max_epoch = 0
@@ -1180,9 +1290,10 @@ class PerSceneLossVisualizer(HookBase):
             if epochs:
                 max_epoch = max(max_epoch, max(epochs))
 
-        # Create figure with subplots
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
-        fig.suptitle(f'Average Loss Across All Scenes (N={len(plot_data)}) - Epoch {max_epoch}', fontsize=14, fontweight='bold')
+        # Create figure with 2x2 subplots
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        axes = axes.flatten()  # Flatten for easy indexing
+        fig.suptitle(f'Average Loss Across All Scenes (N={len(plot_data)}) - Epoch {max_epoch}', fontsize=16, fontweight='bold')
 
         # Plot 1: Total Loss
         ax = axes[0]
@@ -1191,7 +1302,7 @@ class PerSceneLossVisualizer(HookBase):
         ax.set_xlabel('Iteration', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_title('Average Total Loss over Training', fontsize=12)
+        ax.set_title('Average Total Loss over Training', fontsize=12, fontweight='bold')
 
         # Plot 2: L1 Loss (if available)
         ax = axes[1]
@@ -1205,7 +1316,7 @@ class PerSceneLossVisualizer(HookBase):
         ax.set_xlabel('Iteration', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_title('Average L1 Loss over Training', fontsize=12)
+        ax.set_title('Average L1 Loss over Training', fontsize=12, fontweight='bold')
 
         # Plot 3: Cosine Loss (if available)
         ax = axes[2]
@@ -1219,7 +1330,21 @@ class PerSceneLossVisualizer(HookBase):
         ax.set_xlabel('Iteration', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_title('Average Cosine Loss over Training', fontsize=12)
+        ax.set_title('Average Cosine Loss over Training', fontsize=12, fontweight='bold')
+
+        # Plot 4: Rendered2D Loss (if available)
+        ax = axes[3]
+        if avg_rendered2d_loss is not None:
+            ax.plot(interp_iterations, avg_rendered2d_loss, 'c-', linewidth=2, alpha=0.8, label=f'Average Rendered2D Loss (N={len(plot_data)})')
+            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        else:
+            ax.text(0.5, 0.5, 'Rendered2D Loss data not available',
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        ax.set_xlabel('Iteration', fontsize=10)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        ax.set_title('Average Rendered2D Loss over Training', fontsize=12, fontweight='bold')
 
         # Add statistics text box
         stats_text = f"Average Statistics:\n"
@@ -1227,6 +1352,8 @@ class PerSceneLossVisualizer(HookBase):
         stats_text += f"  Min Total Loss: {avg_total_loss.min():.4f}\n"
         stats_text += f"  Max Total Loss: {avg_total_loss.max():.4f}\n"
         stats_text += f"  Final Total Loss: {avg_total_loss[-1]:.4f}\n"
+        if avg_rendered2d_loss is not None:
+            stats_text += f"  Final Rendered2D Loss: {avg_rendered2d_loss[-1]:.4f}\n"
         stats_text += f"  Total Iterations: {len(interp_iterations)}"
 
         fig.text(0.02, 0.5, stats_text, fontsize=9, verticalalignment='center',
