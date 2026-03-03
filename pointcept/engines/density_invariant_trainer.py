@@ -1949,10 +1949,10 @@ class DensityInvariantTrainer(TrainerBase):
             should_skip_grad = False
             skip_reason = ""
 
-            # Check 1: Global absolute threshold (1.0)
-            if max_grad > 1.0:
+            # Check 1: Global absolute threshold
+            if max_grad > self.cfg.max_grad_threshold:
                 should_skip_grad = True
-                skip_reason = f"gradient {max_grad:.4f} > 1.0"
+                skip_reason = f"gradient {max_grad:.4f} > {self.cfg.max_grad_threshold}"
 
             # Check 2: Consecutive large gradient detection
             # DISABLED during warmup: LR is low, gradients may be consistently large

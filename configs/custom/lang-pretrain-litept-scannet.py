@@ -196,6 +196,7 @@ density_invariant = dict(
 # Scheduler settings (same as original Scannet config)
 # ============================================================================
 epoch = 800
+max_grad_threshold = 4.0
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 # scheduler = dict(
 #     type="OneCycleLR",

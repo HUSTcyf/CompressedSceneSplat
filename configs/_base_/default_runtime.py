@@ -12,6 +12,7 @@ batch_size_test = None  # auto adapt to bs 1 for each gpu
 epoch = 100  # total epoch, data loop = epoch // eval_epoch
 eval_epoch = 100  # sche total eval & checkpoint epoch
 clip_grad = None  # disable with None, enable with a float
+max_grad_threshold = 1.0  # threshold for skipping iterations with large gradients
 
 sync_bn = False
 enable_amp = False
