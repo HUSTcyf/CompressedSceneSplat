@@ -82,7 +82,7 @@ def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.n
     if not os.path.exists(coord_path):
         raise FileNotFoundError(f"coord.npy not found in {data_dir}")
     if not os.path.exists(lang_feat_path):
-        raise FileNotFoundError(f"lang_feat.npy not found in {data_dir}")
+        raise FileNotFoundError(f"{lang_feat_name} not found in {data_dir}")
 
     # Load data
     coord = np.load(coord_path).astype(np.float32)
@@ -109,15 +109,15 @@ def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.n
                 raise ValueError(
                     f"Point count mismatch in {data_dir}:\\n"
                     f"  coord.npy: {coord.shape[0]:,} points\\n"
-                    f"  lang_feat.npy: {lang_feat.shape[0]:,} points\\n"
-                    f"  valid_feat_mask (True): {num_valid:,} points\\n"
+                    f"  {lang_feat_name}: {lang_feat.shape[0]:,} points\\n"
+                    f"  {valid_feat_mask_name} (True): {num_valid:,} points\\n"
                     f"  lang_feat size doesn't match coord or valid_mask count!"
                 )
         else:
             raise ValueError(
                 f"Point count mismatch in {data_dir}:\\n"
                 f"  coord.npy: {coord.shape[0]:,} points\\n"
-                f"  lang_feat.npy: {lang_feat.shape[0]:,} points\\n"
+                f"  {lang_feat_name}: {lang_feat.shape[0]:,} points\\n"
                 f"  These files must have the same number of points!"
             )
     else:
@@ -130,7 +130,7 @@ def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.n
                 raise ValueError(
                     f"Point count mismatch in {data_dir}:\\n"
                     f"  coord.npy: {coord.shape[0]:,} points\\n"
-                    f"  valid_feat_mask.npy: {valid_mask.shape[0]:,} points\\n"
+                    f"  {valid_feat_mask_name}: {valid_mask.shape[0]:,} points\\n"
                     f"  These files must have same number of points!"
                 )
         else:

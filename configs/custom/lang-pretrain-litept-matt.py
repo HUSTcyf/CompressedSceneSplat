@@ -296,8 +296,8 @@ data = dict(
     train=dict(
         type=dataset_type,
         split=(
-            "train_grid1.0cm_chunk6x6_stride3x3_filtered",
-            "val_grid1.0cm_chunk6x6_stride3x3_filtered",
+            "train_grid1.0cm_chunk6x6x4_stride4x4x4",
+            "val_grid1.0cm_chunk6x6x4_stride4x4x4",
         ),
         data_root=matterport3d_data_root,
         sample_tail_classes=False,
@@ -334,6 +334,7 @@ data = dict(
                     "segment",
                     "lang_feat",
                     "valid_feat_mask",
+                    "point_to_grid", 
                 ),
                 return_grid_coord=True,
             ),
@@ -362,7 +363,7 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split=("val_grid1.0cm_chunk6x6_stride3x3_filtered"),
+        split=("val_grid1.0cm_chunk6x6x4_stride4x4x4"),
         data_root=matterport3d_data_root,
         is_train=False,
         load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
@@ -385,6 +386,7 @@ data = dict(
                     "segment",
                     "lang_feat",
                     "valid_feat_mask",
+                    "point_to_grid", 
                 ),
                 return_grid_coord=True,
             ),
@@ -446,6 +448,7 @@ data = dict(
                         "lang_feat",
                         "valid_feat_mask",
                         "segment",
+                        "point_to_grid", 
                     ),
                     apply_to_pc=False,
                     return_inverse=True,
@@ -466,6 +469,7 @@ data = dict(
                         "scale",
                         "lang_feat",
                         "valid_feat_mask",
+                        "point_to_grid", 
                     ),
                     apply_to_pc=False,
                     return_grid_coord=True,

@@ -115,7 +115,7 @@ class Matterport3DGSDataset(DefaultDataset):
                     # so compressed lang_feat will be preserved (not filtered)
                     # After filtering, both coord and lang_feat will have num_valid points
                     data_dict["lang_feat"] = point_lang_feat.astype(np.float32)
-                    print(f"current: {name} loaded SVD-{self.svd_rank} compressed lang_feat: {point_lang_feat.shape}")
+                    # print(f"current: {name} loaded SVD-{self.svd_rank} compressed lang_feat: {point_lang_feat.shape}")
                 except Exception as e:
                     print(f"Warning: Failed to load SVD file for {name}: {e}")
             else:
@@ -130,7 +130,7 @@ class Matterport3DGSDataset(DefaultDataset):
             data_dict["valid_feat_mask"] = data_dict["valid_feat_mask"].astype(bool)
             num_points = data_dict["valid_feat_mask"].shape[0]
             num_valid = data_dict["valid_feat_mask"].sum()
-            print(f"current: {name} valid_feat_mask: {num_valid}/{num_points} ({num_valid/num_points*100:.1f}%)")
+            # print(f"current: {name} valid_feat_mask: {num_valid}/{num_points} ({num_valid/num_points*100:.1f}%)")
         else:
             print("current:", name)
 

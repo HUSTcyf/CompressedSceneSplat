@@ -2,7 +2,7 @@
 """
 Create SVD-compressed checkpoint from existing checkpoint and SVD decomposition.
 
-This script supports two modes:
+This script supports three modes:
 
 1. SVD Decomposition Mode (default):
    - Loads SVD results from lang_feat_svd.npz (U, S, Vt matrices)
@@ -16,6 +16,12 @@ This script supports two modes:
    - Uses the compressed features directly (no additional compression needed)
    - Saves checkpoint_with_features.pth to output_features/{scene}/
 
+3. Direct Mode (--direct):
+   - Loads all Gaussian parameters directly from TRAIN_ROOT (coord, color, opacity, quat, scale)
+   - Loads language features from TRAIN_ROOT
+   - Creates checkpoint without requiring CHECKPOINT_ROOT
+   - Saves checkpoint_with_features.pth to output_features/{scene}/
+
 Usage:
     # SVD decomposition mode
     python tools/create_svd_compressed_checkpoint.py --scene figurines
@@ -24,6 +30,10 @@ Usage:
     # Grid SVD mode (pre-compressed features)
     python tools/create_svd_compressed_checkpoint.py --scene figurines --use-grid-svd
     python tools/create_svd_compressed_checkpoint.py --all-scenes --use-grid-svd
+
+    # Direct mode (no checkpoint required)
+    python tools/create_svd_compressed_checkpoint.py --scene figurines --direct
+    python tools/create_svd_compressed_checkpoint.py --all-scenes --direct
 
 SVD compression formula:
     compressed_features = language_features @ Vt[:rank, :].T
@@ -42,9 +52,9 @@ from typing import Tuple, Dict, List, Optional
 
 # Default paths
 dataset = "lerf_ovs"
-dataset = "3DOVS"
+# dataset = "3DOVS"
 DATA_ROOT = "/new_data/cyf/projects/SceneSplat"
-TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/{dataset}/train"
+TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train_clip/{dataset}/train"
 CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"
 OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 
@@ -52,13 +62,21 @@ OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 SVD_RANK = 16
 
 
-def get_available_scenes(use_grid_svd: bool = False, rank: int = SVD_RANK) -> List[str]:
-    """Get list of scenes that have both SVD files and checkpoints.
+def get_available_scenes(
+    use_grid_svd: bool = False,
+    rank: int = SVD_RANK,
+    feat_seq: Optional[int] = None,
+    direct_mode: bool = False
+) -> List[str]:
+    """Get list of scenes that have required files.
 
     Args:
         use_grid_svd: If True, look for lang_feat_grid_svd_r*.npz files
                      If False, look for lang_feat_svd.npz files
         rank: SVD rank for grid SVD mode (e.g., 16 for r16)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        direct_mode: If True, only check for Gaussian parameter files in TRAIN_ROOT
+                    If False, require both SVD files and checkpoints
 
     Returns:
         List of scene names that have both required files
@@ -66,20 +84,44 @@ def get_available_scenes(use_grid_svd: bool = False, rank: int = SVD_RANK) -> Li
     train_dir = Path(TRAIN_ROOT)
     checkpoint_dir = Path(CHECKPOINT_ROOT)
 
+    # Build sequence suffix
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+
     # Find all scenes with SVD files
     svd_scenes = set()
     if train_dir.exists():
         if use_grid_svd:
-            # Look for lang_feat_grid_svd_r*.npz files
-            pattern = f"*/lang_feat_grid_svd_r{rank}.npz"
+            # Look for lang_feat_grid_svd_r*_*.npz files (with sequence suffix)
+            pattern = f"*/lang_feat_grid_svd_r{rank}{seq_suffix}.npz"
             for svd_file in train_dir.glob(pattern):
                 svd_scenes.add(svd_file.parent.name)
         else:
-            # Look for lang_feat_svd.npz files
+            # Look for lang_feat_svd.npz files (no sequence support for regular SVD)
             for svd_file in train_dir.glob("*/lang_feat_svd.npz"):
                 svd_scenes.add(svd_file.parent.name)
 
-    # Find all scenes with ckpts/chkpnt*.pth format
+    # Direct mode: only require Gaussian parameter files in TRAIN_ROOT
+    if direct_mode:
+        # Filter scenes that have all required Gaussian parameter files
+        available_scenes = []
+        required_files = ['coord.npy', 'color.npy', 'opacity.npy', 'quat.npy', 'scale.npy']
+        if use_grid_svd:
+            # For grid SVD mode, also require the grid SVD file
+            required_files.append(f"lang_feat_grid_svd_r{rank}{seq_suffix}.npz")
+        else:
+            # For regular SVD mode, also require lang_feat and SVD file
+            required_files.append(f"lang_feat{seq_suffix}.npy")
+            required_files.append(f"valid_feat_mask{seq_suffix}.npy")
+            required_files.append("lang_feat_svd.npz")
+
+        for scene in svd_scenes:
+            scene_dir = train_dir / scene
+            if all((scene_dir / f).exists() for f in required_files):
+                available_scenes.append(scene)
+
+        return sorted(available_scenes)
+
+    # Normal mode: Find all scenes with ckpts/chkpnt*.pth format
     ckpt_scenes = set()
     if checkpoint_dir.exists():
         for ckpt_dir in checkpoint_dir.glob("*/ckpts"):
@@ -92,7 +134,7 @@ def get_available_scenes(use_grid_svd: bool = False, rank: int = SVD_RANK) -> Li
     return available
 
 
-def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK) -> np.ndarray:
+def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feat_seq: Optional[int] = None) -> np.ndarray:
     """Load pre-compressed SVD features from lang_feat_grid_svd_r*.npz.
 
     The grid SVD file contains:
@@ -105,11 +147,14 @@ def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK) -> np.nd
     Args:
         scene: Scene name
         rank: SVD rank (e.g., 16 for r16)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         compressed_features: [N_gaussians, rank] - full compressed feature array
     """
-    grid_svd_path = f"{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}.npz"
+    # Build sequence suffix
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    grid_svd_path = f"{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}{seq_suffix}.npz"
 
     if not os.path.exists(grid_svd_path):
         raise FileNotFoundError(f"Grid SVD file not found: {grid_svd_path}")
@@ -135,12 +180,13 @@ def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK) -> np.nd
 
 def get_svd_compressed_features_from_original(
     scene: str,
-    rank: int = SVD_RANK
+    rank: int = SVD_RANK,
+    feat_seq: Optional[int] = None
 ) -> np.ndarray:
     """Load original features and compress them using SVD decomposition.
 
     This function:
-    1. Loads original lang_feat.npy and valid_feat_mask.npy
+    1. Loads original lang_feat_{seq}.npy and valid_feat_mask_{seq}.npy
     2. Loads SVD components (Vt) from lang_feat_svd.npz
     3. Compresses valid features using SVD projection
     4. Returns full compressed features array [N_gaussians, rank]
@@ -148,13 +194,17 @@ def get_svd_compressed_features_from_original(
     Args:
         scene: Scene name
         rank: SVD compression rank (default 16)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         svd_compressed: [N_gaussians, rank] - SVD compressed features
     """
+    # Build sequence suffix
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+
     # Load original features
-    lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat.npy"
-    valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
+    lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat{seq_suffix}.npy"
+    valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask{seq_suffix}.npy"
 
     if not os.path.exists(lang_feat_path):
         raise FileNotFoundError(f"Language features not found: {lang_feat_path}")
@@ -211,12 +261,13 @@ def get_svd_compressed_features_from_original(
 
 def compare_compression_methods(
     scene: str,
-    rank: int = SVD_RANK
+    rank: int = SVD_RANK,
+    feat_seq: Optional[int] = None
 ) -> Dict[str, float]:
     """Compare Grid SVD vs SVD compression methods.
 
     This function:
-    1. Loads features compressed using Grid SVD (from lang_feat_grid_svd_r*.npz)
+    1. Loads features compressed using Grid SVD (from lang_feat_grid_svd_r*_*.npz)
     2. Computes features compressed using SVD (from original features + Vt)
     3. Calculates error metrics between the two methods
     4. Only compares valid features (where grid SVD has non-zero values)
@@ -224,21 +275,22 @@ def compare_compression_methods(
     Args:
         scene: Scene name
         rank: SVD compression rank (default 16)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         Dictionary containing error metrics
     """
     print(f"\n{'='*60}")
-    print(f"Comparing compression methods for scene: {scene} (rank={rank})")
+    print(f"Comparing compression methods for scene: {scene} (rank={rank}, seq={feat_seq})")
     print(f"{'='*60}\n")
 
     # Load Grid SVD compressed features
     print("Loading Grid SVD compressed features...")
-    grid_compressed = load_grid_svd_compressed_features(scene, rank)  # [N_gaussians, rank]
+    grid_compressed = load_grid_svd_compressed_features(scene, rank, feat_seq)  # [N_gaussians, rank]
 
     # Load SVD compressed features from original
     print("\nLoading SVD compressed features from original...")
-    svd_compressed = get_svd_compressed_features_from_original(scene, rank)  # [N_gaussians, rank]
+    svd_compressed = get_svd_compressed_features_from_original(scene, rank, feat_seq)  # [N_gaussians, rank]
 
     # Verify dimensions match
     if grid_compressed.shape != svd_compressed.shape:
@@ -319,7 +371,9 @@ def compare_compression_methods(
     print(f"\nStatistics Summary:")
     print(f"  Valid features compared: {valid_mask.sum()}")
     print(f"  Compression rank: {rank}")
-    print(f"  Grid SVD unique features: {len(np.unique(np.load(f'{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}.npz')['indices']))}")
+    # Build sequence suffix for file path
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    print(f"  Grid SVD unique features: {len(np.unique(np.load(f'{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}{seq_suffix}.npz')['indices']))}")
 
     print(f"\n{'='*60}\n")
 
@@ -397,13 +451,20 @@ def find_checkpoint(scene: str, preferred_iteration: Optional[int] = None) -> st
     return str(ckpt_files[-1])
 
 
-def load_checkpoint(ckpt_path: str, scene: str) -> Tuple[Tuple, int]:
+def load_checkpoint(ckpt_path: str, scene: str, feat_seq: Optional[int] = None) -> Tuple[Tuple, int]:
     """Load checkpoint file (gsplat format).
+
+    Args:
+        ckpt_path: Path to checkpoint file
+        scene: Scene name (for loading lang_feat and valid_feat_mask)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         model_params: 13-element tuple in capture_language_feature() format
         iteration: iteration number
     """
+    # Build sequence suffix
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
     print(f"Loading checkpoint from: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
@@ -436,7 +497,7 @@ def load_checkpoint(ckpt_path: str, scene: str) -> Tuple[Tuple, int]:
         spatial_lr_scale = 1.0
 
         # Load language features from dataset (will be compressed later)
-        lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat.npy"
+        lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat{seq_suffix}.npy"
         if not os.path.exists(lang_feat_path):
             raise FileNotFoundError(f"Language features not found: {lang_feat_path}")
 
@@ -449,7 +510,7 @@ def load_checkpoint(ckpt_path: str, scene: str) -> Tuple[Tuple, int]:
             print(f"  Warning: Language feature count ({language_features.shape[0]}) != Gaussian count ({N})")
 
         # Load valid_feat_mask to ensure proper feature alignment
-        valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
+        valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask{seq_suffix}.npy"
         if os.path.exists(valid_feat_mask_path):
             print(f"  Loading valid_feat_mask from: {valid_feat_mask_path}")
             valid_feat_mask = torch.from_numpy(np.load(valid_feat_mask_path).astype(np.bool_))
@@ -639,7 +700,8 @@ def process_scene(
     scene: str,
     iteration: Optional[int] = None,
     rank: int = SVD_RANK,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    feat_seq: Optional[int] = None
 ):
     """Process a single scene.
 
@@ -648,9 +710,10 @@ def process_scene(
         iteration: Preferred checkpoint iteration (None for latest)
         rank: SVD compression rank
         output_dir: Output directory (default OUTPUT_ROOT)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene}")
+    print(f"Processing scene: {scene} (seq={feat_seq})")
     print(f"{'='*60}\n")
 
     # Load SVD components
@@ -658,7 +721,7 @@ def process_scene(
 
     # Load checkpoint
     ckpt_path = find_checkpoint(scene, iteration)
-    model_params, iteration_num = load_checkpoint(ckpt_path, scene)
+    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feat_seq)
 
     # Extract language features (element 7 of the tuple)
     original_features = model_params[7]
@@ -703,12 +766,13 @@ def process_scene_grid_svd(
     scene: str,
     iteration: Optional[int] = None,
     rank: int = SVD_RANK,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    feat_seq: Optional[int] = None
 ):
     """Process a single scene using pre-compressed grid SVD features.
 
     This mode:
-    1. Loads pre-compressed features from lang_feat_grid_svd_r*.npz
+    1. Loads pre-compressed features from lang_feat_grid_svd_r*_*.npz
     2. Loads checkpoint from gaussian_results/lerf_ovs/
     3. Replaces language features with pre-compressed features
     4. Saves checkpoint with compressed features
@@ -718,13 +782,14 @@ def process_scene_grid_svd(
         iteration: Preferred checkpoint iteration (None for latest)
         rank: SVD compression rank (default 16)
         output_dir: Output directory (default OUTPUT_ROOT)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene} (Grid SVD mode, rank={rank})")
+    print(f"Processing scene: {scene} (Grid SVD mode, rank={rank}, seq={feat_seq})")
     print(f"{'='*60}\n")
 
     # Load pre-compressed grid SVD features
-    compressed_features = load_grid_svd_compressed_features(scene, rank)
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feat_seq)
 
     # Convert to torch tensor
     compressed_features_tensor = torch.from_numpy(compressed_features)
@@ -732,7 +797,7 @@ def process_scene_grid_svd(
 
     # Load checkpoint
     ckpt_path = find_checkpoint(scene, iteration)
-    model_params, iteration_num = load_checkpoint(ckpt_path, scene)
+    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feat_seq)
 
     # Verify dimensions match
     original_features = model_params[7]
@@ -773,6 +838,338 @@ def process_scene_grid_svd(
     print(f"{'='*60}\n")
 
 
+def load_gaussian_params_from_train_root(
+    scene: str,
+    feat_seq: Optional[int] = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load Gaussian parameters directly from TRAIN_ROOT.
+
+    Loads coord, color, opacity, quat, scale from .npy files.
+
+    Args:
+        scene: Scene name
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+
+    Returns:
+        coord: [N, 3] - 3D coordinates
+        color: [N, 3] - RGB colors (0-255 range, will be normalized to 0-1)
+        opacity: [N, 1] - opacity values
+        quat: [N, 4] - quaternion rotations (w, x, y, z)
+        scale: [N, 3] - scale parameters
+    """
+    scene_dir = Path(TRAIN_ROOT) / scene
+
+    # Load required Gaussian parameter files
+    coord_path = scene_dir / "coord.npy"
+    color_path = scene_dir / "color.npy"
+    opacity_path = scene_dir / "opacity.npy"
+    quat_path = scene_dir / "quat.npy"
+    scale_path = scene_dir / "scale.npy"
+
+    # Check all files exist
+    required_files = {
+        'coord.npy': coord_path,
+        'color.npy': color_path,
+        'opacity.npy': opacity_path,
+        'quat.npy': quat_path,
+        'scale.npy': scale_path,
+    }
+
+    missing = [name for name, path in required_files.items() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing required files in {scene_dir}: {missing}")
+
+    # Load parameters
+    coord = np.load(coord_path).astype(np.float32)  # [N, 3]
+    color = np.load(color_path).astype(np.float32)  # [N, 3] - 0-255 range
+    opacity = np.load(opacity_path).astype(np.float32)  # [N] or [N, 1]
+    quat = np.load(quat_path).astype(np.float32)  # [N, 4] - x, y, z, w or w, x, y, z
+    scale = np.load(scale_path).astype(np.float32)  # [N, 3]
+
+    # Normalize color from 0-255 to 0-1
+    color = color / 255.0
+
+    # Ensure opacity has shape [N, 1]
+    if opacity.ndim == 1:
+        opacity = opacity.reshape(-1, 1)
+
+    # Clip opacity to valid range
+    opacity = np.clip(opacity, 0.001, 1.0)
+
+    # Clip scale to valid range
+    scale = np.clip(scale, 1e-4, 1.0)
+
+    print(f"Loaded Gaussian parameters from {scene_dir}:")
+    print(f"  coord: {coord.shape}")
+    print(f"  color: {color.shape} (normalized 0-1)")
+    print(f"  opacity: {opacity.shape}")
+    print(f"  quat: {quat.shape}")
+    print(f"  scale: {scale.shape}")
+
+    return coord, color, opacity, quat, scale
+
+
+def create_model_params_from_gaussian_data(
+    coord: np.ndarray,
+    color: np.ndarray,
+    opacity: np.ndarray,
+    quat: np.ndarray,
+    scale: np.ndarray,
+    language_features: torch.Tensor,
+    valid_feat_mask: Optional[torch.Tensor] = None,
+) -> Tuple:
+    """Create model_params tuple (13-element) from Gaussian data.
+
+    This creates the same format as gsplat checkpoint but directly from numpy arrays.
+
+    Args:
+        coord: [N, 3] - 3D coordinates
+        color: [N, 3] - RGB colors (normalized 0-1)
+        opacity: [N, 1] - opacity values
+        quat: [N, 4] - quaternion rotations
+        scale: [N, 3] - scale parameters
+        language_features: [N, D] - language features
+        valid_feat_mask: [N] - boolean mask for valid features (optional)
+
+    Returns:
+        model_params: 13-element tuple in gsplat format
+    """
+    N = coord.shape[0]
+
+    # Convert to torch tensors
+    xyz = torch.from_numpy(coord).float()  # [N, 3]
+
+    # Create spherical harmonics features
+    # DC component (degree 0): [N, 3]
+    features_dc = torch.from_numpy(color).float()  # [N, 3]
+
+    # Rest components (degree 1-3): [N, 45] - initialized to zeros
+    features_rest = torch.zeros(N, 45, dtype=torch.float32)
+
+    # Scaling
+    scaling = torch.from_numpy(scale).float()  # [N, 3]
+
+    # Rotation (quaternion)
+    rotation = torch.from_numpy(quat).float()  # [N, 4]
+
+    # Opacity
+    opacity_tensor = torch.from_numpy(opacity).float()  # [N, 1]
+
+    # Placeholder values for GaussianModel state
+    active_sh_degree = 3
+    max_radii2D = torch.zeros(N, dtype=torch.int32)
+    xyz_gradient_accum = torch.zeros(N, 1, dtype=torch.float32)
+    denom = torch.zeros(N, 1, dtype=torch.float32)
+    opt_dict = {}
+    spatial_lr_scale = 1.0
+
+    # Create valid_feat_mask if not provided
+    if valid_feat_mask is None:
+        valid_feat_mask = torch.ones(language_features.shape[0], dtype=torch.bool)
+
+    # Create 13-element tuple in gsplat format
+    model_params = (
+        active_sh_degree,
+        xyz,
+        features_dc,
+        features_rest,
+        scaling,
+        rotation,
+        opacity_tensor,
+        language_features,  # [N, D] - will be compressed
+        max_radii2D,
+        xyz_gradient_accum,
+        denom,
+        opt_dict,
+        spatial_lr_scale,
+        valid_feat_mask,  # [N] - boolean mask for valid features
+    )
+
+    return model_params
+
+
+def process_scene_direct_grid_svd(
+    scene: str,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None,
+    feat_seq: Optional[int] = None
+):
+    """Process a scene using direct mode with pre-compressed grid SVD features.
+
+    Direct mode: Loads all Gaussian parameters directly from TRAIN_ROOT
+    without requiring checkpoint from CHECKPOINT_ROOT.
+
+    Args:
+        scene: Scene name
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (Direct Grid SVD mode, rank={rank}, seq={feat_seq})")
+    print(f"{'='*60}\n")
+
+    # Load Gaussian parameters from TRAIN_ROOT
+    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feat_seq)
+
+    # Load pre-compressed grid SVD features
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feat_seq)
+
+    # Convert to torch tensor
+    compressed_features_tensor = torch.from_numpy(compressed_features).float()
+    print(f"Compressed features shape: {compressed_features_tensor.shape}")
+
+    # Create model_params directly from Gaussian data
+    model_params = create_model_params_from_gaussian_data(
+        coord, color, opacity, quat, scale, compressed_features_tensor
+    )
+
+    # Extract language features for stats
+    original_features = model_params[7]
+
+    # Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features.pth"
+    save_checkpoint(model_params, 0, save_path)  # iteration=0 for direct mode
+
+    # Also save just the language features as .npy for convenience
+    lang_feat_path = f"{output_dir}/{scene}/language_features.npy"
+    np.save(lang_feat_path, compressed_features_tensor.numpy())
+    print(f"Also saved language features to: {lang_feat_path}")
+
+    # Print stats
+    print(f"\nStatistics:")
+    print(f"  Gaussians: {coord.shape[0]:,}")
+    print(f"  Compressed features: {compressed_features_tensor.shape}")
+    print(f"  File size: {os.path.getsize(save_path) / 1024**2:.2f} MB")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (Direct Grid SVD mode)")
+    print(f"{'='*60}\n")
+
+
+def process_scene_direct_svd(
+    scene: str,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None,
+    feat_seq: Optional[int] = None
+):
+    """Process a scene using direct mode with SVD compression.
+
+    Direct mode: Loads all Gaussian parameters directly from TRAIN_ROOT
+    without requiring checkpoint from CHECKPOINT_ROOT.
+
+    Args:
+        scene: Scene name
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (Direct SVD mode, rank={rank}, seq={feat_seq})")
+    print(f"{'='*60}\n")
+
+    # Build sequence suffix
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+
+    # Load Gaussian parameters from TRAIN_ROOT
+    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feat_seq)
+
+    # Load original features and valid mask
+    scene_dir = Path(TRAIN_ROOT) / scene
+    lang_feat_path = scene_dir / f"lang_feat{seq_suffix}.npy"
+    valid_feat_mask_path = scene_dir / f"valid_feat_mask{seq_suffix}.npy"
+
+    if not lang_feat_path.exists():
+        raise FileNotFoundError(f"Language features not found: {lang_feat_path}")
+    if not valid_feat_mask_path.exists():
+        raise FileNotFoundError(f"Valid feature mask not found: {valid_feat_mask_path}")
+
+    print(f"Loading language features from: {lang_feat_path}")
+    original_features = np.load(lang_feat_path).astype(np.float32)  # [N, 768]
+
+    print(f"Loading valid feature mask from: {valid_feat_mask_path}")
+    valid_feat_mask = torch.from_numpy(np.load(valid_feat_mask_path).astype(np.bool_))
+    print(f"Valid feat mask: {valid_feat_mask.sum().item()} valid, {(~valid_feat_mask).sum().item()} invalid")
+
+    # Load SVD components (only need Vt for compression)
+    svd_path = scene_dir / "lang_feat_svd.npz"
+    if not svd_path.exists():
+        raise FileNotFoundError(f"SVD file not found: {svd_path}")
+
+    print(f"Loading SVD components from: {svd_path}")
+    svd_data = np.load(svd_path)
+    Vt = svd_data['Vt']  # [768, 768]
+
+    # Compress language features
+    N_original = valid_feat_mask.shape[0]
+    N_features = original_features.shape[0]
+
+    print(f"  Original features shape: {original_features.shape}")
+    print(f"  Original size (from mask): {N_original}")
+
+    # Check if features have been pre-filtered
+    if N_features != N_original:
+        print(f"  Warning: Features are pre-filtered ({N_features} != {N_original})")
+        valid_features = original_features  # [N_features, 768]
+        compressed_valid = valid_features @ Vt[:rank, :].T  # [N_features, rank]
+    else:
+        # Extract only valid features for compression
+        valid_features = original_features[valid_feat_mask.numpy()]  # [M, 768]
+        print(f"  Valid features shape: {valid_features.shape}")
+        # Compress valid features using SVD projection
+        compressed_valid = valid_features @ Vt[:rank, :].T  # [M, rank]
+
+    # Create full [N_original, rank] array filled with zeros
+    compressed = np.zeros((N_original, rank), dtype=np.float32)
+
+    # Fill valid positions with compressed features
+    if N_features != N_original:
+        # Features were pre-filtered, use valid_feat_mask to place back
+        compressed[valid_feat_mask.numpy()] = compressed_valid
+    else:
+        compressed[valid_feat_mask.numpy()] = compressed_valid
+
+    print(f"  Compressed features shape: {compressed.shape}")
+
+    # Convert to torch tensor
+    compressed_features_tensor = torch.from_numpy(compressed).float()
+
+    # Create model_params directly from Gaussian data
+    model_params = create_model_params_from_gaussian_data(
+        coord, color, opacity, quat, scale,
+        compressed_features_tensor,
+        valid_feat_mask
+    )
+
+    # Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features.pth"
+    save_checkpoint(model_params, 0, save_path)  # iteration=0 for direct mode
+
+    # Also save just the language features as .npy for convenience
+    lang_feat_path_out = f"{output_dir}/{scene}/language_features.npy"
+    np.save(lang_feat_path_out, compressed)
+    print(f"Also saved language features to: {lang_feat_path_out}")
+
+    # Print stats
+    original_size = N_original * 768 * 4  # float32
+    compressed_size = compressed_features_tensor.numel() * 4
+    compression_ratio = original_size / compressed_size
+
+    print(f"\nStatistics:")
+    print(f"  Gaussians: {coord.shape[0]:,}")
+    print(f"  Original size: {original_size / 1024**2:.2f} MB")
+    print(f"  Compressed size: {compressed_size / 1024**2:.2f} MB")
+    print(f"  Compression ratio: {compression_ratio:.2f}x")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (Direct SVD mode)")
+    print(f"{'='*60}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create SVD-compressed checkpoint with language features",
@@ -794,6 +1191,11 @@ Examples:
   # Use pre-compressed grid SVD features
   python tools/create_svd_compressed_checkpoint.py --scene figurines --use-grid-svd
   python tools/create_svd_compressed_checkpoint.py --scene figurines --use-grid-svd --rank 8
+
+  # Direct mode (no checkpoint required, loads from TRAIN_ROOT only)
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --direct --use-grid-svd
+  python tools/create_svd_compressed_checkpoint.py --all-scenes --direct
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --direct --use-grid-svd --feat-seq 1
 
   # Compare Grid SVD vs SVD compression error
   python tools/create_svd_compressed_checkpoint.py --scene figurines --compare
@@ -844,27 +1246,53 @@ Examples:
         action="store_true",
         help="Compare Grid SVD vs SVD compression error (requires both lang_feat_grid_svd_r*.npz and lang_feat_svd.npz)"
     )
+    parser.add_argument(
+        "--feat-seq",
+        type=int,
+        default=None,
+        help="Feature sequence number (1, 2, 3, etc.) for sequence-based files (e.g., lang_feat_1.npy, lang_feat_grid_svd_r16_1.npz)"
+    )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Direct mode: Load Gaussian parameters from TRAIN_ROOT only, without requiring CHECKPOINT_ROOT"
+    )
 
     args = parser.parse_args()
 
     # List available scenes
     if args.list_scenes:
-        scenes = get_available_scenes(use_grid_svd=args.use_grid_svd, rank=args.rank)
-        mode = "Grid SVD" if args.use_grid_svd else "SVD Decomposition"
-        print(f"Available scenes ({mode} mode, rank={args.rank}):")
+        scenes = get_available_scenes(
+            use_grid_svd=args.use_grid_svd,
+            rank=args.rank,
+            feat_seq=args.feat_seq,
+            direct_mode=args.direct
+        )
+        mode_parts = []
+        if args.direct:
+            mode_parts.append("Direct")
+        if args.use_grid_svd:
+            mode_parts.append("Grid SVD")
+        else:
+            mode_parts.append("SVD Decomposition")
+        mode = " + ".join(mode_parts)
+        seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+        print(f"Available scenes ({mode} mode, rank={args.rank}{seq_str}):")
         for scene in scenes:
             print(f"  - {scene}")
         return
 
-    # Compare mode
+    # Compare mode (not compatible with direct mode)
     if args.compare:
+        if args.direct:
+            parser.error("--compare is not compatible with --direct mode")
         # For compare mode, we need both grid SVD and regular SVD files
         if not args.scene and not args.all_scenes:
             parser.error("Either --scene or --all-scenes must be specified with --compare")
 
         if args.scene:
             try:
-                compare_compression_methods(args.scene, args.rank)
+                compare_compression_methods(args.scene, args.rank, args.feat_seq)
             except FileNotFoundError as e:
                 print(f"Error: {e}")
                 print("\nNote: --compare requires both lang_feat_grid_svd_r*.npz and lang_feat_svd.npz files")
@@ -872,10 +1300,12 @@ Examples:
             # Find scenes with both types of files
             train_dir = Path(TRAIN_ROOT)
             scenes_with_both = []
+            # Build sequence suffix
+            seq_suffix = f"_{args.feat_seq}" if args.feat_seq is not None else ""
             for scene_dir in train_dir.iterdir():
                 if scene_dir.is_dir():
                     scene = scene_dir.name
-                    grid_file = scene_dir / f"lang_feat_grid_svd_r{args.rank}.npz"
+                    grid_file = scene_dir / f"lang_feat_grid_svd_r{args.rank}{seq_suffix}.npz"
                     svd_file = scene_dir / "lang_feat_svd.npz"
                     if grid_file.exists() and svd_file.exists():
                         scenes_with_both.append(scene)
@@ -883,7 +1313,7 @@ Examples:
             scenes_with_both = sorted(scenes_with_both)
 
             if not scenes_with_both:
-                print(f"No scenes found with both lang_feat_grid_svd_r{args.rank}.npz and lang_feat_svd.npz files!")
+                print(f"No scenes found with both lang_feat_grid_svd_r{args.rank}{seq_suffix}.npz and lang_feat_svd.npz files!")
                 return
 
             print(f"Found {len(scenes_with_both)} scenes to compare:")
@@ -894,7 +1324,7 @@ Examples:
             all_results = {}
             for scene in scenes_with_both:
                 try:
-                    result = compare_compression_methods(scene, args.rank)
+                    result = compare_compression_methods(scene, args.rank, args.feat_seq)
                     all_results[scene] = result
                 except Exception as e:
                     print(f"Error processing scene {scene}: {e}")
@@ -905,7 +1335,7 @@ Examples:
             # Print summary table
             if all_results:
                 print(f"\n{'='*80}")
-                print(f"Summary Comparison (rank={args.rank}):")
+                print(f"Summary Comparison (rank={args.rank}, seq={args.feat_seq}):")
                 print(f"{'='*80}")
                 print(f"{'Scene':<20} {'MSE':<10} {'RMSE':<10} {'MAE':<10} {'Cosine':<10} {'SNR (dB)':<10}")
                 print(f"{'-'*80}")
@@ -934,27 +1364,64 @@ Examples:
         parser.error("Cannot specify both --scene and --all-scenes")
 
     # Choose processing function based on mode
-    process_func = process_scene_grid_svd if args.use_grid_svd else process_scene
+    if args.direct:
+        # Direct mode: load from TRAIN_ROOT only
+        if args.use_grid_svd:
+            process_func = process_scene_direct_grid_svd
+        else:
+            process_func = process_scene_direct_svd
+    else:
+        # Normal mode: load from CHECKPOINT_ROOT
+        process_func = process_scene_grid_svd if args.use_grid_svd else process_scene
 
     # Process scenes
     if args.scene:
-        process_func(args.scene, args.iteration, args.rank, args.output_dir)
+        # Direct mode doesn't use iteration parameter
+        if args.direct:
+            process_func(args.scene, args.rank, args.output_dir, args.feat_seq)
+        else:
+            process_func(args.scene, args.iteration, args.rank, args.output_dir, args.feat_seq)
     else:
-        scenes = get_available_scenes(use_grid_svd=args.use_grid_svd, rank=args.rank)
+        scenes = get_available_scenes(
+            use_grid_svd=args.use_grid_svd,
+            rank=args.rank,
+            feat_seq=args.feat_seq,
+            direct_mode=args.direct
+        )
         if not scenes:
-            mode = "Grid SVD" if args.use_grid_svd else "SVD Decomposition"
-            print(f"No scenes found with both {mode.lower()} files and checkpoints!")
+            mode_parts = []
+            if args.direct:
+                mode_parts.append("Direct")
+            if args.use_grid_svd:
+                mode_parts.append("Grid SVD")
+            else:
+                mode_parts.append("SVD Decomposition")
+            mode = " + ".join(mode_parts)
+            seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+            print(f"No scenes found with required files ({mode}{seq_str})!")
             return
 
-        mode = "Grid SVD" if args.use_grid_svd else "SVD Decomposition"
-        print(f"Found {len(scenes)} scenes to process ({mode} mode, rank={args.rank}):")
+        mode_parts = []
+        if args.direct:
+            mode_parts.append("Direct")
+        if args.use_grid_svd:
+            mode_parts.append("Grid SVD")
+        else:
+            mode_parts.append("SVD Decomposition")
+        mode = " + ".join(mode_parts)
+        seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+        print(f"Found {len(scenes)} scenes to process ({mode} mode, rank={args.rank}{seq_str}):")
         for scene in scenes:
             print(f"  - {scene}")
         print()
 
         for scene in scenes:
             try:
-                process_func(scene, args.iteration, args.rank, args.output_dir)
+                # Direct mode doesn't use iteration parameter
+                if args.direct:
+                    process_func(scene, args.rank, args.output_dir, args.feat_seq)
+                else:
+                    process_func(scene, args.iteration, args.rank, args.output_dir, args.feat_seq)
             except Exception as e:
                 print(f"Error processing scene {scene}: {e}")
                 import traceback
