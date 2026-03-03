@@ -312,6 +312,8 @@ data = dict(
         split=("train", "test"),
         data_root=data_root,
         sample_tail_classes=False,
+        load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
+        svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
             dict(type="CenterShift", apply_z=True),
             # dict(
@@ -361,6 +363,8 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
+        load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
+        svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -404,6 +408,8 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
+        load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
+        svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),
