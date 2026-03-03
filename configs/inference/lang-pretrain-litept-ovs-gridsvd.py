@@ -77,6 +77,8 @@ collect_keys_test = (
 
 inference = dict(
     transform=[
+        # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
+        dict(type="FilterValidPoints", key="valid_feat_mask"),
         # FilterCoordOutliers is applied in load_scene_data() before transforms
         # This allows proper expansion of features back to original size
         dict(type="CenterShift", apply_z=True),

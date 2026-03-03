@@ -75,7 +75,8 @@ def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.n
     coord_path = os.path.join(data_dir, "coord.npy")
     lang_feat_name = f"lang_feat_{feat_seq}.npy" if feat_seq is not None else "lang_feat.npy"
     lang_feat_path = os.path.join(data_dir, lang_feat_name)
-    valid_mask_path = os.path.join(data_dir, "valid_feat_mask.npy")
+    valid_feat_mask_name = f"valid_feat_mask_{feat_seq}.npy" if feat_seq is not None else "valid_feat_mask.npy"
+    valid_mask_path = os.path.join(data_dir, valid_feat_mask_name)
 
     # Check required files
     if not os.path.exists(coord_path):
@@ -772,7 +773,7 @@ def save_grid_meta_data(
     print(f"    Saved grid metadata: {output_file}")
 
 
-def find_scenes(data_root: str, dataset: str, split: str) -> List[str]:
+def find_scenes(data_root: str, dataset: str, split: str, feat_seq: Optional[int] = None) -> List[str]:
     """
     Find all scene directories for a given dataset and split.
 
@@ -780,6 +781,7 @@ def find_scenes(data_root: str, dataset: str, split: str) -> List[str]:
         data_root: Root directory containing datasets
         dataset: Dataset name (e.g., "3DOVS", "lerf_ovs")
         split: "train", "val", or "test"
+        feat_seq: Language feature sequence number (None for lang_feat.npy, 1 for lang_feat_1.npy, etc.)
 
     Returns:
         List of scene directory paths
@@ -795,7 +797,8 @@ def find_scenes(data_root: str, dataset: str, split: str) -> List[str]:
         if os.path.isdir(item_path):
             # Check if this directory contains required files
             coord_path = os.path.join(item_path, "coord.npy")
-            lang_feat_path = os.path.join(item_path, "lang_feat.npy")
+            lang_feat_name = f"lang_feat_{feat_seq}.npy" if feat_seq is not None else "lang_feat.npy"
+            lang_feat_path = os.path.join(item_path, lang_feat_name)
             if os.path.exists(coord_path) and os.path.exists(lang_feat_path):
                 scene_dirs.append(item_path)
 
@@ -1079,7 +1082,7 @@ Examples:
             scene_names = [s.strip() for s in args.scenes.split(',')]
             scenes = [os.path.join(args.data_root, args.dataset, args.split, s) for s in scene_names]
         else:
-            scenes = find_scenes(args.data_root, args.dataset, args.split)
+            scenes = find_scenes(args.data_root, args.dataset, args.split, args.feat_seq)
 
         if not scenes:
             print(f"Error: No scenes found for dataset {args.dataset} split {args.split}")

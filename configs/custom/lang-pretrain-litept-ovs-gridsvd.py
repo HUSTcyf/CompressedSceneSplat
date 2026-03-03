@@ -323,12 +323,12 @@ data = dict(
                 load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
                 svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
                 transform=[
+                    # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
+                    dict(type="FilterValidPoints", key="valid_feat_mask"),
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),
                     # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
                     dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
-                    # Step 2: Filter valid points (those with valid language features)
-                    dict(type="FilterValidPoints", key="valid_feat_mask"),
                     # Step 3: Re-center coordinates to the filtered dense region
                     dict(type="CenterShift", apply_z=True),
                     # Step 4: GridSampleAveraged for representative sampling (with feature averaging)
@@ -417,9 +417,9 @@ data = dict(
         split="val",  # Use 'val' subdirectory
         data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
         transform=[
-            dict(type="CenterShift", apply_z=True),
-            # Step 1: Filter to only valid points
+            # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
             dict(type="FilterValidPoints", key="valid_feat_mask"),
+            dict(type="CenterShift", apply_z=True),
             # Step 2: GridSampleAveraged (before NormalizeCoord) - required for GridPooling
             dict(
                 type="GridSampleAveraged",
@@ -447,11 +447,11 @@ data = dict(
         split="val",  # Use 'val' subdirectory
         data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
         transform=[
+            # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
+            dict(type="FilterValidPoints", key="valid_feat_mask"),
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),
             dict(type="Copy", keys_dict={"segment": "origin_segment", "coord": "origin_coord", "valid_feat_mask": "origin_feat_mask"}),
-            # Step 1: Filter to only valid points
-            dict(type="FilterValidPoints", key="valid_feat_mask"),
             # Step 2: GridSampleAveraged for initial point reduction (test_cfg.voxelize does further processing)
             dict(
                 type="GridSampleAveraged",

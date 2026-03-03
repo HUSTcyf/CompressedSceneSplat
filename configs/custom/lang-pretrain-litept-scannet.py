@@ -315,6 +315,10 @@ data = dict(
         load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
         svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
+            # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
+            # SVD files contain features only for valid points (where valid_feat_mask==True)
+            # Without this, coord has all points but lang_feat has only valid points → IndexError
+            dict(type="FilterValidPoints", key="valid_feat_mask"),
             dict(type="CenterShift", apply_z=True),
             # dict(
             #     type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
@@ -366,6 +370,8 @@ data = dict(
         load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
         svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
+            # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
+            dict(type="FilterValidPoints", key="valid_feat_mask"),
             dict(type="CenterShift", apply_z=True),
             dict(
                 type="GridSample",
@@ -414,6 +420,8 @@ data = dict(
         load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
         svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
         transform=[
+            # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
+            dict(type="FilterValidPoints", key="valid_feat_mask"),
             dict(type="CenterShift", apply_z=True),
             dict(type="NormalizeColor"),
             dict(
