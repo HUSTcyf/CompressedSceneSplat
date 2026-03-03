@@ -1059,8 +1059,13 @@ class DensityInvariantTrainer(TrainerBase):
         if isinstance(point_to_grid, list):
             if len(point_to_grid) == 0:
                 point_to_grid = None
+            elif len(point_to_grid) == 1:
+                point_to_grid = point_to_grid[0]
             else:
-                point_to_grid = point_to_grid[0]  # Take first element
+                # Multiple scenes in batch - concatenate all elements
+                # This matches how coord/feat are handled by the default collate_fn
+                # All tensors should be on the same device (CPU at this point)
+                point_to_grid = torch.cat(point_to_grid, dim=0)
 
         # Store original sizes for validation
         num_total = coord.shape[0]
