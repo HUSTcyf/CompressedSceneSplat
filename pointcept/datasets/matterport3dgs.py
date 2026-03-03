@@ -27,11 +27,15 @@ class Matterport3DGSDataset(DefaultDataset):
         self,
         multilabel=False,
         is_train=True,
+        load_compressed_lang_feat=False,
+        svd_rank=16,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.multilabel = multilabel
         self.is_train = is_train
+        self.load_compressed_lang_feat = load_compressed_lang_feat
+        self.svd_rank = svd_rank
 
     def get_data(self, idx):
         data_path = self.data_list[idx % len(self.data_list)]
@@ -66,6 +70,8 @@ class Matterport3DGSDataset(DefaultDataset):
                 print(msg, flush=True)
                 raise RuntimeError(msg) from e
         data_dict["name"] = name
+        # Add scene path for density-invariant training to load SVD files
+        data_dict["scene_path"] = data_path
 
         if "coord" in data_dict.keys():
             data_dict["coord"] = data_dict["coord"].astype(np.float32)
@@ -89,10 +95,42 @@ class Matterport3DGSDataset(DefaultDataset):
             )  # clip scale max to 1.5
 
         if "lang_feat" in data_dict.keys():
-            data_dict["lang_feat"] = data_dict["lang_feat"].astype(np.float16)
+            data_dict["lang_feat"] = data_dict["lang_feat"].astype(np.float32)
+
+            # Load SVD-compressed language features if enabled
+            if self.load_compressed_lang_feat:
+                svd_file = os.path.join(data_path, f"lang_feat_grid_svd_r{self.svd_rank}.npz")
+                if os.path.exists(svd_file):
+                    try:
+                        svd_data = np.load(svd_file)
+                        compressed = svd_data['compressed']  # [M, rank]
+                        indices = svd_data['indices']  # [N] - point to grid mapping
+
+                        # Add point_to_grid mapping to data_dict (for density-invariant training)
+                        data_dict["point_to_grid"] = indices.astype(np.int64)
+
+                        # Expand grid-level features to point-level: [N, rank]
+                        point_lang_feat = compressed[indices]
+
+                        # Always use compressed features (for valid points)
+                        # FilterValidPoints will skip arrays with different lengths,
+                        # so compressed lang_feat will be preserved (not filtered)
+                        # After filtering, both coord and lang_feat will have num_valid points
+                        data_dict["lang_feat"] = point_lang_feat.astype(np.float32)
+                        print(f"current: {name} loaded SVD-{self.svd_rank} compressed lang_feat: {point_lang_feat.shape}")
+                    except Exception as e:
+                        print(f"Warning: Failed to load SVD file for {name}: {e}")
+                else:
+                    print(f"Warning: SVD file not found for {name}: {svd_file}")
 
         if "valid_feat_mask" in data_dict.keys():
+            # Use the real valid_feat_mask as-is (distinguishes valid from zero features)
             data_dict["valid_feat_mask"] = data_dict["valid_feat_mask"].astype(bool)
+            num_points = data_dict["valid_feat_mask"].shape[0]
+            num_valid = data_dict["valid_feat_mask"].sum()
+            print(f"current: {name} valid_feat_mask: {num_valid}/{num_points} ({num_valid/num_points*100:.1f}%)")
+        else:
+            print("current:", name)
 
         if "segment" in data_dict.keys():
             # 21 classes processed by pointcept repo

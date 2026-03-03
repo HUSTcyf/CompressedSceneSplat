@@ -24,6 +24,12 @@ from pointcept.utils.misc import (
     clustering_voting,
 )
 
+# Import SVD and Procrustes functions for text embedding alignment
+from tools.compute_procrustes_alignment_simple import (
+    perform_svd_reduction,
+    compute_procrustes_Q_cuda_with_labels,
+)
+
 
 TESTERS = Registry("testers")
 
@@ -131,6 +137,9 @@ class ZeroShotSemSegTester(TesterBase):
         save_feat=False,
         skip_eval=False,
         pred_label_mapping=None,
+        # New parameters for SVD + Procrustes alignment
+        svd_rank=None,
+        use_procrustes=True,
         **kwargs,
     ):
         super().__init__(cfg, model, test_loader, verbose, **kwargs)
@@ -148,11 +157,15 @@ class ZeroShotSemSegTester(TesterBase):
         self.save_feat = cfg["test"].get("save_feat", save_feat)
 
         # whether to calculate the miou/macc metrics, requires segment or pc_segment key
-        self.skip_eval = cfg["test"].get("skip_eval", skip_eval) 
+        self.skip_eval = cfg["test"].get("skip_eval", skip_eval)
         self.pred_label_mapping = cfg["test"].get(
             "pred_label_mapping", pred_label_mapping
         )
         self.ignore_index = ignore_index
+
+        # SVD and Procrustes configuration
+        self.svd_rank = cfg["test"].get("svd_rank", svd_rank)
+        self.use_procrustes = cfg["test"].get("use_procrustes", use_procrustes)
 
         class_names = cfg["test"].get("class_names", class_names)
         text_embeddings = cfg["test"].get("text_embeddings", text_embeddings)
@@ -164,11 +177,36 @@ class ZeroShotSemSegTester(TesterBase):
                 self.class_names = [line.strip() for line in f if line.strip()]
         else:
             self.class_names = []
+
+        # Load and process text embeddings with SVD reduction if needed
         if text_embeddings:
-            self.text_embeddings = torch.load(text_embeddings, weights_only=True).cuda()
-            self.text_embeddings = F.normalize(self.text_embeddings, p=2, dim=1)
+            text_emb_tensor = torch.load(text_embeddings, weights_only=True)
+            original_dim = text_emb_tensor.shape[-1]
+
+            # Auto-detect SVD rank if model outputs 16-dim features
+            if self.svd_rank is None and hasattr(self.model, 'module'):
+                # Try to infer from model's lang_feat_dim
+                if hasattr(self.model.module, 'lang_feat_dim'):
+                    self.svd_rank = self.model.module.lang_feat_dim
+                elif original_dim == 768:
+                    # 768-dim embeddings likely need SVD reduction to 16
+                    self.svd_rank = 16
+
+            # Apply SVD reduction if needed
+            if self.svd_rank is not None and original_dim != self.svd_rank:
+                logger = get_root_logger()
+                logger.info(f"Applying SVD reduction to text embeddings: "
+                          f"[{text_emb_tensor.shape}] -> [{text_emb_tensor.shape[0]}, {self.svd_rank}]")
+                text_emb_np = text_emb_tensor.cpu().numpy() if isinstance(text_emb_tensor, torch.Tensor) else text_emb_tensor
+                text_emb_reduced, _, _ = perform_svd_reduction(text_emb_np, self.svd_rank, normalize=True)
+                self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1).cuda()
+                self.text_embeddings_dim = self.svd_rank
+            else:
+                self.text_embeddings = F.normalize(text_emb_tensor.cuda(), p=2, dim=1)
+                self.text_embeddings_dim = original_dim
         else:
             self.text_embeddings = None
+            self.text_embeddings_dim = None
 
         # Handle excluded classes
         self.excluded_indices, self.keep_indices = [], []
@@ -185,7 +223,7 @@ class ZeroShotSemSegTester(TesterBase):
             ]
         self.num_keep_classes = len(self.keep_indices)
         self.num_classes = len(self.class_names)
-        if self.pred_label_mapping is None and not self.skip_eval:
+        if self.pred_label_mapping is None and not self.skip_eval and self.text_embeddings is not None:
             assert self.num_classes == self.text_embeddings.size(0), (
                 "Mismatch in class names and text embeddings"
             )
@@ -305,21 +343,26 @@ class ZeroShotSemSegTester(TesterBase):
                 )  # placeholder if None
                 ignore_index = self.ignore_index
 
-                # Create a buffer to accumulate probabilities (or logits)
+                # Create buffers to accumulate features and probabilities
+                if self.text_embeddings is not None:
+                    feat_dim = self.text_embeddings.shape[1]
+                else:
+                    feat_dim = 16  # default for SVD-16 models
+                print((num_points, feat_dim))
+
+                # Buffer for accumulating raw features (for Procrustes alignment)
+                accumulated_features = torch.zeros((num_points, feat_dim), device="cuda")
+                feature_counts = torch.zeros(num_points, device="cuda")
+
+                # Buffer for final probabilities (after alignment)
                 pred = torch.zeros((num_points, num_classes), device="cuda")
                 pred_coord = torch.zeros((num_points, 3), device="cuda")
 
                 if self.save_feat:
-                    feat_dim = (
-                        self.text_embeddings.shape[1]
-                        if self.text_embeddings is not None
-                        else 768
-                    )
                     point_features = torch.zeros((num_points, feat_dim), device="cuda")
-                    feature_counts = torch.zeros(num_points, device="cuda")
 
                 # ---------------------------------------------------------------------
-                # Accumulate probabilities from each fragment
+                # Accumulate features from each fragment
                 # ---------------------------------------------------------------------
                 for i, frag_dict in enumerate(fragment_list):
                     # collate => partial data
@@ -339,27 +382,74 @@ class ZeroShotSemSegTester(TesterBase):
                         pred_part_feat = out_dict["point_feat"][
                             "feat"
                         ]  # shape [M, feat_dim]
-                        if self.text_embeddings is not None:
-                            logits = torch.mm(pred_part_feat, self.text_embeddings.t())
-                            pred_part_prob = torch.sigmoid(logits)  # [M, num_classes]
 
-                    # Accumulate into the large buffer
+                    # Accumulate raw features (will compute logits after Procrustes alignment)
                     bs = 0
                     for be in offset_list:
-                        if self.text_embeddings is not None:
-                            # sum up probabilities
-                            pred[idx_part[bs:be], :] += pred_part_prob[bs:be]
-                            # track coords if needed
-                            pred_coord[idx_part[bs:be]] = input_dict["coord"][bs:be]
+                        accumulated_features[idx_part[bs:be], :] += pred_part_feat[bs:be]
+                        feature_counts[idx_part[bs:be]] += 1
                         if self.save_feat:
                             point_features[idx_part[bs:be], :] += pred_part_feat[bs:be]
-                            feature_counts[idx_part[bs:be]] += 1
                         bs = be
 
                     logger.info(
                         f"Test: {idx + 1}/{len(self.test_loader)}-{data_name}, "
                         f"Fragment batch: {i + 1}/{len(fragment_list)}"
                     )
+
+                # ---------------------------------------------------------------------
+                # Average accumulated features
+                # ---------------------------------------------------------------------
+                valid_mask = feature_counts > 0
+                accumulated_features[valid_mask] /= feature_counts[valid_mask].unsqueeze(1)
+
+                # ---------------------------------------------------------------------
+                # Apply Procrustes alignment if enabled
+                # ---------------------------------------------------------------------
+                if self.use_procrustes and self.text_embeddings is not None:
+                    logger.info(f"Applying Procrustes alignment for scene '{data_name}'...")
+
+                    # Use GT labels for efficient aggregation (if available)
+                    if segment is not None and segment is not False:
+                        # segment contains class indices [num_points]
+                        # Convert to tensor if needed
+                        if not isinstance(segment, torch.Tensor):
+                            segment = torch.from_numpy(segment).cuda() if isinstance(segment, np.ndarray) else segment
+                        # Ensure segment is on the same device as accumulated_features
+                        if segment.device != accumulated_features.device:
+                            segment = segment.cuda()
+
+                        # Filter out ignored points (where segment == ignore_index)
+                        valid_mask = segment != self.ignore_index
+                        if valid_mask.sum() > 0:
+                            # Only use valid points for Procrustes
+                            valid_features = accumulated_features[valid_mask]
+                            valid_labels = segment[valid_mask]
+
+                            # Use label-based aggregation (efficient, no sampling)
+                            Q, metrics = compute_procrustes_Q_cuda_with_labels(
+                                valid_features, self.text_embeddings, valid_labels
+                            )
+
+                            logger.info(f"  Procrustes: det(Q)={metrics['det_Q']:.4f}, "
+                                      f"cosine: {metrics['cosine_before']:.4f} -> {metrics['cosine_after']:.4f}")
+
+                            # Apply Q alignment to all features
+                            accumulated_features = torch.mm(accumulated_features, Q)
+                        else:
+                            logger.warning(f"  No valid labels (all are ignore_index={self.ignore_index}), skipping Procrustes")
+                    else:
+                        logger.warning(f"  No GT labels available for scene '{data_name}', skipping Procrustes")
+
+                # ---------------------------------------------------------------------
+                # Compute logits with aligned features
+                # ---------------------------------------------------------------------
+                if self.text_embeddings is not None:
+                    # Compute logits matrix multiplication
+                    logits = torch.mm(accumulated_features, self.text_embeddings.t())
+                    # In-place sigmoid to reuse memory: logits becomes pred
+                    torch.sigmoid_(logits)  # [num_points, num_classes]
+                    pred = logits  # pred now shares memory with logits
 
                 if self.save_feat:
                     pred_mask = feature_counts > 0

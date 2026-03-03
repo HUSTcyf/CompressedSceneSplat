@@ -1,17 +1,17 @@
 """
-Config file for Vision-Language Pretraining with LitePT on ScanNet 3DGS data.
+Config file for Vision-Language Pretraining with LitePT on Matterport3D 3DGS data.
 
-This config implements representation learning with full 768-dim language features,
-using the lightweight LitePT backbone for efficient training on ScanNet dataset.
+This config implements representation learning with SVD-compressed (16-dim) language features,
+using the lightweight LitePT backbone for efficient training on Matterport3D dataset.
 
 Key features:
 - Uses LitePT backbone (3.6× fewer parameters, 2× faster than PT-v3m1)
-- Full 768-dim language features (no SVD compression)
-- Compatible with ScanNet200GSDataset
-- Same training pipeline as original PT-v3m1 Scannet config
+- SVD-compressed 16-dim language features for memory efficiency
+- Compatible with Matterport3D_160_GSDataset
+- Density-invariant training with multi-scenario sampling
 
 Usage:
-    python tools/train.py --config-file configs/custom/lang-pretrain-litept-scannet.py --num-gpus 4
+    python tools/train_lite.py --config-file configs/custom/lang-pretrain-litept-matt.py --num-gpus 4
 """
 
 _base_ = [
@@ -25,13 +25,14 @@ _base_ = [
 N_GPU = 4
 debug = 0
 gpu_nums = 1 if debug else N_GPU
-batch_size = 3 * gpu_nums
-batch_size_val = 3 * gpu_nums
-batch_size_test = 1 * gpu_nums
-num_worker = 24 * gpu_nums if not debug else 0
+batch_size = 2 * gpu_nums
+batch_size_val = 1 * gpu_nums
+batch_size_test = 1  # Always use 1 for test (tester requirement)
+num_worker = 8 * gpu_nums if not debug else 1
 mix_prob = 0.8
 empty_cache = False
 enable_amp = True
+test_only = False
 
 # ============================================================================
 # Model settings - LitePT with SVD-compressed Vision-Language Pretraining
@@ -65,8 +66,8 @@ model = dict(
         enc_rope_freq=(100.0, 100.0, 100.0, 100.0, 100.0),
         # Decoder (output 16 dimensions to match SVD rank)
         dec_depths=(2, 2, 2, 2),
-        dec_channels=(FD, FD*2, FD*4, 126),  # (16, 64, 128, 252) - 4x intermediate capacity
-        dec_num_head=(1, 2, 4, 7),  # Updated last head for 252 channels (14*18=252)
+        dec_channels=(FD, FD*2, FD*4, 126),  # (16, 32, 64, 126) - 4x intermediate capacity
+        dec_num_head=(1, 2, 4, 7),  # Updated last head for 126 channels (14*9=126)
         dec_patch_size=(1024, 1024, 1024, 1024),
         dec_conv=(True, True, True, False),
         dec_attn=(False, False, False, True),
@@ -131,20 +132,6 @@ model = dict(
             reduction="mean",
         ),
 
-        # Rendered2DLoss: Spatial consistency via Gaussian splatting rendering
-        # Enforces spatially consistent predictions by comparing rendered 2D features
-        # Uses gsplat rasterization with pre-rendered GT feature maps
-        # Weight schedule: ramps up from 0 to 1.0 by 50% training progress
-        # dict(
-        #     type="Rendered2DLoss",
-        #     loss_weight=1.0,  # Maximum weight
-        #     gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
-        #     datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
-        #     warmup_progress=0.0,  # Start immediately (no warmup)
-        #     target_progress=0.5,  # Reach max weight at 50% training progress
-        #     max_num_views=10,  # Use up to 10 views per scene to save memory
-        # ),
-
         # AggregatedContrastiveLoss: ENABLED for contrastive learning
         dict(
             type="AggregatedContrastiveLoss",
@@ -179,7 +166,6 @@ density_invariant = dict(
     # Weight for each scenario's loss
     scenario_weights=dict(
         dense=1.0,    # Dense input (all valid points)
-        # half=1.0,   # Half density (30-70% sampling) - TEMPORARILY DISABLED
         single=1.0,  # Single point per grid
     ),
 
@@ -189,23 +175,14 @@ density_invariant = dict(
     # Forward pass mode: batched vs separate
     # False: Each scenario forwarded independently (slower but no cross-contamination)
     # True: All scenarios batched together (faster but may interfere via sparse conv)
-    batched_forward=True,  # CHANGED to False for cleaner training (was True)
+    batched_forward=True,
 )
 
 # ============================================================================
-# Scheduler settings (same as original Scannet config)
+# Scheduler settings
 # ============================================================================
 epoch = 800
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
-# scheduler = dict(
-#     type="OneCycleLR",
-#     max_lr=[0.006, 0.0006],
-#     pct_start=0.05,
-#     anneal_strategy="cos",
-#     div_factor=10.0,
-#     final_div_factor=1000.0,
-# )
-# param_dicts = [dict(keyword="block", lr=0.0006)]
 scheduler = dict(
     type="OneCycleLR",
     # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dim_scale, dec0, dec0.mlp, dec0.fc]
@@ -255,20 +232,20 @@ param_dicts = [
     ),
 ]
 # Save path for LitePT-16 training (compressed features)
-save_path = "exp/lite-16-scannet-gridsvd"
+save_path = "exp/lite-16-matt-gridsvd"
 
 # ============================================================================
-# Dataset settings (same as original Scannet config)
+# Dataset settings
 # ============================================================================
-dataset_type = "ScanNet200GSDataset"
-data_root = "/new_data/cyf/Datasets/SceneSplat7k/scannet"
+dataset_type = "Matterport3D_160_GSDataset"
 repo_root = "/new_data/cyf/projects/SceneSplat"
+matterport3d_data_root = "/new_data/cyf/Datasets/SceneSplat7k/matterport3d"
 
-class_names_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_labels.txt"
-text_embeddings_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_text_embeddings_siglip2.pt"
+class_names_path = f"{repo_root}/pointcept/datasets/preprocessing/matterport3d/meta_data/matterport_nyu160_labels.txt"
+text_embeddings_path = f"{repo_root}/pointcept/datasets/preprocessing/matterport3d/meta_data/matterport-nyu160_text_embeddings_siglip2.pt"
 
 # ============================================================================
-# Hooks (same as original Scannet config)
+# Hooks
 # ============================================================================
 hooks = [
     dict(type="CheckpointLoader"),
@@ -278,45 +255,57 @@ hooks = [
         type="LangPretrainZeroShotSemSegEval",
         class_names=class_names_path,
         text_embeddings=text_embeddings_path,
-        excluded_classes=["wall", "floor", "ceiling"],
+        excluded_classes=["wall", "floor", "ceiling", "other furniture"],
         ignore_index=-1,
         vote_k=25,
         enable_voting=True,
         confidence_threshold=0.1,
     ),
     dict(type="CheckpointSaver", save_freq=None),
-    dict(type="PreciseEvaluator", test_last=False),
+    dict(type="PreciseEvaluator", test_last=True),
 ]
 
 # ============================================================================
-# Tester (same as original Scannet config)
+# Tester
 # ============================================================================
-test = dict(
-    type="ZeroShotSemSegTester",
-    class_names=class_names_path,
-    text_embeddings=text_embeddings_path,
-    excluded_classes=["wall", "floor", "ceiling"],
-    enable_voting=True,
-    vote_k=25,
-    confidence_threshold=0.1,
-)
+test = [
+    # matterport3d_160
+    dict(
+        type="ZeroShotSemSegTester",
+        verbose=True,
+        class_names=class_names_path,
+        text_embeddings=text_embeddings_path,
+        excluded_classes=["wall", "floor", "ceiling", "other furniture"],
+        enable_voting=True,
+        vote_k=25,
+        confidence_threshold=0.1,
+        save_feat=False,
+        skip_eval=False,
+        # SVD + Procrustes settings
+        svd_rank=16,
+        use_procrustes=True,
+    ),
+]
 
 # ============================================================================
-# Data pipeline (same as original Scannet config)
+# Data pipeline
 # ============================================================================
 data = dict(
-    num_classes=200,
+    num_classes=160,
     ignore_index=-1,
     train=dict(
         type=dataset_type,
-        split=("train", "test"),
-        data_root=data_root,
+        split=(
+            "train_grid1.0cm_chunk6x6_stride3x3_filtered",
+            "val_grid1.0cm_chunk6x6_stride3x3_filtered",
+        ),
+        data_root=matterport3d_data_root,
         sample_tail_classes=False,
         transform=[
             dict(type="CenterShift", apply_z=True),
-            # dict(
-            #     type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
-            # ),
+            dict(
+                type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
+            ),
             dict(type="RandomRotate", angle=[-1, 1], axis="z", center=[0, 0, 0], p=0.5),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="x", p=0.5),
             dict(type="RandomRotate", angle=[-1 / 64, 1 / 64], axis="y", p=0.5),
@@ -338,7 +327,6 @@ data = dict(
                     "opacity",
                     "quat",
                     "scale",
-                    "normal",
                     "segment",
                     "lang_feat",
                     "valid_feat_mask",
@@ -351,7 +339,15 @@ data = dict(
             dict(type="ToTensor"),
             dict(
                 type="Collect",
-                keys=("coord", "grid_coord", "segment", "lang_feat", "valid_feat_mask"),
+                keys=(
+                    "coord",
+                    "grid_coord",
+                    "segment",
+                    "lang_feat",
+                    "valid_feat_mask",
+                    "pc_coord",
+                    "pc_segment",
+                ),
                 feat_keys=("color", "opacity", "quat", "scale"),
             ),
         ],
@@ -359,8 +355,9 @@ data = dict(
     ),
     val=dict(
         type=dataset_type,
-        split="val",
-        data_root=data_root,
+        split=("val_grid1.0cm_chunk6x6_stride3x3_filtered"),
+        data_root=matterport3d_data_root,
+        is_train=False,
         transform=[
             dict(type="CenterShift", apply_z=True),
             dict(
@@ -374,11 +371,9 @@ data = dict(
                     "opacity",
                     "quat",
                     "scale",
-                    "normal",
                     "segment",
                     "lang_feat",
                     "valid_feat_mask",
-                    "instance",
                 ),
                 return_grid_coord=True,
             ),
@@ -393,93 +388,100 @@ data = dict(
                     "segment",
                     "lang_feat",
                     "valid_feat_mask",
-                    "instance",
+                    "pc_coord",
+                    "pc_segment",
                 ),
                 feat_keys=("color", "opacity", "quat", "scale"),
             ),
         ],
         test_mode=False,
     ),
-    test=dict(
-        type=dataset_type,
-        split="val",
-        data_root=data_root,
-        transform=[
-            dict(type="CenterShift", apply_z=True),
-            dict(type="NormalizeColor"),
-            dict(
-                type="Copy",
-                keys_dict={
-                    "segment": "origin_segment",
-                    "coord": "origin_coord",
-                    "valid_feat_mask": "origin_feat_mask",
-                    "instance": "origin_instance",
-                },
-            ),
-            dict(
-                type="GridSample",
-                grid_size=0.01,
-                hash_type="fnv",
-                mode="train",
-                keys=(
-                    "coord",
-                    "color",
-                    "opacity",
-                    "quat",
-                    "scale",
-                    "normal",
-                    "lang_feat",
-                    "valid_feat_mask",
-                ),
-                return_inverse=True,
-            ),
-        ],
-        test_mode=True,
-        test_cfg=dict(
-            voxelize=dict(
-                type="GridSample",
-                grid_size=0.02,
-                hash_type="fnv",
-                mode="test",
-                keys=(
-                    "coord",
-                    "color",
-                    "opacity",
-                    "quat",
-                    "scale",
-                    "normal",
-                    "lang_feat",
-                    "valid_feat_mask",
-                ),
-                return_grid_coord=True,
-            ),
-            crop=None,
-            post_transform=[
-                dict(type="CenterShift", apply_z=False),
-                dict(type="ToTensor"),
+    test=[
+        # matterport3d_160
+        dict(
+            type=dataset_type,
+            split="test",
+            data_root=matterport3d_data_root,
+            is_train=False,
+            transform=[
+                dict(type="CenterShift", apply_z=True),
+                dict(type="NormalizeColor"),
                 dict(
-                    type="Collect",
+                    type="Copy",
+                    keys_dict=dict(
+                        segment="origin_segment",
+                        coord="origin_coord",
+                        valid_feat_mask="origin_feat_mask",
+                    ),
+                ),
+                dict(
+                    type="GridSample",
+                    grid_size=0.01,
+                    hash_type="fnv",
+                    mode="train",
                     keys=(
                         "coord",
-                        "grid_coord",
-                        "index",
+                        "color",
+                        "opacity",
+                        "quat",
+                        "scale",
+                        "lang_feat",
+                        "valid_feat_mask",
+                        "segment",
+                    ),
+                    apply_to_pc=False,
+                    return_inverse=True,
+                ),
+            ],
+            test_mode=True,
+            test_cfg=dict(
+                voxelize=dict(
+                    type="GridSample",
+                    grid_size=0.02,
+                    hash_type="fnv",
+                    mode="test",
+                    keys=(
+                        "coord",
+                        "color",
+                        "opacity",
+                        "quat",
+                        "scale",
                         "lang_feat",
                         "valid_feat_mask",
                     ),
-                    feat_keys=("color", "opacity", "quat", "scale"),
+                    apply_to_pc=False,
+                    return_grid_coord=True,
                 ),
-            ],
-            aug_transform=[
-                [
+                crop=None,
+                post_transform=[
+                    dict(type="CenterShift", apply_z=False),
+                    dict(type="ToTensor"),
                     dict(
-                        type="RandomRotateTargetAngle",
-                        angle=[0],
-                        axis="z",
-                        center=[0, 0, 0],
-                        p=1,
-                    )
-                ]
-            ],
+                        type="Collect",
+                        keys=(
+                            "coord",
+                            "grid_coord",
+                            "index",
+                            "lang_feat",
+                            "valid_feat_mask",
+                            "pc_coord",
+                            "pc_segment",
+                        ),
+                        feat_keys=("color", "opacity", "quat", "scale"),
+                    ),
+                ],
+                aug_transform=[
+                    [
+                        {
+                            "type": "RandomRotateTargetAngle",
+                            "angle": [0],
+                            "axis": "z",
+                            "center": [0, 0, 0],
+                            "p": 1,
+                        }
+                    ]
+                ],
+            ),
         ),
-    ),
+    ],
 )
