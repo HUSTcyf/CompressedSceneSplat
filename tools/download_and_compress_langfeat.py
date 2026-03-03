@@ -444,6 +444,7 @@ class LangFeatDownloadCompressor:
         skip_download: bool = False,
         download_only: bool = False,
         delete_after_compress: bool = False,
+        feat_seq: Optional[int] = None,
     ):
         """
         Initialize the downloader and compressor.
@@ -464,6 +465,7 @@ class LangFeatDownloadCompressor:
             skip_download: If True, skip download and only compress scenes with existing lang_feat.npy files
             download_only: If True, only download lang_feat.npy files without compression (for incomplete processing)
             delete_after_compress: If True, delete lang_feat.npy after successful compression (for training data)
+            feat_seq: Language feature sequence number (None for default lang_feat.npy, 1 for lang_feat_1.npy, etc.)
         """
         self.repo_id = repo_id
         self.local_dir = Path(local_dir)
@@ -476,6 +478,17 @@ class LangFeatDownloadCompressor:
         self.skip_download = skip_download
         self.download_only = download_only
         self.delete_after_compress = delete_after_compress
+        self.feat_seq = feat_seq
+
+        # Build file name suffix based on feat_seq
+        if feat_seq is None:
+            self.lang_feat_name = "lang_feat.npy"
+            self.grid_meta_name = "grid_meta_data.json"
+            self.svd_pattern = "lang_feat_grid_svd_r*.npz"
+        else:
+            self.lang_feat_name = f"lang_feat_{feat_seq}.npy"
+            self.grid_meta_name = f"grid_meta_data_{feat_seq}.json"
+            self.svd_pattern = f"lang_feat_grid_svd_r*_{feat_seq}.npz"
 
         # Single GPU mode: force single thread
         if single_gpu is not None:
@@ -553,8 +566,8 @@ class LangFeatDownloadCompressor:
             for item in base_path.rglob('*'):
                 if item.is_dir():
                     coord_path = item / "coord.npy"
-                    lang_feat_path = item / "lang_feat.npy"
-                    grid_meta_path = item / "grid_meta_data.json"
+                    lang_feat_path = item / self.lang_feat_name
+                    grid_meta_path = item / self.grid_meta_name
 
                     # Need both coord.npy and lang_feat.npy
                     if coord_path.exists() and lang_feat_path.exists():
@@ -562,12 +575,12 @@ class LangFeatDownloadCompressor:
 
                         # Force reprocess mode in skip_download: delete compressed files but keep lang_feat.npy
                         if self.force_reprocess and grid_meta_path.exists():
-                            print(f"  [Force Reprocess] Deleting compressed files (keeping lang_feat.npy): {rel_path}")
+                            print(f"  [Force Reprocess] Deleting compressed files (keeping {self.lang_feat_name}): {rel_path}")
                             try:
                                 # Delete grid_meta_data.json
                                 grid_meta_path.unlink()
                                 # Delete compressed SVD files
-                                for svd_file in item.glob("lang_feat_grid_svd_r*.npz"):
+                                for svd_file in item.glob(self.svd_pattern):
                                     svd_file.unlink()
                                 print(f"  [Force Reprocess] Deleted compressed files for: {rel_path}")
                             except Exception as e:
@@ -587,8 +600,8 @@ class LangFeatDownloadCompressor:
             for item in base_path.rglob('*'):
                 if item.is_dir():
                     coord_path = item / "coord.npy"
-                    lang_feat_path = item / "lang_feat.npy"
-                    grid_meta_path = item / "grid_meta_data.json"
+                    lang_feat_path = item / self.lang_feat_name
+                    grid_meta_path = item / self.grid_meta_name
 
                     # Need coord.npy, NOT lang_feat.npy, and NOT already compressed (no grid_meta_data.json)
                     if coord_path.exists() and not lang_feat_path.exists() and not grid_meta_path.exists():
@@ -601,8 +614,8 @@ class LangFeatDownloadCompressor:
         for item in base_path.rglob('*'):
             if item.is_dir():
                 coord_path = item / "coord.npy"
-                lang_feat_path = item / "lang_feat.npy"
-                grid_meta_path = item / "grid_meta_data.json"
+                lang_feat_path = item / self.lang_feat_name
+                grid_meta_path = item / self.grid_meta_name
 
                 if coord_path.exists():
                     rel_path = item.relative_to(self.local_dir)
@@ -614,7 +627,7 @@ class LangFeatDownloadCompressor:
                             # Delete grid_meta_data.json
                             grid_meta_path.unlink()
                             # Delete compressed SVD files (U, S, V matrices)
-                            for svd_file in item.glob("lang_feat_grid_svd_r*.npz"):
+                            for svd_file in item.glob(self.svd_pattern):
                                 svd_file.unlink()
                             print(f"  [Force Reprocess] Deleted compressed files for: {rel_path}")
                         except Exception as e:
@@ -690,9 +703,10 @@ class LangFeatDownloadCompressor:
         if not base_path.exists():
             return stats, incomplete_scenes
 
-        # Find all grid_meta_data.json files
+        # Find all grid_meta_data.json files (use pattern based on feat_seq)
         from tqdm import tqdm
-        for meta_file in tqdm(base_path.rglob("grid_meta_data.json"), desc="Collecting grid metadata stats"):
+        meta_pattern = self.grid_meta_name  # "grid_meta_data.json" or "grid_meta_data_{seq}.json"
+        for meta_file in tqdm(base_path.rglob(meta_pattern), desc="Collecting grid metadata stats"):
             try:
                 with open(meta_file, 'r') as f:
                     meta_data = json.load(f)
@@ -829,7 +843,7 @@ class LangFeatDownloadCompressor:
         from tqdm import tqdm
 
         scene_dir = self.local_dir / scene_rel_path
-        grid_meta_path = scene_dir / "grid_meta_data.json"
+        grid_meta_path = scene_dir / self.grid_meta_name
 
         try:
             # Step 1: Delete existing compressed files
@@ -838,11 +852,11 @@ class LangFeatDownloadCompressor:
                 grid_meta_path.unlink()
 
             # Delete SVD npz files
-            for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+            for svd_file in scene_dir.glob(self.svd_pattern):
                 svd_file.unlink()
 
             # Step 2: Ensure lang_feat.npy exists (download if needed, unless skip_download)
-            lang_feat_path = scene_dir / "lang_feat.npy"
+            lang_feat_path = scene_dir / self.lang_feat_name
 
             if not lang_feat_path.exists() and not self.skip_download:
                 tqdm.write(f"    [Download] Re-downloading lang_feat.npy for {scene_rel_path}")
@@ -965,7 +979,7 @@ class LangFeatDownloadCompressor:
 
         # Construct the file path in the repository
         # Note: scene_rel_path already includes target_subfolder
-        repo_file_path = f"{scene_rel_path}/lang_feat.npy"
+        repo_file_path = f"{scene_rel_path}/{self.lang_feat_name}"
 
         while infinite_retry or (retries <= self.max_retries):
             try:
@@ -983,7 +997,7 @@ class LangFeatDownloadCompressor:
                 )
 
                 # Verify file was downloaded
-                lang_feat_path = self.local_dir / scene_rel_path / "lang_feat.npy"
+                lang_feat_path = self.local_dir / scene_rel_path / self.lang_feat_name
                 if lang_feat_path.exists():
                     file_size_mb = lang_feat_path.stat().st_size / (1024 * 1024)
                     print(f"  [Download] Success: {scene_rel_path} ({file_size_mb:.2f} MB)")
@@ -1031,8 +1045,8 @@ class LangFeatDownloadCompressor:
         Returns:
             True if metadata is complete after retries, False otherwise
         """
-        grid_meta_path = scene_dir / "grid_meta_data.json"
-        lang_feat_path = scene_dir / "lang_feat.npy"
+        grid_meta_path = scene_dir / self.grid_meta_name
+        lang_feat_path = scene_dir / self.lang_feat_name
 
         for retry in range(max_retries):
             print(f"  [Retry] Attempt {retry + 1}/{max_retries} (single-threaded mode)...")
@@ -1058,7 +1072,7 @@ class LangFeatDownloadCompressor:
             # Cleanup incomplete files before retry
             if grid_meta_path.exists():
                 grid_meta_path.unlink()
-            for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+            for svd_file in scene_dir.glob(self.svd_pattern):
                 svd_file.unlink()
 
         # All retries failed
@@ -1082,9 +1096,9 @@ class LangFeatDownloadCompressor:
         scene_dir = self.local_dir / scene_rel_path
 
         # Check if lang_feat.npy exists
-        lang_feat_path = scene_dir / "lang_feat.npy"
+        lang_feat_path = scene_dir / self.lang_feat_name
         if not lang_feat_path.exists():
-            print(f"  [Compress] Skip: lang_feat.npy not found for {scene_rel_path}")
+            print(f"  [Compress] Skip: {self.lang_feat_name} not found for {scene_rel_path}")
             return False
 
         # Allocate GPU with sufficient VRAM
@@ -1136,6 +1150,10 @@ class LangFeatDownloadCompressor:
                 "--device", device,
             ]
 
+            # Add feat_seq parameter if specified
+            if self.feat_seq is not None:
+                cmd.extend(["--feat_seq", str(self.feat_seq)])
+
             if not self.use_rpca:
                 cmd.append("--no_rpca")
 
@@ -1168,7 +1186,7 @@ class LangFeatDownloadCompressor:
             print(f"  [Compress] Success: {scene_rel_path} on {device}")
 
             # Check metadata completeness
-            grid_meta_path = scene_dir / "grid_meta_data.json"
+            grid_meta_path = scene_dir / self.grid_meta_name
 
             if grid_meta_path.exists():
                 is_complete, missing_keys = self._check_metadata_completeness(grid_meta_path)
@@ -1180,13 +1198,13 @@ class LangFeatDownloadCompressor:
                     if self.delete_after_compress:
                         try:
                             lang_feat_path.unlink()
-                            print(f"  [Cleanup] Deleted lang_feat.npy: {scene_rel_path} (metadata verified complete)")
+                            print(f"  [Cleanup] Deleted {self.lang_feat_name}: {scene_rel_path} (metadata verified complete)")
                             with self.lock:
                                 self.stats['deleted'] += 1
                         except Exception as e:
                             print(f"  [Cleanup] Warning: Could not delete {lang_feat_path}: {e}")
                     else:
-                        print(f"  [Keep] lang_feat.npy preserved: {scene_rel_path}")
+                        print(f"  [Keep] {self.lang_feat_name} preserved: {scene_rel_path}")
                     return True
                 else:
                     # Metadata is incomplete, switch to single-threaded mode and retry
@@ -1195,14 +1213,14 @@ class LangFeatDownloadCompressor:
 
                     # Delete incomplete files before retry
                     grid_meta_path.unlink()
-                    for svd_file in scene_dir.glob("lang_feat_grid_svd_r*.npz"):
+                    for svd_file in scene_dir.glob(self.svd_pattern):
                         svd_file.unlink()
 
                     # Call retry function (GPU is still allocated, will be released in finally block)
                     return self._retry_compression_single_threaded(scene_dir, cmd_str)
             else:
                 # grid_meta_data.json doesn't exist, retry in single-threaded mode
-                print(f"  [Warning] grid_meta_data.json not found after compression")
+                print(f"  [Warning] {self.grid_meta_name} not found after compression")
                 print(f"  [Retry] Switching to single-threaded mode...")
                 return self._retry_compression_single_threaded(scene_dir, cmd_str)
 
@@ -1591,6 +1609,12 @@ Examples:
         action="store_true",
         help="Delete lang_feat.npy after successful compression (useful for training data to save disk space)",
     )
+    parser.add_argument(
+        "--feat_seq",
+        type=int,
+        default=None,
+        help="Language feature sequence number (None for default lang_feat.npy, 1 for lang_feat_1.npy, 2 for lang_feat_2.npy, etc.)",
+    )
 
     args = parser.parse_args()
 
@@ -1619,6 +1643,7 @@ Examples:
         skip_download=args.skip_download,
         download_only=args.download_only,
         delete_after_compress=args.delete_after_compress,
+        feat_seq=args.feat_seq,
     )
 
     # Run processing

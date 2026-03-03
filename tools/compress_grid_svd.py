@@ -59,12 +59,13 @@ from tools.rpca_utils import (
 )
 
 
-def load_scene_data(data_dir: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Load coord, lang_feat, and valid_feat_mask from a scene directory.
 
     Args:
         data_dir: Path to scene directory
+        feat_seq: Language feature sequence number (None for lang_feat.npy, 1 for lang_feat_1.npy, etc.)
 
     Returns:
         coord: [N, 3] - 3D coordinates
@@ -72,7 +73,8 @@ def load_scene_data(data_dir: str) -> Tuple[np.ndarray, np.ndarray, Optional[np.
         valid_mask: [N] - valid feature mask (or None)
     """
     coord_path = os.path.join(data_dir, "coord.npy")
-    lang_feat_path = os.path.join(data_dir, "lang_feat.npy")
+    lang_feat_name = f"lang_feat_{feat_seq}.npy" if feat_seq is not None else "lang_feat.npy"
+    lang_feat_path = os.path.join(data_dir, lang_feat_name)
     valid_mask_path = os.path.join(data_dir, "valid_feat_mask.npy")
 
     # Check required files
@@ -677,6 +679,7 @@ def save_svd_results(
     scene_name: str,
     output_dir: str,
     base_filename: str = "lang_feat_grid_svd",
+    feat_seq: Optional[int] = None,
 ) -> Dict[int, str]:
     """
     Save compressed features and point-to-grid indices as .npz files.
@@ -686,6 +689,7 @@ def save_svd_results(
         scene_name: Name of the scene
         output_dir: Output directory path
         base_filename: Base filename for output files
+        feat_seq: Language feature sequence number (None for default, 1 for _1 suffix, etc.)
 
     Returns:
         Dictionary mapping rank to output file path
@@ -696,7 +700,8 @@ def save_svd_results(
     saved_paths = {}
 
     for r, results in svd_results.items():
-        output_file = output_path / f"{base_filename}_r{r}.npz"
+        seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+        output_file = output_path / f"{base_filename}_r{r}{seq_suffix}.npz"
 
         # Save compressed features and point-to-grid indices
         # This matches the loading logic in compute_grid.py
@@ -716,6 +721,7 @@ def save_grid_meta_data(
     svd_results: Dict[int, Dict],
     output_dir: str,
     scene_name: str,
+    feat_seq: Optional[int] = None,
 ):
     """
     Save grid metadata to JSON file, including SVD reconstruction errors.
@@ -726,11 +732,13 @@ def save_grid_meta_data(
         svd_results: Dictionary mapping rank to SVD results (contains reconstruction_error)
         output_dir: Output directory path
         scene_name: Name of the scene
+        feat_seq: Language feature sequence number (None for default, 1 for _1 suffix, etc.)
     """
     output_path = Path(output_dir) / scene_name
     output_path.mkdir(parents=True, exist_ok=True)
 
-    output_file = output_path / "grid_meta_data.json"
+    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    output_file = output_path / f"grid_meta_data{seq_suffix}.json"
 
     # Convert to serializable format
     meta_data = {
@@ -804,6 +812,7 @@ def process_single_scene(
     rpca_tol: float,
     device: Optional[str],
     torch_device: str = "cuda",
+    feat_seq: Optional[int] = None,
 ) -> bool:
     """
     Process a single scene: compute grid average features, apply RPCA+SVD, and save results.
@@ -818,6 +827,7 @@ def process_single_scene(
         rpca_tol: Tolerance for RPCA convergence
         device: Device for RPCA
         torch_device: Device for torch operations
+        feat_seq: Language feature sequence number (None for default, 1 for _1 suffix, etc.)
 
     Returns:
         True if successful, False otherwise
@@ -826,7 +836,7 @@ def process_single_scene(
 
     try:
         # Load data
-        coord, lang_feat, valid_mask = load_scene_data(data_dir)
+        coord, lang_feat, valid_mask = load_scene_data(data_dir, feat_seq)
 
         print(f"\n  Processing scene: {scene_name}")
         print(f"    Points: {coord.shape[0]:,}")
@@ -858,10 +868,11 @@ def process_single_scene(
             svd_results,
             scene_name,
             output_dir,
+            feat_seq=feat_seq,
         )
 
         # Save grid metadata
-        save_grid_meta_data(point_to_grid_indices, grid_point_counts, svd_results, output_dir, scene_name)
+        save_grid_meta_data(point_to_grid_indices, grid_point_counts, svd_results, output_dir, scene_name, feat_seq)
 
         # Print saved paths
         for r, path in saved_paths.items():
@@ -983,6 +994,12 @@ Examples:
         default=1e-5,
         help="Tolerance for RPCA convergence (default: 1e-5)",
     )
+    parser.add_argument(
+        "--feat_seq",
+        type=int,
+        default=None,
+        help="Language feature sequence number (None for default lang_feat.npy, 1 for lang_feat_1.npy, 2 for lang_feat_2.npy, etc.)",
+    )
 
     args = parser.parse_args()
 
@@ -1037,6 +1054,7 @@ Examples:
             args.rpca_tol,
             device,
             args.device,
+            args.feat_seq,
         )
 
         if success:
@@ -1085,6 +1103,7 @@ Examples:
                 args.rpca_tol,
                 device,
                 args.device,
+                args.feat_seq,
             )
 
             if success:

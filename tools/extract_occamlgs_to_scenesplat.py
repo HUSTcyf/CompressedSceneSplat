@@ -149,6 +149,10 @@ def load_occamlgs_checkpoint(ckpt_path: str) -> Dict:
         data['valid_feat_mask'] = (valid_mask > 0).astype(np.uint8)
     else:
         data['valid_feat_mask'] = valid_mask.astype(np.uint8)
+    valid_mask = np.any(data['lang_feat'] != 0.0, axis=1).astype(int)
+    data["lang_feat"] = data["lang_feat"][valid_mask > 0]
+    data["valid_feat_mask"] = valid_mask
+    print((valid_mask > 0).sum(), "valid features out of", len(valid_mask))
 
     print(f"  Extracted: coord={data['coord'].shape}, "
           f"color={data['color'].shape}, "
@@ -220,20 +224,21 @@ def save_scenesplat_format(data: Dict, output_dir: Path, scene_name: str, level_
         np.save(output_dir / "opacity.npy", data["opacity"])
         np.save(output_dir / "scale.npy", data["scale"])
         np.save(output_dir / "quat.npy", data["quat"])
-        np.save(output_dir / "valid_feat_mask.npy", data["valid_feat_mask"])
         print(f"Saved base Gaussian parameters to: {output_dir}")
         print(f"  - coord: {data['coord'].shape}, {data['coord'].dtype}")
         print(f"  - color: {data['color'].shape}, {data['color'].dtype}")
         print(f"  - opacity: {data['opacity'].shape}, {data['opacity'].dtype}")
         print(f"  - scale: {data['scale'].shape}, {data['scale'].dtype}")
         print(f"  - quat: {data['quat'].shape}, {data['quat'].dtype}")
-        print(f"  - valid_feat_mask: {data['valid_feat_mask'].shape}, {data['valid_feat_mask'].dtype}")
 
     # Save language features for each level
     lang_feat_path = output_dir / f"lang_feat_{level_idx}.npy"
     np.save(lang_feat_path, data["lang_feat"])
+    valid_mask_path = output_dir / f"valid_feat_mask_{level_idx}.npy"
+    np.save(valid_mask_path, data["valid_feat_mask"])
     print(f"Saved level {level_idx} language features to: {lang_feat_path}")
     print(f"  - lang_feat_{level_idx}: {data['lang_feat'].shape}, {data['lang_feat'].dtype}")
+    print(f"  - valid_feat_mask_{level_idx}: {data['valid_feat_mask'].shape}, {data['valid_feat_mask'].dtype}")
 
 
 def copy_test_renders(

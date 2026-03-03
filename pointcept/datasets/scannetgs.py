@@ -122,34 +122,36 @@ class ScanNetGSDataset(DefaultDataset):
                 data_dict["scale"].astype(np.float32).clip(0, 1.5)
             )  # clip scale max to 1.5
 
-        if "lang_feat" in data_dict.keys():
+        # Load SVD-compressed language features if enabled (BEFORE checking lang_feat.npy)
+        # This fixes the chicken-and-egg bug where SVD loading required lang_feat.npy to exist
+        if self.load_compressed_lang_feat:
+            svd_file = os.path.join(data_path, f"lang_feat_grid_svd_r{self.svd_rank}.npz")
+            if os.path.exists(svd_file):
+                try:
+                    svd_data = np.load(svd_file)
+                    compressed = svd_data['compressed']  # [M, rank]
+                    indices = svd_data['indices']  # [N] - point to grid mapping
+
+                    # Add point_to_grid mapping to data_dict (for density-invariant training)
+                    data_dict["point_to_grid"] = indices.astype(np.int64)
+
+                    # Expand grid-level features to point-level: [N, rank]
+                    point_lang_feat = compressed[indices]
+
+                    # Set lang_feat from SVD (for valid points)
+                    # FilterValidPoints will skip arrays with different lengths,
+                    # so compressed lang_feat will be preserved (not filtered)
+                    # After filtering, both coord and lang_feat will have num_valid points
+                    data_dict["lang_feat"] = point_lang_feat.astype(np.float32)
+                    print(f"current: {name} loaded SVD-{self.svd_rank} compressed lang_feat: {point_lang_feat.shape}")
+                except Exception as e:
+                    print(f"Warning: Failed to load SVD file for {name}: {e}")
+            else:
+                print(f"Warning: SVD file not found for {name}: {svd_file}")
+
+        # If lang_feat.npy exists and we didn't load SVD features, use the original
+        if "lang_feat" in data_dict.keys() and "point_to_grid" not in data_dict.keys():
             data_dict["lang_feat"] = data_dict["lang_feat"].astype(np.float32)
-
-            # Load SVD-compressed language features if enabled
-            if self.load_compressed_lang_feat:
-                svd_file = os.path.join(data_path, f"lang_feat_grid_svd_r{self.svd_rank}.npz")
-                if os.path.exists(svd_file):
-                    try:
-                        svd_data = np.load(svd_file)
-                        compressed = svd_data['compressed']  # [M, rank]
-                        indices = svd_data['indices']  # [N] - point to grid mapping
-
-                        # Add point_to_grid mapping to data_dict (for density-invariant training)
-                        data_dict["point_to_grid"] = indices.astype(np.int64)
-
-                        # Expand grid-level features to point-level: [N, rank]
-                        point_lang_feat = compressed[indices]
-
-                        # Always use compressed features (for valid points)
-                        # FilterValidPoints will skip arrays with different lengths,
-                        # so compressed lang_feat will be preserved (not filtered)
-                        # After filtering, both coord and lang_feat will have num_valid points
-                        data_dict["lang_feat"] = point_lang_feat.astype(np.float32)
-                        print(f"current: {name} loaded SVD-{self.svd_rank} compressed lang_feat: {point_lang_feat.shape}")
-                    except Exception as e:
-                        print(f"Warning: Failed to load SVD file for {name}: {e}")
-                else:
-                    print(f"Warning: SVD file not found for {name}: {svd_file}")
 
         if "valid_feat_mask" in data_dict.keys():
             # Use the real valid_feat_mask as-is (distinguishes valid from zero features)
