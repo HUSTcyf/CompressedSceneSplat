@@ -12,8 +12,16 @@ Usage:
 """
 
 import os
+import sys
 import argparse
 from torch.utils.data import DataLoader
+
+# Add project root to Python path
+# Get the directory containing this script (tools/) and go up one level to project root
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 def main():
     parser = argparse.ArgumentParser(description="Run validation-only evaluation")
@@ -100,7 +108,7 @@ def main():
         num_workers=cfg.num_worker // comm.get_world_size() if hasattr(cfg, "num_worker") else 4,
         pin_memory=True,
         sampler=val_sampler,
-        collate_fn=val_dataset.collate_fn if hasattr(val_dataset, "collate_fn") else None,
+        collate_fn=val_dataset.collate_fn if hasattr(val_dataset, "collate_fn") else val_dataset.__class__.collate_fn,
     )
 
     print(f"Val dataset: {len(val_dataset)} samples")
