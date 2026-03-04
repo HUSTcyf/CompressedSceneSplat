@@ -168,6 +168,8 @@ def main():
             self.val_loader = val_loader
             self.cfg = cfg
             self.epoch = checkpoint.get("epoch", 0)
+            self.writer = None  # No TensorBoard writer for eval-only
+            self.comm_info = {}  # For checkpoint saver compatibility
 
         # Get logger from cfg or create default
         @property
