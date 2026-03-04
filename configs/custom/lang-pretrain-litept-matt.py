@@ -117,7 +117,7 @@ model = dict(
         # SVDWeightedL1Loss: Variance-based dimension weighting
         dict(
             type="SVDWeightedL1Loss",
-            loss_weight=0.3,  # Overall loss weight
+            loss_weight=0.5,  # Overall loss weight
             reduction="mean",
             base_weight=1.0,  # Maximum weight
             min_weight=0.1,  # Minimum weight (prevents zero gradients)
@@ -322,7 +322,7 @@ data = dict(
             dict(type="ChromaticJitter", p=0.95, std=0.05),
             dict(
                 type="GridSample",
-                grid_size=0.02,
+                grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
                 keys=(
@@ -374,7 +374,7 @@ data = dict(
             dict(type="CenterShift", apply_z=True),
             dict(
                 type="GridSample",
-                grid_size=0.02,
+                grid_size=0.01,
                 hash_type="fnv",
                 mode="train",
                 keys=(
@@ -458,7 +458,7 @@ data = dict(
             test_cfg=dict(
                 voxelize=dict(
                     type="GridSample",
-                    grid_size=0.02,
+                    grid_size=0.01,
                     hash_type="fnv",
                     mode="test",
                     keys=(
