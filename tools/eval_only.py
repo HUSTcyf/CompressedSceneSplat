@@ -192,7 +192,6 @@ def main():
                     text_embeddings = os.path.join(cfg.repo_root, text_embeddings)
 
             evaluator = LangPretrainZeroShotSemSegEval(
-                trainer=trainer,
                 class_names=class_names,
                 text_embeddings=text_embeddings,
                 excluded_classes=evaluator_cfg.get("excluded_classes"),
@@ -204,6 +203,8 @@ def main():
                 svd_rank=evaluator_cfg.get("svd_rank"),
                 use_procrustes=evaluator_cfg.get("use_procrustes", False),
             )
+            # Manually set trainer attribute (required by HookBase)
+            evaluator.trainer = trainer
             break
 
     if evaluator is None:
