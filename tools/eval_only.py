@@ -134,19 +134,10 @@ def main():
     else:
         val_sampler = None
 
-    # Calculate batch size per GPU
-    if hasattr(cfg, "batch_size_val"):
-        batch_size = cfg.batch_size_val // comm.get_world_size()
-    elif hasattr(cfg, "batch_size_val_per_gpu"):
-        batch_size = cfg.batch_size_val_per_gpu
-    else:
-        batch_size = 1
-
-    # Calculate num workers
-    if hasattr(cfg, "num_worker"):
-        num_workers = cfg.num_worker // comm.get_world_size()
-    else:
-        num_workers = 4
+    # Use same batch_size and num_workers as training
+    # These are computed in default_setup()
+    batch_size = cfg.batch_size_val_per_gpu if hasattr(cfg, "batch_size_val_per_gpu") else 1
+    num_workers = cfg.num_worker_per_gpu if hasattr(cfg, "num_worker_per_gpu") else 4
 
     val_loader = DataLoader(
         val_dataset,
