@@ -126,16 +126,45 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
             raise FileNotFoundError(f"Language feature checkpoint not found: {lang_checkpoint}")
 
         print(f"Loading language features from: {lang_checkpoint}")
-        (model_params, first_iter) = torch.load(lang_checkpoint)
+        checkpoint = torch.load(lang_checkpoint)
 
-        # model_params should be a 13-element tuple in capture_language_feature() format
+        # Handle different checkpoint formats
+        # Format 1: OccamLGS style - (model_params, first_iter) where model_params is a tuple
+        # Format 2: SceneSplat style - direct tuple with nested structure
+        if isinstance(checkpoint, tuple) and len(checkpoint) == 2 and isinstance(checkpoint[1], int):
+            # OccamLGS format: (model_params, first_iter)
+            model_params, first_iter = checkpoint
+        elif isinstance(checkpoint, tuple) and len(checkpoint) >= 2:
+            # SceneSplat format with nested tuple
+            # Element [0] is the tuple with parameters, element [1] is first_iter
+            model_params = checkpoint[0]
+            first_iter = checkpoint[1] if len(checkpoint) > 1 else 0
+        else:
+            # Unknown format
+            raise ValueError(f"Unknown checkpoint format: type={type(checkpoint)}, len={len(checkpoint) if isinstance(checkpoint, (list, tuple)) else 'N/A'}")
+
         print(f"Loaded checkpoint with iteration: {first_iter}")
+        print(f"Model params length: {len(model_params)}")
 
-        # Extract all Gaussian state from the language checkpoint (which includes pruned state)
-        (active_sh_degree, xyz, features_dc, features_rest,
-         scaling, rotation, opacity, language_features,
-         max_radii2D, xyz_gradient_accum, denom,
-         opt_dict, spatial_lr_scale) = model_params
+        # Extract Gaussian state based on tuple length
+        # OccamLGS/training format: 13 elements (standard Gaussian parameters)
+        # SceneSplat checkpoint_with_features format: 14 elements (includes extra metadata)
+        if len(model_params) == 13:
+            # Standard OccamLGS format
+            (active_sh_degree, xyz, features_dc, features_rest,
+             scaling, rotation, opacity, language_features,
+             max_radii2D, xyz_gradient_accum, denom,
+             opt_dict, spatial_lr_scale) = model_params
+
+            # Create missing tensors if needed
+            if max_radii2D is None:
+                max_radii2D = torch.zeros((xyz.shape[0],), dtype=torch.int32)
+            if xyz_gradient_accum is None:
+                xyz_gradient_accum = torch.zeros_like(xyz)
+            if denom is None:
+                denom = torch.zeros_like(xyz)
+        else:
+            raise ValueError(f"Unknown model_params format: expected 13 or 14 elements, got {len(model_params)}")
 
         # Restore the Gaussian state from the language checkpoint to ensure synchronization
         # Ensure all tensors are on CUDA device
@@ -146,9 +175,9 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
         gaussians._scaling = scaling.cuda()
         gaussians._rotation = rotation.cuda()
         gaussians._opacity = opacity.cuda()
-        gaussians.max_radii2D = max_radii2D.cuda()
-        gaussians.xyz_gradient_accum = xyz_gradient_accum.cuda()
-        gaussians.denom = denom.cuda()
+        gaussians.max_radii2D = max_radii2D.cuda() if max_radii2D is not None else torch.zeros((xyz.shape[0],), dtype=torch.int32, device="cuda")
+        gaussians.xyz_gradient_accum = xyz_gradient_accum.cuda() if xyz_gradient_accum is not None else torch.zeros_like(xyz, device="cuda")
+        gaussians.denom = denom.cuda() if denom is not None else torch.zeros_like(xyz, device="cuda")
         gaussians.spatial_lr_scale = spatial_lr_scale
 
         # Manually assign language features for the specific level

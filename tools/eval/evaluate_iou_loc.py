@@ -461,6 +461,7 @@ if __name__ == "__main__":
     parser.add_argument("--feat_folder", type=str, default=None)
     parser.add_argument("--feat_base_path", type=str, default=None, help="Base path for features (e.g., /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs)")
     parser.add_argument("--single_level", action="store_true", help="Use single feature level (level 0) instead of multiple levels")
+    parser.add_argument("--feat_level", type=int, default=None, help="Specific feature level to use (0, 1, 2, or 3). Overrides --single_level behavior.")
     parser.add_argument("--stability_thresh", type=float, default=0.3)
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
@@ -485,7 +486,22 @@ if __name__ == "__main__":
     dataset_name = args.dataset_name
 
     # Determine feature directory paths
-    if args.single_level:
+    if args.feat_level is not None:
+        # Use specific feature level (0, 1, 2, or 3)
+        level = args.feat_level
+        if level == 0:
+            folder_suffix = ""
+        else:
+            folder_suffix = f"_{level}"
+
+        if args.feat_base_path:
+            feat_dir = [f"{args.feat_base_path}/{args.dataset_name}/test/{args.feat_folder}{folder_suffix}/renders_npy"]
+        else:
+            feat_dir = [f"./output/LERF/{args.dataset_name}/test/{args.feat_folder}{folder_suffix}/renders_npy"]
+        # Replicate for 3 levels for compatibility with existing evaluation logic
+        feat_dir = feat_dir * 3
+        logging.info(f"Using feature level {level} (replicated for 3 levels): {feat_dir[0]}")
+    elif args.single_level:
         # Use single feature level (level 0) from custom base path or default
         if args.feat_base_path:
             feat_dir = [f"{args.feat_base_path}/{args.dataset_name}/test/{args.feat_folder}/renders_npy"]

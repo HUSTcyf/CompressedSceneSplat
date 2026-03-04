@@ -58,6 +58,10 @@ TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train_clip/{dataset}/train"
 CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"
 OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 
+# OccamLGS paths
+OCCAMLGS_OUTPUT_ROOT = "/new_data/cyf/projects/OccamLGS/output/LERF"
+OCCAMLGS_BASE_CHECKPOINT_ITER = 30000  # Default iteration for base checkpoint (without language features)
+
 # SVD compression rank
 SVD_RANK = 16
 
@@ -65,8 +69,9 @@ SVD_RANK = 16
 def get_available_scenes(
     use_grid_svd: bool = False,
     rank: int = SVD_RANK,
-    feat_seq: Optional[int] = None,
-    direct_mode: bool = False
+    feature_level: Optional[int] = None,
+    direct_mode: bool = False,
+    occamlgs_mode: bool = False
 ) -> List[str]:
     """Get list of scenes that have required files.
 
@@ -74,18 +79,34 @@ def get_available_scenes(
         use_grid_svd: If True, look for lang_feat_grid_svd_r*.npz files
                      If False, look for lang_feat_svd.npz files
         rank: SVD rank for grid SVD mode (e.g., 16 for r16)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
         direct_mode: If True, only check for Gaussian parameter files in TRAIN_ROOT
                     If False, require both SVD files and checkpoints
 
     Returns:
         List of scene names that have both required files
     """
+    if occamlgs_mode:
+        # For OccamLGS mode, look for checkpoint files in OCCAMLGS_OUTPUT_ROOT
+        occamlgs_dir = Path(OCCAMLGS_OUTPUT_ROOT)
+        if not occamlgs_dir.exists():
+            return []
+
+        scenes = []
+        for scene_dir in occamlgs_dir.iterdir():
+            if scene_dir.is_dir():
+                # Look for chkpnt*_langfeat_*.pth files
+                for ckpt_file in scene_dir.glob("chkpnt*_langfeat_*.pth"):
+                    scenes.append(scene_dir.name)
+                    break
+
+        return sorted(scenes)
+
     train_dir = Path(TRAIN_ROOT)
     checkpoint_dir = Path(CHECKPOINT_ROOT)
 
     # Build sequence suffix
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
 
     # Find all scenes with SVD files
     svd_scenes = set()
@@ -111,7 +132,8 @@ def get_available_scenes(
         else:
             # For regular SVD mode, also require lang_feat and SVD file
             required_files.append(f"lang_feat{seq_suffix}.npy")
-            required_files.append(f"valid_feat_mask{seq_suffix}.npy")
+            # valid_feat_mask is now unified (no level suffix)
+            required_files.append("valid_feat_mask.npy")
             required_files.append("lang_feat_svd.npz")
 
         for scene in svd_scenes:
@@ -134,7 +156,7 @@ def get_available_scenes(
     return available
 
 
-def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feat_seq: Optional[int] = None) -> np.ndarray:
+def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feature_level: Optional[int] = None) -> np.ndarray:
     """Load pre-compressed SVD features from lang_feat_grid_svd_r*.npz.
 
     The grid SVD file contains:
@@ -147,13 +169,13 @@ def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feat_seq
     Args:
         scene: Scene name
         rank: SVD rank (e.g., 16 for r16)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         compressed_features: [N_gaussians, rank] - full compressed feature array
     """
     # Build sequence suffix
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
     grid_svd_path = f"{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}{seq_suffix}.npz"
 
     if not os.path.exists(grid_svd_path):
@@ -181,7 +203,7 @@ def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feat_seq
 def get_svd_compressed_features_from_original(
     scene: str,
     rank: int = SVD_RANK,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ) -> np.ndarray:
     """Load original features and compress them using SVD decomposition.
 
@@ -194,17 +216,18 @@ def get_svd_compressed_features_from_original(
     Args:
         scene: Scene name
         rank: SVD compression rank (default 16)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         svd_compressed: [N_gaussians, rank] - SVD compressed features
     """
     # Build sequence suffix
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
 
     # Load original features
     lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat{seq_suffix}.npy"
-    valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask{seq_suffix}.npy"
+    # valid_feat_mask is now unified (no level suffix)
+    valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
 
     if not os.path.exists(lang_feat_path):
         raise FileNotFoundError(f"Language features not found: {lang_feat_path}")
@@ -262,7 +285,7 @@ def get_svd_compressed_features_from_original(
 def compare_compression_methods(
     scene: str,
     rank: int = SVD_RANK,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ) -> Dict[str, float]:
     """Compare Grid SVD vs SVD compression methods.
 
@@ -275,22 +298,22 @@ def compare_compression_methods(
     Args:
         scene: Scene name
         rank: SVD compression rank (default 16)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         Dictionary containing error metrics
     """
     print(f"\n{'='*60}")
-    print(f"Comparing compression methods for scene: {scene} (rank={rank}, seq={feat_seq})")
+    print(f"Comparing compression methods for scene: {scene} (rank={rank}, seq={feature_level})")
     print(f"{'='*60}\n")
 
     # Load Grid SVD compressed features
     print("Loading Grid SVD compressed features...")
-    grid_compressed = load_grid_svd_compressed_features(scene, rank, feat_seq)  # [N_gaussians, rank]
+    grid_compressed = load_grid_svd_compressed_features(scene, rank, feature_level)  # [N_gaussians, rank]
 
     # Load SVD compressed features from original
     print("\nLoading SVD compressed features from original...")
-    svd_compressed = get_svd_compressed_features_from_original(scene, rank, feat_seq)  # [N_gaussians, rank]
+    svd_compressed = get_svd_compressed_features_from_original(scene, rank, feature_level)  # [N_gaussians, rank]
 
     # Verify dimensions match
     if grid_compressed.shape != svd_compressed.shape:
@@ -372,7 +395,7 @@ def compare_compression_methods(
     print(f"  Valid features compared: {valid_mask.sum()}")
     print(f"  Compression rank: {rank}")
     # Build sequence suffix for file path
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
     print(f"  Grid SVD unique features: {len(np.unique(np.load(f'{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}{seq_suffix}.npz')['indices']))}")
 
     print(f"\n{'='*60}\n")
@@ -451,20 +474,298 @@ def find_checkpoint(scene: str, preferred_iteration: Optional[int] = None) -> st
     return str(ckpt_files[-1])
 
 
-def load_checkpoint(ckpt_path: str, scene: str, feat_seq: Optional[int] = None) -> Tuple[Tuple, int]:
+def find_occamlgs_base_checkpoint(scene: str, iteration: int = 30000) -> str:
+    """Find OccamLGS base checkpoint file (without language features).
+
+    OccamLGS base checkpoint naming: chkpnt{iteration}.pth (no language features)
+
+    Args:
+        scene: Scene name
+        iteration: Iteration number (default 30000)
+
+    Returns:
+        Path to the OccamLGS base checkpoint file
+    """
+    ckpt_path = f"{OCCAMLGS_OUTPUT_ROOT}/{scene}/chkpnt{iteration}.pth"
+
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"OccamLGS base checkpoint not found: {ckpt_path}")
+
+    return ckpt_path
+
+
+def load_occamlgs_base_checkpoint(ckpt_path: str) -> Tuple[Tuple, int]:
+    """Load OccamLGS base checkpoint file (without language features).
+
+    OccamLGS base checkpoint format (12 elements, NO language features):
+    - [0]: active_sh_degree (int)
+    - [1]: xyz (N, 3)
+    - [2]: features_dc (N, 1, 3) - correct SH format
+    - [3]: features_rest (N, 15, 3) - correct SH format for sh_degree=3
+    - [4]: scaling (N, 3)
+    - [5]: rotation (N, 4)
+    - [6]: opacity (N, 1)
+    - [7]: max_radii2D (N,)
+    - [8]: xyz_gradient_accum (N, 1)
+    - [9]: denom (N, 1)
+    - [10]: opt_dict (dict)
+    - [11]: spatial_lr_scale (float)
+
+    Args:
+        ckpt_path: Path to OccamLGS base checkpoint file
+
+    Returns:
+        model_params: 12-element tuple in OccamLGS base format (no language features)
+        iteration: iteration number
+    """
+    print(f"Loading OccamLGS base checkpoint from: {ckpt_path}")
+
+    checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+
+    # OccamLGS format: (model_params, iteration) where model_params is a tuple
+    if isinstance(checkpoint, tuple) and len(checkpoint) == 2:
+        model_params, iteration = checkpoint
+        print(f"  Detected OccamLGS base format: (model_params, iteration={iteration})")
+        print(f"  Model params length: {len(model_params)}")
+
+        if len(model_params) != 12:
+            raise ValueError(f"Expected 12-element OccamLGS base tuple, got {len(model_params)} elements")
+
+        # Print key info
+        active_sh_degree = model_params[0]
+        xyz = model_params[1]
+        features_dc = model_params[2]
+
+        print(f"  active_sh_degree: {active_sh_degree}")
+        print(f"  xyz shape: {xyz.shape}")
+        print(f"  features_dc shape: {features_dc.shape} (should be [N, 1, 3])")
+        print(f"  Note: This base checkpoint has NO language features (12 elements)")
+
+        return model_params, iteration
+
+    raise ValueError(f"Unexpected OccamLGS base checkpoint format: type={type(checkpoint)}, len={len(checkpoint) if isinstance(checkpoint, (list, tuple)) else 'N/A'}")
+
+
+def add_language_features_to_base_checkpoint(
+    base_model_params: Tuple,
+    language_features: torch.Tensor
+) -> Tuple:
+    """Add language features to base checkpoint (12-element -> 13-element tuple).
+
+    Args:
+        base_model_params: 12-element tuple (no language features)
+        language_features: [N, D] - language features to add
+
+    Returns:
+        model_params: 13-element tuple with language features
+
+    Raises:
+        ValueError: If dimension mismatch between base checkpoint and language features
+    """
+    if len(base_model_params) != 12:
+        raise ValueError(f"Expected 12-element base tuple, got {len(base_model_params)} elements")
+
+    # Unpack the 12-element tuple
+    (active_sh_degree, xyz, features_dc, features_rest,
+     scaling, rotation, opacity,
+     max_radii2D, xyz_gradient_accum, denom,
+     opt_dict, spatial_lr_scale) = base_model_params
+
+    # Check dimension mismatch - raise error if mismatch
+    N_base = xyz.shape[0]
+    N_features = language_features.shape[0]
+
+    if N_base != N_features:
+        raise ValueError(
+            f"Dimension mismatch: base checkpoint has {N_base} Gaussians "
+            f"but language features have {N_features} features. "
+            f"Please ensure the base checkpoint and grid SVD features are from the same training state."
+        )
+
+    # Create 13-element tuple by inserting language features
+    # Position 7 is after opacity, before max_radii2D
+    model_params_with_lang = (
+        active_sh_degree,
+        xyz,
+        features_dc,
+        features_rest,
+        scaling,
+        rotation,
+        opacity,
+        language_features,  # Position 7: NEW language features
+        max_radii2D,
+        xyz_gradient_accum,
+        denom,
+        opt_dict,
+        spatial_lr_scale,
+    )
+
+    print(f"  Created 13-element tuple with language features: {language_features.shape}")
+
+    return model_params_with_lang
+
+
+def find_occamlgs_checkpoint(scene: str, iteration: int = 30000, feature_level: int = 1) -> str:
+    """Find OccamLGS checkpoint file for the given scene.
+
+    OccamLGS checkpoint naming: chkpnt{iteration}_langfeat_{feature_level}.pth
+
+    Args:
+        scene: Scene name
+        iteration: Iteration number (default 30000)
+        feature_level: Feature level (default 1)
+
+    Returns:
+        Path to the OccamLGS checkpoint file
+    """
+    ckpt_path = f"{OCCAMLGS_OUTPUT_ROOT}/{scene}/chkpnt{iteration}_langfeat_{feature_level}.pth"
+
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"OccamLGS checkpoint not found: {ckpt_path}")
+
+    return ckpt_path
+
+
+def load_occamlgs_checkpoint(ckpt_path: str) -> Tuple[Tuple, int]:
+    """Load OccamLGS checkpoint file (13-element tuple format).
+
+    OccamLGS format (13 elements):
+    - [0]: active_sh_degree (int)
+    - [1]: xyz (N, 3)
+    - [2]: features_dc (N, 1, 3) - correct SH format
+    - [3]: features_rest (N, 15, 3) - correct SH format for sh_degree=3
+    - [4]: scaling (N, 3)
+    - [5]: rotation (N, 4)
+    - [6]: opacity (N, 1)
+    - [7]: language_features (N, 512) - CLIP features to compress
+    - [8]: max_radii2D (N,)
+    - [9]: xyz_gradient_accum (N, 1)
+    - [10]: denom (N, 1)
+    - [11]: opt_dict (dict)
+    - [12]: spatial_lr_scale (float)
+
+    Args:
+        ckpt_path: Path to OccamLGS checkpoint file
+
+    Returns:
+        model_params: 13-element tuple in OccamLGS format
+        iteration: iteration number
+    """
+    print(f"Loading OccamLGS checkpoint from: {ckpt_path}")
+
+    checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+
+    # OccamLGS format: (model_params, first_iter) where model_params is a tuple
+    if isinstance(checkpoint, tuple) and len(checkpoint) == 2:
+        model_params, iteration = checkpoint
+        print(f"  Detected OccamLGS format: (model_params, iteration={iteration})")
+        print(f"  Model params length: {len(model_params)}")
+
+        if len(model_params) != 13:
+            raise ValueError(f"Expected 13-element OccamLGS tuple, got {len(model_params)} elements")
+
+        # Print key info
+        active_sh_degree = model_params[0]
+        xyz = model_params[1]
+        features_dc = model_params[2]
+        language_features = model_params[7]
+
+        print(f"  active_sh_degree: {active_sh_degree}")
+        print(f"  xyz shape: {xyz.shape}")
+        print(f"  features_dc shape: {features_dc.shape} (should be [N, 1, 3])")
+        print(f"  language_features shape: {language_features.shape} (should be [N, 512])")
+
+        return model_params, iteration
+
+    raise ValueError(f"Unexpected OccamLGS checkpoint format: type={type(checkpoint)}, len={len(checkpoint) if isinstance(checkpoint, (list, tuple)) else 'N/A'}")
+
+
+def compute_svd_on_occamlgs_features(language_features: torch.Tensor, rank: int = 16) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute SVD on OccamLGS language features (512-dim CLIP).
+
+    Args:
+        language_features: [N, 512] - CLIP features
+        rank: Target compression rank
+
+    Returns:
+        U: [N, rank] - left singular vectors (truncated)
+        S: [rank] - singular values (truncated)
+        Vt: [rank, 512] - right singular vectors (transposed, truncated)
+    """
+    print(f"Computing SVD on {language_features.shape} features...")
+
+    # Convert to numpy
+    features_np = language_features.numpy().astype(np.float32)
+
+    # Compute full SVD
+    U, S, Vt = np.linalg.svd(features_np, full_matrices=False)
+
+    print(f"  Full SVD shapes: U={U.shape}, S={S.shape}, Vt={Vt.shape}")
+    print(f"  Singular values (first 10): {S[:10]}")
+    print(f"  Cumulative variance (first {rank}): {np.sum(S[:rank]**2) / np.sum(S**2):.4f}")
+
+    # Truncate to target rank
+    U_r = U[:, :rank]  # [N, rank]
+    S_r = S[:rank]     # [rank]
+    Vt_r = Vt[:rank, :]  # [rank, 512]
+
+    print(f"  Truncated SVD shapes: U={U_r.shape}, S={S_r.shape}, Vt={Vt_r.shape}")
+
+    return U_r, S_r, Vt_r
+
+
+def compress_occamlgs_features(
+    language_features: torch.Tensor,
+    Vt: np.ndarray,
+    rank: int = 16
+) -> torch.Tensor:
+    """Compress OccamLGS language features using pre-computed SVD.
+
+    Args:
+        language_features: [N, 512] - CLIP features
+        Vt: [rank, 512] - right singular vectors (transposed, truncated)
+        rank: Compression rank
+
+    Returns:
+        compressed_features: [N, rank] - compressed features
+    """
+    print(f"Compressing OccamLGS features from {language_features.shape[1]} to {rank} dimensions...")
+
+    # Compress using SVD projection: features @ Vt.T
+    # Vt is [rank, 512], so Vt.T is [512, rank]
+    compressed = language_features.numpy() @ Vt.T  # [N, rank]
+
+    print(f"  Compressed features shape: {compressed.shape}")
+
+    # Convert to tensor
+    compressed_tensor = torch.from_numpy(compressed.astype(np.float32))
+
+    # Compute compression stats
+    original_size = language_features.numel() * 4  # float32
+    compressed_size = compressed_tensor.numel() * 4
+    compression_ratio = original_size / compressed_size
+
+    print(f"  Original size: {original_size / 1024**2:.2f} MB")
+    print(f"  Compressed size: {compressed_size / 1024**2:.2f} MB")
+    print(f"  Compression ratio: {compression_ratio:.2f}x")
+
+    return compressed_tensor
+
+
+def load_checkpoint(ckpt_path: str, scene: str, feature_level: Optional[int] = None) -> Tuple[Tuple, int]:
     """Load checkpoint file (gsplat format).
 
     Args:
         ckpt_path: Path to checkpoint file
         scene: Scene name (for loading lang_feat and valid_feat_mask)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         model_params: 13-element tuple in capture_language_feature() format
         iteration: iteration number
     """
     # Build sequence suffix
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
     print(f"Loading checkpoint from: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
@@ -510,7 +811,8 @@ def load_checkpoint(ckpt_path: str, scene: str, feat_seq: Optional[int] = None) 
             print(f"  Warning: Language feature count ({language_features.shape[0]}) != Gaussian count ({N})")
 
         # Load valid_feat_mask to ensure proper feature alignment
-        valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask{seq_suffix}.npy"
+        # valid_feat_mask is now unified (no level suffix)
+        valid_feat_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
         if os.path.exists(valid_feat_mask_path):
             print(f"  Loading valid_feat_mask from: {valid_feat_mask_path}")
             valid_feat_mask = torch.from_numpy(np.load(valid_feat_mask_path).astype(np.bool_))
@@ -701,7 +1003,7 @@ def process_scene(
     iteration: Optional[int] = None,
     rank: int = SVD_RANK,
     output_dir: Optional[str] = None,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ):
     """Process a single scene.
 
@@ -710,10 +1012,10 @@ def process_scene(
         iteration: Preferred checkpoint iteration (None for latest)
         rank: SVD compression rank
         output_dir: Output directory (default OUTPUT_ROOT)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene} (seq={feat_seq})")
+    print(f"Processing scene: {scene} (seq={feature_level})")
     print(f"{'='*60}\n")
 
     # Load SVD components
@@ -721,7 +1023,7 @@ def process_scene(
 
     # Load checkpoint
     ckpt_path = find_checkpoint(scene, iteration)
-    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feat_seq)
+    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feature_level)
 
     # Extract language features (element 7 of the tuple)
     original_features = model_params[7]
@@ -767,7 +1069,7 @@ def process_scene_grid_svd(
     iteration: Optional[int] = None,
     rank: int = SVD_RANK,
     output_dir: Optional[str] = None,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ):
     """Process a single scene using pre-compressed grid SVD features.
 
@@ -782,14 +1084,14 @@ def process_scene_grid_svd(
         iteration: Preferred checkpoint iteration (None for latest)
         rank: SVD compression rank (default 16)
         output_dir: Output directory (default OUTPUT_ROOT)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene} (Grid SVD mode, rank={rank}, seq={feat_seq})")
+    print(f"Processing scene: {scene} (Grid SVD mode, rank={rank}, seq={feature_level})")
     print(f"{'='*60}\n")
 
     # Load pre-compressed grid SVD features
-    compressed_features = load_grid_svd_compressed_features(scene, rank, feat_seq)
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feature_level)
 
     # Convert to torch tensor
     compressed_features_tensor = torch.from_numpy(compressed_features)
@@ -797,7 +1099,7 @@ def process_scene_grid_svd(
 
     # Load checkpoint
     ckpt_path = find_checkpoint(scene, iteration)
-    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feat_seq)
+    model_params, iteration_num = load_checkpoint(ckpt_path, scene, feature_level)
 
     # Verify dimensions match
     original_features = model_params[7]
@@ -840,7 +1142,7 @@ def process_scene_grid_svd(
 
 def load_gaussian_params_from_train_root(
     scene: str,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load Gaussian parameters directly from TRAIN_ROOT.
 
@@ -848,7 +1150,7 @@ def load_gaussian_params_from_train_root(
 
     Args:
         scene: Scene name
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
 
     Returns:
         coord: [N, 3] - 3D coordinates
@@ -917,10 +1219,11 @@ def create_model_params_from_gaussian_data(
     scale: np.ndarray,
     language_features: torch.Tensor,
     valid_feat_mask: Optional[torch.Tensor] = None,
+    use_occamlgs_format: bool = False,
 ) -> Tuple:
-    """Create model_params tuple (13-element) from Gaussian data.
+    """Create model_params tuple from Gaussian data.
 
-    This creates the same format as gsplat checkpoint but directly from numpy arrays.
+    This creates the same format as gsplat/OccamLGS checkpoint but directly from numpy arrays.
 
     Args:
         coord: [N, 3] - 3D coordinates
@@ -930,9 +1233,10 @@ def create_model_params_from_gaussian_data(
         scale: [N, 3] - scale parameters
         language_features: [N, D] - language features
         valid_feat_mask: [N] - boolean mask for valid features (optional)
+        use_occamlgs_format: If True, use OccamLGS format (features_dc=[N,1,3], features_rest=[N,15,3])
 
     Returns:
-        model_params: 13-element tuple in gsplat format
+        model_params: 13-element tuple in OccamLGS/gsplat format
     """
     N = coord.shape[0]
 
@@ -940,11 +1244,14 @@ def create_model_params_from_gaussian_data(
     xyz = torch.from_numpy(coord).float()  # [N, 3]
 
     # Create spherical harmonics features
-    # DC component (degree 0): [N, 3]
-    features_dc = torch.from_numpy(color).float()  # [N, 3]
-
-    # Rest components (degree 1-3): [N, 45] - initialized to zeros
-    features_rest = torch.zeros(N, 45, dtype=torch.float32)
+    if use_occamlgs_format:
+        # OccamLGS format: features_dc=[N,1,3], features_rest=[N,15,3]
+        features_dc = torch.from_numpy(color).float().unsqueeze(1)  # [N, 3] -> [N, 1, 3]
+        features_rest = torch.zeros(N, 15, 3, dtype=torch.float32)  # [N, 15, 3] for sh_degree=3
+    else:
+        # gsplat format: features_dc=[N, 3], features_rest=[N, 45]
+        features_dc = torch.from_numpy(color).float()  # [N, 3]
+        features_rest = torch.zeros(N, 45, dtype=torch.float32)
 
     # Scaling
     scaling = torch.from_numpy(scale).float()  # [N, 3]
@@ -967,7 +1274,7 @@ def create_model_params_from_gaussian_data(
     if valid_feat_mask is None:
         valid_feat_mask = torch.ones(language_features.shape[0], dtype=torch.bool)
 
-    # Create 13-element tuple in gsplat format
+    # Create 13-element tuple in OccamLGS format
     model_params = (
         active_sh_degree,
         xyz,
@@ -976,7 +1283,7 @@ def create_model_params_from_gaussian_data(
         scaling,
         rotation,
         opacity_tensor,
-        language_features,  # [N, D] - will be compressed
+        language_features,  # [N, D] - compressed features
         max_radii2D,
         xyz_gradient_accum,
         denom,
@@ -992,7 +1299,7 @@ def process_scene_direct_grid_svd(
     scene: str,
     rank: int = SVD_RANK,
     output_dir: Optional[str] = None,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ):
     """Process a scene using direct mode with pre-compressed grid SVD features.
 
@@ -1003,25 +1310,35 @@ def process_scene_direct_grid_svd(
         scene: Scene name
         rank: SVD compression rank (default 16)
         output_dir: Output directory (default OUTPUT_ROOT)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene} (Direct Grid SVD mode, rank={rank}, seq={feat_seq})")
+    print(f"Processing scene: {scene} (Direct Grid SVD mode, rank={rank}, seq={feature_level})")
     print(f"{'='*60}\n")
 
     # Load Gaussian parameters from TRAIN_ROOT
-    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feat_seq)
+    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feature_level)
 
     # Load pre-compressed grid SVD features
-    compressed_features = load_grid_svd_compressed_features(scene, rank, feat_seq)
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feature_level)
 
     # Convert to torch tensor
     compressed_features_tensor = torch.from_numpy(compressed_features).float()
     print(f"Compressed features shape: {compressed_features_tensor.shape}")
 
-    # Create model_params directly from Gaussian data
+    # Load valid_feat_mask (now unified, no level suffix)
+    valid_mask_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
+    if os.path.exists(valid_mask_path):
+        valid_feat_mask = torch.from_numpy(np.load(valid_mask_path).astype(np.bool_))
+        print(f"Valid feat mask: {valid_feat_mask.sum().item()} valid")
+    else:
+        valid_feat_mask = None
+
+    # Create model_params directly from Gaussian data with OccamLGS format
     model_params = create_model_params_from_gaussian_data(
-        coord, color, opacity, quat, scale, compressed_features_tensor
+        coord, color, opacity, quat, scale, compressed_features_tensor,
+        valid_feat_mask=valid_feat_mask,
+        use_occamlgs_format=True  # Use OccamLGS format with correct SH structure
     )
 
     # Extract language features for stats
@@ -1053,7 +1370,7 @@ def process_scene_direct_svd(
     scene: str,
     rank: int = SVD_RANK,
     output_dir: Optional[str] = None,
-    feat_seq: Optional[int] = None
+    feature_level: Optional[int] = None
 ):
     """Process a scene using direct mode with SVD compression.
 
@@ -1064,22 +1381,23 @@ def process_scene_direct_svd(
         scene: Scene name
         rank: SVD compression rank (default 16)
         output_dir: Output directory (default OUTPUT_ROOT)
-        feat_seq: Feature sequence number (1, 2, 3, etc.) for sequence-based files
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
     """
     print(f"\n{'='*60}")
-    print(f"Processing scene: {scene} (Direct SVD mode, rank={rank}, seq={feat_seq})")
+    print(f"Processing scene: {scene} (Direct SVD mode, rank={rank}, seq={feature_level})")
     print(f"{'='*60}\n")
 
     # Build sequence suffix
-    seq_suffix = f"_{feat_seq}" if feat_seq is not None else ""
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
 
     # Load Gaussian parameters from TRAIN_ROOT
-    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feat_seq)
+    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feature_level)
 
     # Load original features and valid mask
     scene_dir = Path(TRAIN_ROOT) / scene
     lang_feat_path = scene_dir / f"lang_feat{seq_suffix}.npy"
-    valid_feat_mask_path = scene_dir / f"valid_feat_mask{seq_suffix}.npy"
+    # valid_feat_mask is now unified (no level suffix)
+    valid_feat_mask_path = scene_dir / "valid_feat_mask.npy"
 
     if not lang_feat_path.exists():
         raise FileNotFoundError(f"Language features not found: {lang_feat_path}")
@@ -1170,6 +1488,331 @@ def process_scene_direct_svd(
     print(f"{'='*60}\n")
 
 
+def process_scene_occamlgs(
+    scene: str,
+    iteration: Optional[int] = None,
+    feature_level: int = 1,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None
+):
+    """Process a single scene from OccamLGS checkpoint.
+
+    This mode:
+    1. Loads OccamLGS checkpoint from OCCAMLGS_OUTPUT_ROOT
+    2. Extracts 512-dim CLIP language features
+    3. Computes SVD on the features and compresses to 16-dim
+    4. Saves checkpoint with correct spherical harmonics format
+
+    Args:
+        scene: Scene name
+        iteration: Checkpoint iteration (default 30000)
+        feature_level: Feature level (default 1)
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+    """
+    # Use default iteration of 30000 if not specified
+    if iteration is None:
+        iteration = 30000
+
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (OccamLGS mode)")
+    print(f"  Checkpoint: chkpnt{iteration}_langfeat_{feature_level}.pth")
+    print(f"  Compression rank: {rank}")
+    print(f"{'='*60}\n")
+
+    # Find and load OccamLGS checkpoint
+    ckpt_path = find_occamlgs_checkpoint(scene, iteration, feature_level)
+    model_params, iteration_num = load_occamlgs_checkpoint(ckpt_path)
+
+    # Extract language features (element 7 of the tuple)
+    language_features = model_params[7]
+    print(f"\nOriginal language features shape: {language_features.shape}")
+
+    # Verify it's 512-dim CLIP features
+    if language_features.shape[1] != 512:
+        raise ValueError(f"Expected 512-dim CLIP features, got {language_features.shape[1]}-dim features")
+
+    # Compute SVD on the OccamLGS features
+    print("\nComputing SVD on OccamLGS language features...")
+    U, S, Vt = compute_svd_on_occamlgs_features(language_features, rank)
+
+    # Compress features using SVD projection
+    compressed_features = compress_occamlgs_features(language_features, Vt, rank)
+
+    # Create new checkpoint with compressed features
+    # OccamLGS already has correct SH format, so we can just replace the features
+    new_model_params = create_compressed_checkpoint(model_params, compressed_features)
+
+    # Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features.pth"
+    save_checkpoint(new_model_params, iteration_num, save_path)
+
+    # Also save just the language features as .npy for convenience
+    lang_feat_path = f"{output_dir}/{scene}/language_features.npy"
+    np.save(lang_feat_path, compressed_features.numpy())
+    print(f"Also saved language features to: {lang_feat_path}")
+
+    # Also save SVD components for future reference
+    svd_path = f"{output_dir}/{scene}/lang_feat_svd_occamlgs.npz"
+    np.savez(svd_path, U=U, S=S, Vt=Vt)
+    print(f"Also saved SVD components to: {svd_path}")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (OccamLGS mode)")
+    print(f"{'='*60}\n")
+
+
+def process_scene_occamlgs_from_base(
+    scene: str,
+    iteration: Optional[int] = None,
+    feature_level: int = 1,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None
+):
+    """Process a single scene from OccamLGS base checkpoint + grid SVD features.
+
+    This mode:
+    1. Loads OccamLGS base checkpoint (WITHOUT language features) from OCCAMLGS_OUTPUT_ROOT
+    2. Loads pre-compressed grid SVD features from TRAIN_ROOT
+    3. Merges them to create checkpoint with compressed features
+    4. Saves checkpoint with correct spherical harmonics format
+
+    Args:
+        scene: Scene name
+        iteration: Base checkpoint iteration (default 30000)
+        feature_level: Feature level (default 1)
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+    """
+    # Use default iteration of 30000 if not specified
+    if iteration is None:
+        iteration = 30000
+
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (OccamLGS base + grid SVD mode)")
+    print(f"  Base checkpoint: chkpnt{iteration}.pth (NO language features)")
+    print(f"  Grid SVD features: lang_feat_grid_svd_r{rank}_{feature_level}.npz")
+    print(f"  Compression rank: {rank}")
+    print(f"{'='*60}\n")
+
+    # Step 1: Load OccamLGS base checkpoint (without language features)
+    base_ckpt_path = find_occamlgs_base_checkpoint(scene, iteration)
+    base_model_params, iteration_num = load_occamlgs_base_checkpoint(base_ckpt_path)
+
+    # Step 2: Load pre-compressed grid SVD features from TRAIN_ROOT
+    print(f"\nLoading grid SVD compressed features from TRAIN_ROOT...")
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feature_level)
+    compressed_features_tensor = torch.from_numpy(compressed_features).float()
+    print(f"  Compressed features shape: {compressed_features_tensor.shape}")
+
+    # Step 3: Add language features to base checkpoint (will raise error if dimensions don't match)
+    print(f"\nAdding language features to base checkpoint...")
+    model_params_with_lang = add_language_features_to_base_checkpoint(
+        base_model_params, compressed_features_tensor
+    )
+
+    # Step 4: Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features.pth"
+    save_checkpoint(model_params_with_lang, iteration_num, save_path)
+
+    # Also save just the language features as .npy for convenience
+    lang_feat_path = f"{output_dir}/{scene}/language_features.npy"
+    np.save(lang_feat_path, compressed_features_tensor.numpy())
+    print(f"Also saved language features to: {lang_feat_path}")
+
+    # Print stats
+    print(f"\nStatistics:")
+    print(f"  Gaussians: {xyz.shape[0]:,}")
+    print(f"  Compressed features: {compressed_features_tensor.shape}")
+    print(f"  File size: {os.path.getsize(save_path) / 1024**2:.2f} MB")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (OccamLGS base + grid SVD mode)")
+    print(f"{'='*60}\n")
+
+
+def create_coordinate_mapping(
+    occamlgs_xyz: np.ndarray,
+    train_coord: np.ndarray
+) -> np.ndarray:
+    """Create mapping from TRAIN_ROOT coordinates to OccamLGS coordinates.
+
+    Args:
+        occamlgs_xyz: [N_occamlgs, 3] - OccamLGS checkpoint coordinates
+        train_coord: [N_train, 3] - TRAIN_ROOT coordinates
+
+    Returns:
+        mapping: [N_train, 2] - array of (train_idx, occamlgs_idx) pairs
+    """
+    print(f"Creating coordinate mapping: {train_coord.shape[0]} TRAIN_ROOT -> {occamlgs_xyz.shape[0]} OccamLGS")
+
+    # Create a dictionary for efficient lookup
+    occamlgs_coord_map = {}
+    for i, coord in enumerate(occamlgs_xyz):
+        coord_tuple = tuple(coord)
+        if coord_tuple not in occamlgs_coord_map:
+            occamlgs_coord_map[coord_tuple] = i
+
+    # Find mapping for each TRAIN_ROOT coordinate
+    mapping = []
+    missing_coords = []
+    for i, coord in enumerate(train_coord):
+        coord_tuple = tuple(coord)
+        if coord_tuple in occamlgs_coord_map:
+            mapping.append([i, occamlgs_coord_map[coord_tuple]])
+        else:
+            missing_coords.append(i)
+
+    if missing_coords:
+        print(f"  Warning: {len(missing_coords)} TRAIN_ROOT coords not found in OccamLGS checkpoint")
+
+    print(f"  Mapped {len(mapping)}/{len(train_coord)} coordinates")
+    return np.array(mapping, dtype=np.int64)
+
+
+def process_scene_occamlgs_with_grid_svd(
+    scene: str,
+    iteration: Optional[int] = None,
+    feature_level: int = 1,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None
+):
+    """Process a scene from OccamLGS checkpoint with grid SVD features from TRAIN_ROOT.
+
+    This mode:
+    1. Loads OccamLGS checkpoint (with language features) to get correct Gaussian parameters
+    2. Loads pre-compressed grid SVD features from TRAIN_ROOT
+    3. Creates coordinate mapping between TRAIN_ROOT and OccamLGS checkpoint
+    4. Expands grid SVD features to match OccamLGS checkpoint size using coordinate mapping
+    5. Saves checkpoint with OccamLGS format
+
+    Args:
+        scene: Scene name
+        iteration: Checkpoint iteration (default 30000)
+        feature_level: Feature level (default 1)
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+    """
+    # Use default iteration of 30000 if not specified
+    if iteration is None:
+        iteration = 30000
+
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (OccamLGS + Grid SVD from TRAIN_ROOT mode)")
+    print(f"  Checkpoint: chkpnt{iteration}_langfeat_{feature_level}.pth (for Gaussian params only)")
+    print(f"  Grid SVD features: lang_feat_grid_svd_r{rank}_{feature_level}.npz (from TRAIN_ROOT)")
+    print(f"  Compression rank: {rank}")
+    print(f"{'='*60}\n")
+
+    # Step 1: Load OccamLGS checkpoint to get Gaussian parameters with correct format
+    ckpt_path = find_occamlgs_checkpoint(scene, iteration, feature_level)
+    model_params, iteration_num = load_occamlgs_checkpoint(ckpt_path)
+
+    # Extract Gaussian parameters (we'll keep these)
+    active_sh_degree = model_params[0]
+    xyz = model_params[1]
+    features_dc = model_params[2]
+    features_rest = model_params[3]
+    scaling = model_params[4]
+    rotation = model_params[5]
+    opacity = model_params[6]
+    max_radii2D = model_params[8]
+    xyz_gradient_accum = model_params[9]
+    denom = model_params[10]
+    opt_dict = model_params[11]
+    spatial_lr_scale = model_params[12]
+    valid_feat_mask = model_params[13] if len(model_params) >= 14 else None
+
+    N_gaussians = xyz.shape[0]
+    print(f"  Loaded {N_gaussians} Gaussians from OccamLGS checkpoint")
+
+    # Step 2: Load pre-compressed grid SVD features from TRAIN_ROOT
+    print(f"\nLoading grid SVD compressed features from TRAIN_ROOT...")
+    compressed_features = load_grid_svd_compressed_features(scene, rank, feature_level)
+    N_features = compressed_features.shape[0]
+    print(f"  Compressed features shape: {compressed_features.shape}")
+
+    # Step 3: Load TRAIN_ROOT coordinates for mapping
+    print(f"\nLoading TRAIN_ROOT coordinates...")
+    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    train_coord_path = f"{TRAIN_ROOT}/{scene}/coord.npy"
+    if not os.path.exists(train_coord_path):
+        raise FileNotFoundError(f"TRAIN_ROOT coord file not found: {train_coord_path}")
+
+    train_coord = np.load(train_coord_path)
+    print(f"  TRAIN_ROOT coord shape: {train_coord.shape}")
+
+    # Step 4: Create coordinate mapping
+    occamlgs_xyz_np = xyz.detach().cpu().numpy()
+    mapping = create_coordinate_mapping(occamlgs_xyz_np, train_coord)
+
+    # Step 5: Expand compressed features to match OccamLGS checkpoint size
+    print(f"\nExpanding compressed features to match OccamLGS checkpoint size...")
+    print(f"  Target size: {N_gaussians} Gaussians")
+    print(f"  Source size: {N_features} features")
+
+    # Create full-size compressed features array with zero padding
+    full_compressed_features = np.zeros((N_gaussians, rank), dtype=np.float32)
+
+    # Map features from TRAIN_ROOT to OccamLGS using coordinate mapping
+    # mapping[:, 0] = TRAIN_ROOT indices, mapping[:, 1] = OccamLGS indices
+    for train_idx, occamlgs_idx in mapping:
+        full_compressed_features[occamlgs_idx] = compressed_features[train_idx]
+
+    mapped_count = mapping.shape[0]
+    unmapped_count = N_gaussians - mapped_count
+    print(f"  Mapped features: {mapped_count}")
+    print(f"  Zero-padded features: {unmapped_count}")
+
+    # Convert to tensor
+    compressed_features_tensor = torch.from_numpy(full_compressed_features).float()
+
+    # Step 6: Create new model_params with compressed features (use full size)
+    model_params_with_compressed = (
+        active_sh_degree,
+        xyz,
+        features_dc,
+        features_rest,
+        scaling,
+        rotation,
+        opacity,
+        compressed_features_tensor,  # Expanded features with zero padding
+        max_radii2D,
+        xyz_gradient_accum,
+        denom,
+        opt_dict,
+        spatial_lr_scale,
+        valid_feat_mask,
+    )
+
+    # Step 5: Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features.pth"
+    save_checkpoint(model_params_with_compressed, iteration_num, save_path)
+
+    # Also save just the language features as .npy for convenience
+    lang_feat_path = f"{output_dir}/{scene}/language_features.npy"
+    np.save(lang_feat_path, compressed_features_tensor.numpy())
+    print(f"Also saved language features to: {lang_feat_path}")
+
+    # Print stats
+    print(f"\nStatistics:")
+    print(f"  Total Gaussians: {N_gaussians:,}")
+    print(f"  Mapped features: {mapped_count:,}")
+    print(f"  Zero-padded features: {unmapped_count:,}")
+    print(f"  Compressed features: {compressed_features_tensor.shape}")
+    print(f"  File size: {os.path.getsize(save_path) / 1024**2:.2f} MB")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (OccamLGS + Grid SVD from TRAIN_ROOT mode)")
+    print(f"{'='*60}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create SVD-compressed checkpoint with language features",
@@ -1196,6 +1839,21 @@ Examples:
   python tools/create_svd_compressed_checkpoint.py --scene figurines --direct --use-grid-svd
   python tools/create_svd_compressed_checkpoint.py --all-scenes --direct
   python tools/create_svd_compressed_checkpoint.py --scene figurines --direct --use-grid-svd --feat-seq 1
+
+  # OccamLGS mode: load from OccamLGS checkpoints with 512-dim CLIP features
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --occamlgs
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --occamlgs --feature-level 1
+  python tools/create_svd_compressed_checkpoint.py --all-scenes --occamlgs --rank 32
+
+  # OccamLGS base mode: load base checkpoint (no lang feat) + grid SVD features from TRAIN_ROOT
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --occamlgs-base
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --occamlgs-base --feature-level 1 --rank 16
+  python tools/create_svd_compressed_checkpoint.py --all-scenes --occamlgs-base
+
+  # TRAIN_ROOT + OccamLGS format: load all params from TRAIN_ROOT + grid SVD features
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --train-occamlgs
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --train-occamlgs --feature-level 1 --rank 16
+  python tools/create_svd_compressed_checkpoint.py --all-scenes --train-occamlgs
 
   # Compare Grid SVD vs SVD compression error
   python tools/create_svd_compressed_checkpoint.py --scene figurines --compare
@@ -1247,15 +1905,25 @@ Examples:
         help="Compare Grid SVD vs SVD compression error (requires both lang_feat_grid_svd_r*.npz and lang_feat_svd.npz)"
     )
     parser.add_argument(
-        "--feat-seq",
-        type=int,
-        default=None,
-        help="Feature sequence number (1, 2, 3, etc.) for sequence-based files (e.g., lang_feat_1.npy, lang_feat_grid_svd_r16_1.npz)"
-    )
-    parser.add_argument(
         "--direct",
         action="store_true",
         help="Direct mode: Load Gaussian parameters from TRAIN_ROOT only, without requiring CHECKPOINT_ROOT"
+    )
+    parser.add_argument(
+        "--occamlgs",
+        action="store_true",
+        help="OccamLGS mode: Load from OccamLGS checkpoints with 512-dim CLIP features and compute SVD compression"
+    )
+    parser.add_argument(
+        "--occamlgs-base",
+        action="store_true",
+        help="OccamLGS base mode: Load base checkpoint (without language features) from OccamLGS + grid SVD features from TRAIN_ROOT"
+    )
+    parser.add_argument(
+        "--feature-level",
+        type=int,
+        default=1,
+        help="Feature level for sequence-based files (default: 1). Used for lang_feat_{level}.npy, lang_feat_grid_svd_r{rank}_{level}.npz, etc."
     )
 
     args = parser.parse_args()
@@ -1265,10 +1933,15 @@ Examples:
         scenes = get_available_scenes(
             use_grid_svd=args.use_grid_svd,
             rank=args.rank,
-            feat_seq=args.feat_seq,
-            direct_mode=args.direct
+            feature_level=args.feature_level,
+            direct_mode=args.direct,
+            occamlgs_mode=args.occamlgs
         )
         mode_parts = []
+        if args.occamlgs_base:
+            mode_parts.append("OccamLGS-Base")
+        if args.occamlgs:
+            mode_parts.append("OccamLGS")
         if args.direct:
             mode_parts.append("Direct")
         if args.use_grid_svd:
@@ -1276,7 +1949,7 @@ Examples:
         else:
             mode_parts.append("SVD Decomposition")
         mode = " + ".join(mode_parts)
-        seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+        seq_str = f", seq={args.feature_level}" if args.feature_level is not None else ""
         print(f"Available scenes ({mode} mode, rank={args.rank}{seq_str}):")
         for scene in scenes:
             print(f"  - {scene}")
@@ -1292,7 +1965,7 @@ Examples:
 
         if args.scene:
             try:
-                compare_compression_methods(args.scene, args.rank, args.feat_seq)
+                compare_compression_methods(args.scene, args.rank, args.feature_level)
             except FileNotFoundError as e:
                 print(f"Error: {e}")
                 print("\nNote: --compare requires both lang_feat_grid_svd_r*.npz and lang_feat_svd.npz files")
@@ -1301,7 +1974,7 @@ Examples:
             train_dir = Path(TRAIN_ROOT)
             scenes_with_both = []
             # Build sequence suffix
-            seq_suffix = f"_{args.feat_seq}" if args.feat_seq is not None else ""
+            seq_suffix = f"_{args.feature_level}" if args.feature_level is not None else ""
             for scene_dir in train_dir.iterdir():
                 if scene_dir.is_dir():
                     scene = scene_dir.name
@@ -1324,7 +1997,7 @@ Examples:
             all_results = {}
             for scene in scenes_with_both:
                 try:
-                    result = compare_compression_methods(scene, args.rank, args.feat_seq)
+                    result = compare_compression_methods(scene, args.rank, args.feature_level)
                     all_results[scene] = result
                 except Exception as e:
                     print(f"Error processing scene {scene}: {e}")
@@ -1335,7 +2008,7 @@ Examples:
             # Print summary table
             if all_results:
                 print(f"\n{'='*80}")
-                print(f"Summary Comparison (rank={args.rank}, seq={args.feat_seq}):")
+                print(f"Summary Comparison (rank={args.rank}, seq={args.feature_level}):")
                 print(f"{'='*80}")
                 print(f"{'Scene':<20} {'MSE':<10} {'RMSE':<10} {'MAE':<10} {'Cosine':<10} {'SNR (dB)':<10}")
                 print(f"{'-'*80}")
@@ -1364,7 +2037,16 @@ Examples:
         parser.error("Cannot specify both --scene and --all-scenes")
 
     # Choose processing function based on mode
-    if args.direct:
+    if args.occamlgs and args.use_grid_svd:
+        # OccamLGS + Grid SVD mode: load OccamLGS checkpoint + pre-computed grid SVD features from TRAIN_ROOT
+        process_func = process_scene_occamlgs_with_grid_svd
+    elif args.occamlgs_base:
+        # OccamLGS base mode: load base checkpoint (no lang feat) + grid SVD features
+        process_func = process_scene_occamlgs_from_base
+    elif args.occamlgs:
+        # OccamLGS mode: load from OccamLGS checkpoints with language features
+        process_func = process_scene_occamlgs
+    elif args.direct:
         # Direct mode: load from TRAIN_ROOT only
         if args.use_grid_svd:
             process_func = process_scene_direct_grid_svd
@@ -1376,20 +2058,27 @@ Examples:
 
     # Process scenes
     if args.scene:
-        # Direct mode doesn't use iteration parameter
-        if args.direct:
-            process_func(args.scene, args.rank, args.output_dir, args.feat_seq)
+        # OccamLGS-Base, OccamLGS, and Direct modes use different parameters
+        if args.occamlgs_base:
+            process_func(args.scene, args.iteration, args.feature_level, args.rank, args.output_dir)
+        elif args.occamlgs:
+            process_func(args.scene, args.iteration, args.feature_level, args.rank, args.output_dir)
+        elif args.direct:
+            process_func(args.scene, args.rank, args.output_dir, args.feature_level)
         else:
-            process_func(args.scene, args.iteration, args.rank, args.output_dir, args.feat_seq)
+            process_func(args.scene, args.iteration, args.rank, args.output_dir, args.feature_level)
     else:
         scenes = get_available_scenes(
             use_grid_svd=args.use_grid_svd,
             rank=args.rank,
-            feat_seq=args.feat_seq,
-            direct_mode=args.direct
+            feature_level=args.feature_level,
+            direct_mode=args.direct,
+            occamlgs_mode=args.occamlgs
         )
         if not scenes:
             mode_parts = []
+            if args.occamlgs:
+                mode_parts.append("OccamLGS")
             if args.direct:
                 mode_parts.append("Direct")
             if args.use_grid_svd:
@@ -1397,11 +2086,15 @@ Examples:
             else:
                 mode_parts.append("SVD Decomposition")
             mode = " + ".join(mode_parts)
-            seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+            seq_str = f", seq={args.feature_level}" if args.feature_level is not None else ""
             print(f"No scenes found with required files ({mode}{seq_str})!")
             return
 
         mode_parts = []
+        if args.occamlgs_base:
+            mode_parts.append("OccamLGS-Base")
+        if args.occamlgs:
+            mode_parts.append("OccamLGS")
         if args.direct:
             mode_parts.append("Direct")
         if args.use_grid_svd:
@@ -1409,7 +2102,7 @@ Examples:
         else:
             mode_parts.append("SVD Decomposition")
         mode = " + ".join(mode_parts)
-        seq_str = f", seq={args.feat_seq}" if args.feat_seq is not None else ""
+        seq_str = f", seq={args.feature_level}" if args.feature_level is not None else ""
         print(f"Found {len(scenes)} scenes to process ({mode} mode, rank={args.rank}{seq_str}):")
         for scene in scenes:
             print(f"  - {scene}")
@@ -1417,11 +2110,16 @@ Examples:
 
         for scene in scenes:
             try:
-                # Direct mode doesn't use iteration parameter
-                if args.direct:
-                    process_func(scene, args.rank, args.output_dir, args.feat_seq)
+                # OccamLGS-Base, OccamLGS+GridSVD, OccamLGS, and Direct modes use different parameters
+                if args.occamlgs_base:
+                    process_func(scene, args.iteration, args.feature_level, args.rank, args.output_dir)
+                elif args.occamlgs:
+                    # This covers both --occamlgs and --occamlgs --use-grid-svd (same signature)
+                    process_func(scene, args.iteration, args.feature_level, args.rank, args.output_dir)
+                elif args.direct:
+                    process_func(scene, args.rank, args.output_dir, args.feature_level)
                 else:
-                    process_func(scene, args.iteration, args.rank, args.output_dir, args.feat_seq)
+                    process_func(scene, args.iteration, args.rank, args.output_dir, args.feature_level)
             except Exception as e:
                 print(f"Error processing scene {scene}: {e}")
                 import traceback

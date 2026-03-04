@@ -78,7 +78,26 @@ class Scene:
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
 
         if self.loaded_iter:
-            self.gaussians.load_ply(os.path.join(self.model_path, "ckpts", f"point_cloud_{self.loaded_iter}.ply"), args.train_test_exp)
+            # Try multiple folder structures for backward compatibility
+            # Priority 1: OccamLGS format (point_cloud/iteration_{iter}/point_cloud.ply)
+            # Priority 2: SceneSplat format (ckpts/point_cloud_{iter}.ply)
+            occamlgs_ply_path = os.path.join(self.model_path, "point_cloud", f"iteration_{self.loaded_iter}", "point_cloud.ply")
+            scenesplat_ply_path = os.path.join(self.model_path, "ckpts", f"point_cloud_{self.loaded_iter}.ply")
+
+            if os.path.exists(occamlgs_ply_path):
+                ply_path = occamlgs_ply_path
+                print(f"Using OccamLGS format: {ply_path}")
+            elif os.path.exists(scenesplat_ply_path):
+                ply_path = scenesplat_ply_path
+                print(f"Using SceneSplat format: {ply_path}")
+            else:
+                raise FileNotFoundError(
+                    f"PLY file not found for iteration {self.loaded_iter}. Tried:\n"
+                    f"  1. OccamLGS format: {occamlgs_ply_path}\n"
+                    f"  2. SceneSplat format: {scenesplat_ply_path}"
+                )
+
+            self.gaussians.load_ply(ply_path, args.train_test_exp)
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
 

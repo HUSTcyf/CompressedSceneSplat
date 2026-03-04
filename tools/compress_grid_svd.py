@@ -75,8 +75,9 @@ def load_scene_data(data_dir: str, feat_seq: Optional[int] = None) -> Tuple[np.n
     coord_path = os.path.join(data_dir, "coord.npy")
     lang_feat_name = f"lang_feat_{feat_seq}.npy" if feat_seq is not None else "lang_feat.npy"
     lang_feat_path = os.path.join(data_dir, lang_feat_name)
-    valid_feat_mask_name = f"valid_feat_mask_{feat_seq}.npy" if feat_seq is not None else "valid_feat_mask.npy"
-    valid_mask_path = os.path.join(data_dir, valid_feat_mask_name)
+    # valid_feat_mask is now unified (no level suffix)
+    valid_mask_path = os.path.join(data_dir, "valid_feat_mask.npy")
+    valid_feat_mask_name = "valid_feat_mask.npy"
 
     # Check required files
     if not os.path.exists(coord_path):

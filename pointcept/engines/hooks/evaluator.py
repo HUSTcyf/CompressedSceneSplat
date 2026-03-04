@@ -748,6 +748,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         if self._text_embeddings_loaded:
             return
 
+        import numpy as np
+
         print(f"Loading text embeddings from {self._text_embeddings_path}")
         text_emb_tensor = torch.load(self._text_embeddings_path, weights_only=True)
         original_dim = text_emb_tensor.shape[-1]
@@ -759,12 +761,20 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 self.svd_rank = model.lang_feat_dim
                 print(f"Auto-detected SVD rank from model: {self.svd_rank}")
 
-        # Apply SVD reduction if needed
+        # Apply SVD reduction if needed (inline implementation)
         if self.svd_rank is not None and original_dim != self.svd_rank:
-            from pointcept.utils.svd_utils import perform_svd_reduction
             print(f"Applying SVD reduction to text embeddings: [{text_emb_tensor.shape}] -> [{text_emb_tensor.shape[0]}, {self.svd_rank}]")
             text_emb_np = text_emb_tensor.cpu().numpy() if isinstance(text_emb_tensor, torch.Tensor) else text_emb_tensor
-            text_emb_reduced, _, _ = perform_svd_reduction(text_emb_np, self.svd_rank, normalize=True)
+
+            # Normalize features
+            norms = np.linalg.norm(text_emb_np, axis=1, keepdims=True)
+            text_emb_norm = text_emb_np / (norms + 1e-8)
+
+            # Compute SVD and take top rank components
+            _, _, Vt = np.linalg.svd(text_emb_norm, full_matrices=False)
+            components = Vt[:self.svd_rank, :].T  # [D, rank]
+            text_emb_reduced = text_emb_np @ components  # [N, rank]
+
             self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1)
         else:
             self.text_embeddings = F.normalize(text_emb_tensor, p=2, dim=1)
