@@ -98,8 +98,14 @@ def main():
             new_k = k
         new_state_dict[new_k] = v
 
-    model.load_state_dict(new_state_dict, strict=True)
+    # Load with strict=False to allow partial loading
+    missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
+
     print(f"Checkpoint loaded (epoch {epoch_info})")
+    if missing_keys:
+        print(f"  Missing {len(missing_keys)} keys (will use random initialization)")
+    if unexpected_keys:
+        print(f"  Skipping {len(unexpected_keys)} unexpected keys from checkpoint")
 
     # Build val dataset
     print(f"Building validation dataset...")
