@@ -286,6 +286,7 @@ hooks = [
         vote_k=25,
         enable_voting=True,
         confidence_threshold=0.1,
+        svd_rank=16,  # SVD rank for text embeddings (must match model output)
     ),
     dict(type="CheckpointSaver", save_freq=10),  # save checkpoint every 10 epochs
     dict(type="PreciseEvaluator", test_last=False),
@@ -371,11 +372,8 @@ data = dict(
         type=dataset_type,
         split="val",
         data_root=data_root,
-        load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
-        svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
+        load_compressed_lang_feat=False,  # No SVD loading for validation - direct inference
         transform=[
-            # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
-            dict(type="FilterValidPoints", key="valid_feat_mask"),
             dict(type="CenterShift", apply_z=True),
             dict(
                 type="GridSample",
@@ -391,9 +389,7 @@ data = dict(
                     "normal",
                     "segment",
                     "lang_feat",
-                    "valid_feat_mask",
                     "instance",
-                    "point_to_grid", 
                 ),
                 return_grid_coord=True,
             ),
@@ -407,11 +403,9 @@ data = dict(
                     "grid_coord",
                     "segment",
                     "lang_feat",
-                    "valid_feat_mask",
                     "instance",
                     "name",
                     "scene_path",
-                    "point_to_grid",
                 ),
                 feat_keys=("color", "opacity", "quat", "scale"),
             ),

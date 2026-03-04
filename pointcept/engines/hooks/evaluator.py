@@ -637,6 +637,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         vote_k=25,
         enable_voting=True,
         pred_label_mapping=None,
+        svd_rank=None,
+        use_procrustes=False,
     ):
         """
         Args:
@@ -645,6 +647,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             excluded_classes (list): Class names to exclude from final metrics
             ignore_index (int): Index to ignore in GT labels
             confidence_threshold (float): Minimum confidence to consider prediction valid
+            svd_rank (int): SVD rank for text embeddings reduction (must match model output dim)
+            use_procrustes (bool): Whether to use Procrustes alignment for evaluation
         """
         super().__init__()
         with open(class_names, "r") as f:
@@ -652,13 +656,14 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         self.num_classes = len(self.class_names)
         self.device = torch.device("cuda")
 
-        # load text embeddings from the path
-        print(f"Loading text embeddings from {text_embeddings}")
-        text_embeddings = torch.load(text_embeddings, weights_only=True)
-        self.text_embeddings = F.normalize(text_embeddings, p=2, dim=1)
-        print(
-            f"Text embeddings for ZeroShotSemSegEval with shape: {self.text_embeddings.shape}"
-        )
+        # SVD and Procrustes configuration
+        self.svd_rank = svd_rank
+        self.use_procrustes = use_procrustes
+        self._text_embeddings_path = text_embeddings  # Store path, load later when trainer is available
+
+        # Placeholder for text embeddings (will be loaded in eval() when trainer is available)
+        self.text_embeddings = None
+        self._text_embeddings_loaded = False
         self.excluded_classes = excluded_classes
         self.excluded_indices = [
             i
@@ -738,12 +743,44 @@ class LangPretrainZeroShotSemSegEval(HookBase):
 
         return topk_labels
 
+    def _load_text_embeddings(self):
+        """Load and apply SVD reduction to text embeddings (called when trainer is available)"""
+        if self._text_embeddings_loaded:
+            return
+
+        print(f"Loading text embeddings from {self._text_embeddings_path}")
+        text_emb_tensor = torch.load(self._text_embeddings_path, weights_only=True)
+        original_dim = text_emb_tensor.shape[-1]
+
+        # Auto-detect SVD rank if model outputs low-dim features
+        if self.svd_rank is None and hasattr(self.trainer, 'model'):
+            model = self.trainer.model.module if hasattr(self.trainer.model, 'module') else self.trainer.model
+            if hasattr(model, 'lang_feat_dim'):
+                self.svd_rank = model.lang_feat_dim
+                print(f"Auto-detected SVD rank from model: {self.svd_rank}")
+
+        # Apply SVD reduction if needed
+        if self.svd_rank is not None and original_dim != self.svd_rank:
+            from pointcept.utils.svd_utils import perform_svd_reduction
+            print(f"Applying SVD reduction to text embeddings: [{text_emb_tensor.shape}] -> [{text_emb_tensor.shape[0]}, {self.svd_rank}]")
+            text_emb_np = text_emb_tensor.cpu().numpy() if isinstance(text_emb_tensor, torch.Tensor) else text_emb_tensor
+            text_emb_reduced, _, _ = perform_svd_reduction(text_emb_np, self.svd_rank, normalize=True)
+            self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1)
+        else:
+            self.text_embeddings = F.normalize(text_emb_tensor, p=2, dim=1)
+
+        print(f"Text embeddings for ZeroShotSemSegEval with shape: {self.text_embeddings.shape}")
+        self._text_embeddings_loaded = True
+
     def eval(self):
         self.trainer.logger.info(
             ">>>>>>>>>>>>>>>> Start Zero-Shot SemSeg Evaluation >>>>>>>>>>>>>>>>"
         )
         self.trainer.model.eval()
         self._reset_metrics()
+
+        # Load text embeddings now that trainer is available
+        self._load_text_embeddings()
 
         if self.vote_k > 1 and self.enable_voting:
             print(f"Neighbor voting enabled with k={self.vote_k}")
@@ -789,10 +826,11 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 if valid_segment.numel() == 0:
                     continue
 
-                # Compute predictions
+                # Compute predictions with memory-efficient in-place operations
                 logits = torch.mm(point_feat, text_embeddings.t())
-                probs = torch.sigmoid(logits)
-                max_probs, pred_labels = torch.max(probs, dim=1)
+                # In-place sigmoid to reuse memory: logits becomes probs
+                torch.sigmoid_(logits)  # [num_points, num_classes]
+                max_probs, pred_labels = torch.max(logits, dim=1)  # logits now holds probs
 
                 # Apply confidence threshold
                 pred_labels = pred_labels.cpu().numpy()
