@@ -221,13 +221,10 @@ def main():
     trainer.logger.info("=" * 70)
     evaluator.eval()
 
-    # Print results
+    # Results are already logged by evaluator._log_metrics()
     trainer.logger.info("=" * 70)
-    trainer.logger.info("Evaluation Results")
+    trainer.logger.info("Evaluation Complete")
     trainer.logger.info("=" * 70)
-    results = evaluator.get_results()
-    for k, v in results.items():
-        trainer.logger.info(f"  {k}: {v}")
 
 
 if __name__ == "__main__":
