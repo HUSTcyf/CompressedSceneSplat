@@ -65,10 +65,11 @@ def main():
         os.environ["WORLD_SIZE"] = "1"
 
     # Setup (sets up logging, seeds, etc.)
-    # Set a valid seed to avoid issues with get_random_seed() generating values > 2^32-1
-    if not hasattr(cfg, "seed") or cfg.seed is None:
-        cfg.seed = 42  # Use a fixed valid seed for evaluation
-        print(f"Setting seed to {cfg.seed} for reproducible evaluation")
+    # Set a valid seed to avoid issues with get_random_seed() and seed multiplication
+    # default_setup computes: seed = cfg.seed * cfg.num_worker_per_gpu + rank
+    # Use seed=1 to ensure the result stays within valid range [0, 2^32-1]
+    cfg.seed = 1
+    print(f"Setting seed to {cfg.seed} for reproducible evaluation")
 
     cfg = default_setup(cfg)
 
