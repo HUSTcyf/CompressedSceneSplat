@@ -1,29 +1,93 @@
 #!/usr/bin/env python3
 """
-Regenerate text embeddings using the same SigLIPNetwork model used for visual features.
+Regenerate text embeddings using CLIP or SigLIP models.
 
-This ensures compatibility between text embeddings and language_features_siglip2_sam2 features.
+This script supports:
+- CLIP (OpenCLIP): 512-dim embeddings (ViT-B-16, laion2b_s34b_b88k)
+- SigLIP: 768-dim embeddings (custom SigLIPNetwork)
+
+The CLIP model configuration matches the one used in OccamLGS/eval/evaluate_iou_loc.py.
 """
 
 import os
 import sys
 import torch
+import open_clip
 import argparse
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import the same SigLIPNetwork used for visual feature extraction
+# Import the SigLIPNetwork used for visual feature extraction
 from model import SigLIPNetwork, SigLIPNetworkConfig
+
+
+def encode_labels_with_clip(
+    labels: List[str],
+    add_prefix: bool = True,
+    device: str = "cuda"
+) -> Tuple[torch.Tensor, str]:
+    """
+    Encode labels using CLIP (OpenCLIP) - 512-dim embeddings.
+
+    Uses the same configuration as OccamLGS/eval/evaluate_iou_loc.py:
+    - Model: ViT-B-16
+    - Pretrained: laion2b_s34b_b88k
+    - Output dim: 512
+
+    Args:
+        labels: List of label strings
+        add_prefix: Whether to add prefix
+        device: Device to use
+
+    Returns:
+        Normalized text embeddings tensor [num_labels, 512]
+        Model name string
+    """
+    # CLIP model configuration (same as OccamLGS/eval/openclip_encoder.py)
+    clip_model_type = "ViT-B-16"
+    clip_model_pretrained = 'laion2b_s34b_b88k'
+    clip_n_dims = 512
+
+    print(f"Initializing CLIP (OpenCLIP) for text encoding...")
+    print(f"  Model: {clip_model_type}")
+    print(f"  Pretrained: {clip_model_pretrained}")
+    print(f"  Output dim: {clip_n_dims}")
+
+    # Create model and tokenizer
+    model, _, _ = open_clip.create_model_and_transforms(
+        clip_model_type,
+        pretrained=clip_model_pretrained,
+        precision="fp16",
+    )
+    model.eval()
+    model = model.to(device)
+    tokenizer = open_clip.get_tokenizer(clip_model_type)
+
+    # Add prefix if requested
+    if add_prefix:
+        prompts = [f"this is a {label}" for label in labels]
+    else:
+        prompts = labels
+
+    print(f"Encoding {len(prompts)} prompts...")
+
+    with torch.no_grad():
+        tok_phrases = tokenizer(prompts).to(device)
+        text_embeddings = model.encode_text(tok_phrases)
+        # L2 normalize
+        text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
+
+    return text_embeddings.cpu(), f"CLIP-{clip_model_type}"
 
 
 def encode_labels_with_custom_siglip(
     labels: List[str],
     add_prefix: bool = True,
     device: str = "cuda"
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, str]:
     """
     Encode labels using the custom SigLIPNetwork (matching visual features).
 
@@ -34,6 +98,7 @@ def encode_labels_with_custom_siglip(
 
     Returns:
         Normalized text embeddings tensor [num_labels, D]
+        Model name string
     """
     # Initialize the same model used for visual features
     print(f"Initializing SigLIPNetwork for text encoding...")
@@ -41,7 +106,7 @@ def encode_labels_with_custom_siglip(
 
     # Add prefix if requested
     if add_prefix:
-        prompts = [f"this is a {label}" for label in labels]  # Match original format
+        prompts = [f"this is a {label}" for label in labels]
     else:
         prompts = labels
 
@@ -54,7 +119,7 @@ def encode_labels_with_custom_siglip(
         # L2 normalize
         text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
 
-    return text_embeddings.cpu()
+    return text_embeddings.cpu(), "SigLIP-Custom"
 
 
 def get_lerf_ovs_labels() -> List[str]:
@@ -90,7 +155,7 @@ def get_3dovs_labels() -> List[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Regenerate text embeddings with custom SigLIP")
+    parser = argparse.ArgumentParser(description="Regenerate text embeddings with CLIP or SigLIP")
     parser.add_argument("--dataset", type=str, required=True, choices=["lerf_ovs", "3dovs", "custom"],
                        help="Dataset type")
     parser.add_argument("--output", type=str, required=True,
@@ -103,6 +168,8 @@ def main():
                        help="Don't add 'a photo of a' prefix")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device to use")
+    parser.add_argument("--model", type=str, default="clip", choices=["clip", "siglip"],
+                       help="Model to use: 'clip' for 512-dim OpenCLIP (same as OccamLGS), 'siglip' for 768-dim SigLIP (default: clip)")
 
     args = parser.parse_args()
 
@@ -123,12 +190,19 @@ def main():
     print(f"Using {len(labels)} labels")
     print(f"Labels: {labels[:5]}...")
 
-    # Encode labels
-    embeddings = encode_labels_with_custom_siglip(
-        labels=labels,
-        add_prefix=not args.no_prefix,
-        device=args.device
-    )
+    # Encode labels with selected model
+    if args.model == "clip":
+        embeddings, model_name = encode_labels_with_clip(
+            labels=labels,
+            add_prefix=not args.no_prefix,
+            device=args.device
+        )
+    else:  # siglip
+        embeddings, model_name = encode_labels_with_custom_siglip(
+            labels=labels,
+            add_prefix=not args.no_prefix,
+            device=args.device
+        )
 
     # Save embeddings
     output_path = Path(args.output)
@@ -136,12 +210,17 @@ def main():
 
     save_data = {
         "embeddings": embeddings,
-        "categories": labels
+        "categories": labels,
+        "model_name": model_name,
+        "model_type": args.model,
+        "embed_dim": embeddings.shape[1]
     }
 
     torch.save(save_data, output_path)
     print(f"\nSaved embeddings to: {output_path}")
+    print(f"Model: {model_name}")
     print(f"Shape: {embeddings.shape}")
+    print(f"Embedding dim: {embeddings.shape[1]}")
 
 
 if __name__ == "__main__":

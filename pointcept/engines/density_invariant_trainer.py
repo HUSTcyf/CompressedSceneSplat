@@ -2024,10 +2024,10 @@ class DensityInvariantTrainer(TrainerBase):
             for name, param in self.model.named_parameters():
                 if param.grad is not None and 'dec' in name:
                     decoder_grad_norm = param.grad.norm().item()
-                    if decoder_grad_norm > 0.5:  # Threshold for warning
+                    if decoder_grad_norm > self.cfg.decoder_grad_warn_threshold:
                         print(f"\n⚠️ WARNING: Large decoder gradient detected!")
                         print(f"  Parameter: {name}")
-                        print(f"  Gradient norm: {decoder_grad_norm:.4f} (threshold: 0.5)")
+                        print(f"  Gradient norm: {decoder_grad_norm:.4f} (threshold: {self.cfg.decoder_grad_warn_threshold})")
 
             # Store old scale to check if scaler reduced it
             old_scale = self.scaler.get_scale()

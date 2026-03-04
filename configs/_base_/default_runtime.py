@@ -13,6 +13,7 @@ epoch = 100  # total epoch, data loop = epoch // eval_epoch
 eval_epoch = 100  # sche total eval & checkpoint epoch
 clip_grad = None  # disable with None, enable with a float
 max_grad_threshold = 1.0  # threshold for skipping iterations with large gradients
+decoder_grad_warn_threshold = 0.5  # threshold for warning about large decoder gradients
 
 sync_bn = False
 enable_amp = False

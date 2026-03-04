@@ -195,8 +195,10 @@ density_invariant = dict(
 # ============================================================================
 # Scheduler settings (same as original Scannet config)
 # ============================================================================
-epoch = 800
+epoch = 80
+eval_epoch = 10  # evaluate and save every 10 epochs
 max_grad_threshold = 4.0
+decoder_grad_warn_threshold = 3.0  # only warn when decoder grad > 3.0
 optimizer = dict(type="AdamW", lr=0.006, weight_decay=0.05)
 # scheduler = dict(
 #     type="OneCycleLR",
@@ -285,7 +287,7 @@ hooks = [
         enable_voting=True,
         confidence_threshold=0.1,
     ),
-    dict(type="CheckpointSaver", save_freq=None),
+    dict(type="CheckpointSaver", save_freq=10),  # save checkpoint every 10 epochs
     dict(type="PreciseEvaluator", test_last=False),
 ]
 
