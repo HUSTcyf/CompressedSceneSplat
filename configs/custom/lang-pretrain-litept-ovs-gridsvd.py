@@ -36,8 +36,6 @@ _base_ = [
 debug = 0
 gpu_nums = 1  # if debug else 4
 
-# Save path for LitePT-16 training (compressed features)
-save_path = "exp/lite-16-gridsvd"
 batch_size = 1 * gpu_nums
 batch_size_val = 1 * gpu_nums
 batch_size_test = 1 * gpu_nums
@@ -57,13 +55,17 @@ train = dict(type="DensityInvariantTrainer")
 # SVD-compressed language feature dimension
 # When using svd_rank=16, we predict 16-dimensional compressed features
 # This is much more memory-efficient than predicting full 768-dim features
-svd_rank = 16  # SVD compression rank (8, 16, 32 are common choices)
+svd_rank = 32  # SVD compression rank (8, 16, 32 are common choices)
 lang_feat_dim = svd_rank  # Decoder output matches SVD rank
 FD = lang_feat_dim
+
+# Save path for LitePT training (compressed features)
+save_path = f"exp/lite-{svd_rank}-gridsvd"
 
 model = dict(
     type="LangPretrainer",  # Language Pretrainer for VL learning
     verbose_losses=True,  # Enable verbose loss printing (L2 and Cos per iteration)
+    dim_scale_dim=FD,  # Dimension for dim_scale parameter (should match svd_rank)
     backbone=dict(
         type="LitePT",
         in_channels=11,  # 3DGS features: color(3) + opacity(1) + quat(4) + scale(3) [coord removed]
@@ -178,7 +180,7 @@ model = dict(
 # ============================================================================
 density_invariant = dict(
     # SVD compression rank to load (must match lang_feat_dim)
-    svd_rank=16,  # 8, 16, 32 are common choices
+    svd_rank=svd_rank,  # Uses the svd_rank variable defined above
     # Note: SVD files are expected to be in the same directory as the scene data
     # (e.g., /path/to/dataset/train/{scene_name}/lang_feat_grid_svd_r16.npz)
 
@@ -212,7 +214,7 @@ density_invariant = dict(
 # ============================================================================
 # Scheduler settings
 # ============================================================================
-eval_epoch = 10  # total eval & checkpoint epoch
+eval_epoch = 1  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 
 # ============================================================================
@@ -320,8 +322,8 @@ data = dict(
                 split="train",  # Use 'train' subdirectory (matches train/* pattern)
                 data_root=data_root_ovs_1,  # First data source: lerf_ovs
                 sample_tail_classes=False,
-                load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
-                svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
+                load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat
+                svd_rank=svd_rank,  # SVD rank to load (uses the svd_rank variable defined above)
                 transform=[
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),
@@ -367,8 +369,8 @@ data = dict(
                 split="train",  # Use 'train' subdirectory (matches train/* pattern)
                 data_root=data_root_ovs_2,  # Second data source: 3DOVS
                 sample_tail_classes=False,
-                load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat (16-dim instead of 768-dim)
-                svd_rank=16,  # SVD rank to load (must match density_invariant.svd_rank)
+                load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat
+                svd_rank=svd_rank,  # SVD rank to load (uses the svd_rank variable defined above)
                 transform=[
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),

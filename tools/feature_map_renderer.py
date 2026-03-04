@@ -9,21 +9,21 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-import torch
-from scene import Scene
 import os
-from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
-import torchvision
-from utils.general_utils import safe_state
-from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args, get_combined_args_from_yaml
-from gaussian_renderer import GaussianModel
+
 import numpy as np
-from sklearn.decomposition import PCA
+import torch
 import torch.utils.dlpack
+import torchvision
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+
 import matplotlib.pyplot as plt
+from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args, get_combined_args_from_yaml
+from gaussian_renderer import GaussianModel, render
+from scene import Scene
+from utils.general_utils import safe_state
             
 def render_set(model_path, name, iteration, source_path, views, gaussians, pipeline, background, feature_level, src_dim=-1, use_siglip_sam2_format=False, visualize=False):
     
@@ -148,13 +148,29 @@ def render_sets(dataset : ModelParams, opt : OptimizationParams, iteration : int
 
         # Extract Gaussian state based on tuple length
         # OccamLGS/training format: 13 elements (standard Gaussian parameters)
-        # SceneSplat checkpoint_with_features format: 14 elements (includes extra metadata)
+        # SceneSplat checkpoint_with_features format: 14 elements (includes valid_feat_mask)
         if len(model_params) == 13:
             # Standard OccamLGS format
             (active_sh_degree, xyz, features_dc, features_rest,
              scaling, rotation, opacity, language_features,
              max_radii2D, xyz_gradient_accum, denom,
              opt_dict, spatial_lr_scale) = model_params
+
+            # Create missing tensors if needed
+            if max_radii2D is None:
+                max_radii2D = torch.zeros((xyz.shape[0],), dtype=torch.int32)
+            if xyz_gradient_accum is None:
+                xyz_gradient_accum = torch.zeros_like(xyz)
+            if denom is None:
+                denom = torch.zeros_like(xyz)
+
+            valid_feat_mask = None
+        elif len(model_params) == 14:
+            # SceneSplat checkpoint_with_features format (includes valid_feat_mask)
+            (active_sh_degree, xyz, features_dc, features_rest,
+             scaling, rotation, opacity, language_features,
+             max_radii2D, xyz_gradient_accum, denom,
+             opt_dict, spatial_lr_scale, valid_feat_mask) = model_params
 
             # Create missing tensors if needed
             if max_radii2D is None:

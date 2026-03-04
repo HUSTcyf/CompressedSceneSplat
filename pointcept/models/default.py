@@ -81,6 +81,7 @@ class LangPretrainer(nn.Module):
         backbone=None,
         criteria=None,
         verbose_losses=False,
+        dim_scale_dim=None,  # Dimension for dim_scale parameter (default: 16 for SVD-r16)
     ):
         super().__init__()
         self.backbone = build_model(backbone)
@@ -89,7 +90,10 @@ class LangPretrainer(nn.Module):
 
         # Learnable dimension-wise scaling to handle SVD feature magnitude mismatch
         # Initialize with ones - let the model learn appropriate scales
-        dim_scale_init = torch.ones(16)
+        # dim_scale_dim should match the decoder output dimension (e.g., svd_rank)
+        if dim_scale_dim is None:
+            dim_scale_dim = 16  # Default for SVD-r16 models
+        dim_scale_init = torch.ones(dim_scale_dim)
         self.dim_scale = nn.Parameter(dim_scale_init)
 
     def forward(self, input_dict, chunk_size=None):

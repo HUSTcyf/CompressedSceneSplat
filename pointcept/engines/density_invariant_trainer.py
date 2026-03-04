@@ -1316,10 +1316,11 @@ class DensityInvariantTrainer(TrainerBase):
                     print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
                     print(f"  Resetting to safe values...")
                     with torch.no_grad():
-                        dim_scale.copy_(torch.ones(16, device=dim_scale.device) * 0.3)
+                        dim_scale_dim = dim_scale.shape[0]  # Get actual dimension from dim_scale
+                        dim_scale.copy_(torch.ones(dim_scale_dim, device=dim_scale.device) * 0.3)
                         dim_scale[0] = 1.0
 
-                # Apply scaling: [N, 16] * [16] = [N, 16]
+                # Apply scaling: [N, D] * [D] = [N, D]
                 batched_features = feat_before_scale * dim_scale  # [Total_points, D]
 
                 # NAN CHECK: Detect NaN after scaling
@@ -2004,20 +2005,30 @@ class DensityInvariantTrainer(TrainerBase):
             # Store current gradient for next iteration's comparison
             self._prev_max_grad = max_grad
 
-            # Skip iteration if gradient is dangerous
+            # Handle dangerous gradients with reduced step size instead of skipping
             if should_skip_grad:
-                print(f"\n⚠️ WARNING: Skipping iteration due to gradient issue!")
+                # Strategy: Reduce all gradients to 1/10 of original and proceed with update
+                # This is better than completely skipping because:
+                # 1. Maintains training momentum
+                # 2. Allows gradual weight adjustment even with large gradients
+                # 3. Prevents complete stagnation when gradients are consistently large
+                reduced_grad_scale = 0.1  # Scale factor for gradient reduction
+
+                print(f"\n⚠️ WARNING: Large gradient detected - using reduced step size!")
                 print(f"  Reason: {skip_reason}")
                 print(f"  Max gradient: {max_grad:.4f}")
                 print(f"  Parameter: {max_grad_param}")
                 print(f"  Consecutive large grad count: {self._consecutive_large_grad_count}")
-                print(f"  Skipping optimizer.step() to prevent weight corruption.")
-                # IMPORTANT: Call scaler.update() to reset scaler state after unscale_()
-                # This prevents "unscale_() has already been called" error on next iteration
-                # We don't call optimizer.step() because gradients are bad
-                self.scaler.update()
-                self.optimizer.zero_grad()
-                return
+                print(f"  Scaling all gradients by {reduced_grad_scale} instead of skipping update.")
+
+                # Apply reduced scale to all gradients
+                for param in self.model.parameters():
+                    if param.grad is not None:
+                        param.grad.mul_(reduced_grad_scale)
+
+                # Reset consecutive counter after applying gradient reduction
+                # The reduced update should help stabilize training
+                self._consecutive_large_grad_count = 0
 
             # WARNING: Monitor decoder layer gradients (no clipping, just warn)
             # Decoder layers receive large gradients from dim[0] and need monitoring

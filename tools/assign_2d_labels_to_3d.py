@@ -67,7 +67,11 @@ TEXT_EMBEDDING_PATHS = {
     "lerf_ovs": "/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs_text_embeddings_custom.pt",
     "3DOVS": "/new_data/cyf/projects/SceneSplat/datasets/3DOVS_text_embeddings_custom.pt",
 }
-
+TEXT_EMBEDDING_PATHS = {
+    "lerf_ovs": "/new_data/cyf/projects/OccamLGS/datasets/lerf_ovs_text_embeddings_clip_no_prefix.pt",
+}
+feat_folder = "language_features_siglip2_sam2"
+feat_folder = "language_features"
 
 def load_text_embeddings(dataset_type: str) -> tuple[torch.Tensor, List[str]]:
     """
@@ -695,7 +699,11 @@ def accumulate_2d_labels_to_3d(
             checkpoint = os.path.join(model_path, f'ckpts/chkpnt{iteration}.pth')
 
         # Load and restore checkpoint BEFORE creating Scene
-        gaussians.restore_from_gsplat_checkpoint(checkpoint, opt)
+        if True:
+            (model_params, _) = torch.load(checkpoint)
+            gaussians.restore_rgb(model_params, opt)
+        else:
+            gaussians.restore_from_gsplat_checkpoint(checkpoint, opt)
         print(f"Loading gsplat format checkpoint: {checkpoint}")
 
         # Setup background
@@ -891,13 +899,13 @@ def process_single_scene(
                 raise ValueError(f"Could not determine categories for {dataset_type}")
 
             # Find language feature directory (without loading data)
-            feature_dir = source_path / "language_features_siglip2_sam2"
+            feature_dir = source_path / feat_folder
             if not feature_dir.exists():
                 # Try alternative location
-                feature_dir = source_path.parent / "language_features_siglip2_sam2" / scene_name
+                feature_dir = source_path.parent / feat_folder / scene_name
             if not feature_dir.exists():
                 # Try in the model path
-                feature_dir = Path(model_path) / "language_features_siglip2_sam2"
+                feature_dir = Path(model_path) / feat_folder
 
             if not feature_dir.exists():
                 raise FileNotFoundError(f"Language feature directory not found: {feature_dir}")

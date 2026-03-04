@@ -5,6 +5,7 @@ import os
 import sys
 import glob
 import random
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Union
@@ -20,7 +21,7 @@ from PIL import Image
 
 # Add parent directory to path for Procrustes functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from tools.compute_procrustes_alignment_simple import (
+from compute_procrustes_alignment_simple import (
     perform_svd_reduction,
     compute_procrustes_Q,
 )
@@ -149,9 +150,13 @@ def load_or_compute_procrustes_Q(
 
     # Load text embeddings
     if text_embeddings_path.endswith('.pt'):
-        text_embeddings = torch.load(text_embeddings_path, weights_only=False).numpy()
+        text_embed_data = torch.load(text_embeddings_path, weights_only=False)
+        if isinstance(text_embed_data, dict):
+            text_embeddings = text_embed_data['embeddings'].numpy().astype(np.float32)
+        else:
+            text_embeddings = text_embed_data.numpy().astype(np.float32)
     elif text_embeddings_path.endswith('.npy'):
-        text_embeddings = np.load(text_embeddings_path)
+        text_embeddings = np.load(text_embeddings_path).astype(np.float32)
     else:
         raise ValueError(f"Unsupported text embeddings format: {text_embeddings_path}")
 
@@ -187,6 +192,108 @@ def load_or_compute_procrustes_Q(
     return Q
 
 
+def compute_procrustes_Q_cuda_with_labels(
+    X_c: torch.Tensor,
+    Y: torch.Tensor,
+    labels: torch.Tensor
+) -> tuple[torch.Tensor, dict]:
+    """
+    Compute orthogonal Procrustes alignment matrix Q using label-based aggregation.
+
+    This method is used when X_c contains many duplicate rows (corresponding to
+    different points with the same semantic class), and Y contains the unique
+    rows (class embeddings).
+
+    Args:
+        X_c: [N, d] source features (CUDA tensor)
+        Y: [M, d] unique target features (CUDA tensor, M << N typically)
+        labels: [N] label indices, labels[i] ∈ {0, ..., M-1}
+
+    Returns:
+        Q: [d, d] orthogonal alignment matrix (CUDA tensor)
+        metrics: Dictionary with alignment metrics
+    """
+    N, d = X_c.shape
+    M, d_y = Y.shape
+
+    if d != d_y:
+        raise ValueError(
+            f"Feature dimension mismatch: X_c has d={d}, Y has d={d_y}"
+        )
+
+    if labels.shape[0] != N:
+        raise ValueError(
+            f"Labels length mismatch: X_c has N={N}, labels has {labels.shape[0]}"
+        )
+
+    # Efficient computation of M = X_c^T @ Y_reconstructed
+    # by aggregating points with the same label
+    # sum_j[j] = Σ_{i: labels[i]=j} X_c[i]  for all j in [0, M-1]
+    sum_j = torch.zeros(M, d, device=X_c.device, dtype=X_c.dtype)
+
+    # Ensure labels is LongTensor (required by index_add_)
+    if labels.dtype != torch.long:
+        labels = labels.long()
+
+    # Use index_add_ for efficient aggregation
+    sum_j.index_add_(0, labels, X_c)  # [M, d]
+
+    # Compute M = sum_j^T @ Y: [d, M] @ [M, d] = [d, d]
+    M_matrix = torch.mm(sum_j.t(), Y)  # [d, d]
+
+    # SVD on GPU
+    U, S, Vt = torch.linalg.svd(M_matrix, full_matrices=False)
+
+    # Q = U @ V^T
+    Q = torch.mm(U, Vt)
+
+    # Ensure det(Q) = 1 (proper rotation)
+    det_Q = torch.det(Q)
+    if det_Q < 0:
+        U[:, -1] *= -1
+        Q = torch.mm(U, Vt)
+        det_Q = torch.det(Q)
+
+    # Compute metrics using all data
+    Y_reconstructed = Y[labels]
+    X_aligned = torch.mm(X_c, Q)
+    residual = torch.norm(X_aligned - Y_reconstructed, 'fro')
+    relative_error = residual / (torch.norm(Y_reconstructed, 'fro') + 1e-8)
+
+    # Cosine similarity (vectorized on GPU)
+    X_c_norm = torch.norm(X_c, dim=1, keepdim=True) + 1e-8
+    Y_norm = torch.norm(Y_reconstructed, dim=1, keepdim=True) + 1e-8
+    cosine_before = torch.mean(
+        torch.sum(X_c * Y_reconstructed, dim=1) / (X_c_norm.squeeze() * Y_norm.squeeze())
+    )
+
+    X_aligned_norm = torch.norm(X_aligned, dim=1, keepdim=True) + 1e-8
+    cosine_after = torch.mean(
+        torch.sum(X_aligned * Y_reconstructed, dim=1) / (X_aligned_norm.squeeze() * Y_norm.squeeze())
+    )
+
+    # Orthogonality error
+    QtQ = torch.mm(Q.t(), Q)
+    I = torch.eye(d, device=Q.device)
+    orthogonality_error = torch.norm(QtQ - I, 'fro')
+
+    metrics = {
+        'N': N,
+        'M': M,
+        'd': d,
+        'unique_labels': M,
+        'residual_norm': float(residual.cpu()),
+        'relative_error': float(relative_error.cpu()),
+        'cosine_before': float(cosine_before.cpu()),
+        'cosine_after': float(cosine_after.cpu()),
+        'cosine_improvement': float((cosine_after - cosine_before).cpu()),
+        'orthogonality_error': float(orthogonality_error.cpu()),
+        'det_Q': float(det_Q.cpu()),
+    }
+
+    return Q, metrics
+
+
 def apply_procrustes_alignment(
     features: torch.Tensor,
     Q: np.ndarray,
@@ -208,10 +315,102 @@ def apply_procrustes_alignment(
     return aligned
 
 
+def compute_per_scene_Q(
+    scene_name: str,
+    train_data_root: str,
+    text_embeddings_16: np.ndarray,
+    svd_rank: int = 16,
+    feature_level: int = 1,
+    device: str = 'cuda'
+) -> tuple[np.ndarray, dict]:
+    """
+    Compute per-scene Q matrix using training data with label-based aggregation.
+
+    Args:
+        scene_name: Name of the scene (e.g., 'figurines', 'ramen')
+        train_data_root: Root directory containing training data
+        text_embeddings_16: [M, svd_rank] SVD-reduced text embeddings
+        svd_rank: SVD rank
+        feature_level: Feature level (1, 2, or 3) for selecting SVD file
+        device: Device for computation
+
+    Returns:
+        Q: [svd_rank, svd_rank] orthogonal alignment matrix (numpy array)
+        metrics: Dictionary with alignment metrics
+    """
+    scene_path = Path(train_data_root) / scene_name
+    if not scene_path.exists():
+        raise ValueError(f"Scene path not found: {scene_path}")
+
+    # Load SVD compressed features with level suffix
+    if feature_level == 0:
+        svd_file = scene_path / f'lang_feat_grid_svd_r{svd_rank}.npz'
+    else:
+        svd_file = scene_path / f'lang_feat_grid_svd_r{svd_rank}_{feature_level}.npz'
+
+    if not svd_file.exists():
+        raise ValueError(f"SVD file not found: {svd_file}")
+
+    svd_data = np.load(svd_file)
+    compressed = svd_data['compressed'].astype(np.float32)  # [M_grid, svd_rank]
+    indices = svd_data['indices']
+    X_c = compressed[indices]  # [N_points, svd_rank]
+
+    # Load labels
+    label_file = scene_path / 'lang_label.npy'
+    if not label_file.exists():
+        raise ValueError(f"Label file not found: {label_file}")
+
+    labels = np.load(label_file).astype(np.int64)
+
+    # Check if we need valid_feat_mask
+    if labels.shape[0] != X_c.shape[0]:
+        valid_mask_path = scene_path / 'valid_feat_mask.npy'
+        if valid_mask_path.exists():
+            valid_mask = np.load(valid_mask_path).astype(bool)
+            labels_filtered = labels[valid_mask]
+            if labels_filtered.shape[0] == X_c.shape[0]:
+                labels = labels_filtered
+            else:
+                raise ValueError(f"After filtering, label count {labels_filtered.shape[0]} != X_c count {X_c.shape[0]}")
+        else:
+            raise ValueError(f"Label count {labels.shape[0]} != X_c count {X_c.shape[0]}")
+
+    # Filter out invalid labels (ignore_index or out of range)
+    valid_label_mask = (labels >= 0) & (labels < text_embeddings_16.shape[0])
+    if valid_label_mask.sum() < labels.shape[0]:
+        labels = labels[valid_label_mask]
+        X_c = X_c[valid_label_mask]
+
+    if X_c.shape[0] == 0 or labels.shape[0] == 0:
+        raise ValueError("No valid data after filtering labels")
+
+    # Convert to CUDA tensors
+    X_c_tensor = torch.from_numpy(X_c).cuda()
+    Y_tensor = torch.from_numpy(text_embeddings_16).cuda()
+    labels_tensor = torch.from_numpy(labels).cuda()
+
+    logging.info(f"  Computing Q matrix for {scene_name} with {X_c_tensor.shape[0]} samples...")
+
+    # Compute Q using label-based aggregation
+    Q_cuda, metrics = compute_procrustes_Q_cuda_with_labels(
+        X_c_tensor, Y_tensor, labels_tensor
+    )
+
+    Q = Q_cuda.cpu().numpy().astype(np.float32)
+
+    logging.info(f"  Q computed: det={metrics['det_Q']:.6f}")
+    logging.info(f"  Cosine before: {metrics['cosine_before']:.4f}, after: {metrics['cosine_after']:.4f}")
+    logging.info(f"  Improvement: {metrics['cosine_improvement']:+.4f}")
+
+    return Q, metrics
+
+
 def activate_stream_with_procrustes(
     sem_map,
     clip_model,
     Q: np.ndarray,
+    text_embeddings_16: torch.Tensor,  # [N_classes, 16] SVD-reduced text embeddings
     image_name: Path = None,
     img_ann: Dict = None,
     eval_params: Dict = None,
@@ -219,11 +418,13 @@ def activate_stream_with_procrustes(
 ):
     """
     Activate stream with Procrustes alignment applied to features.
+    Computes similarity directly in the compressed feature space.
 
     Args:
-        sem_map: Semantic feature maps
-        clip_model: CLIP model instance
-        Q: Procrustes alignment matrix
+        sem_map: Semantic feature maps [n_head, h, w, d_compressed]
+        clip_model: CLIP model instance (used for positive phrases)
+        Q: Procrustes alignment matrix [d, d]
+        text_embeddings_16: [N_classes, d_compressed] SVD-reduced text embeddings
         image_name: Path for saving results
         img_ann: Ground truth annotations
         eval_params: Evaluation parameters
@@ -234,7 +435,7 @@ def activate_stream_with_procrustes(
         chosen_lvl_list: List of chosen levels
     """
     # Apply Procrustes alignment to features
-    n_head, n_prompt, h, w = sem_map.shape
+    n_head, h, w, d_compressed = sem_map.shape
     sem_map_flat = sem_map.permute(1, 2, 0, 3).flatten(0, 1)  # (h*w, n_head, d)
 
     # Apply Q alignment to each head
@@ -248,32 +449,64 @@ def activate_stream_with_procrustes(
     aligned_features = torch.stack(aligned_features, dim=1)
     # Reshape to (n_head, h, w, d)
     aligned_map = aligned_features.transpose(0, 1).reshape(n_head, h, w, -1)
-    aligned_map = aligned_map.permute(1, 2, 0, 3)  # (h, w, n_head, d) -> wrong, need (n_head, h, w, d)
-    aligned_map = aligned_features.transpose(0, 1).view(n_head, h, w, -1)
 
-    # Get valid map using aligned features
-    valid_map = clip_model.get_max_across(aligned_map)
+    # Compute similarity directly in compressed space
+    # aligned_map: [n_head, h, w, d], text_embeddings_16: [N_classes, d]
+    n_classes = text_embeddings_16.shape[0]
+    n_positive = len(img_ann)
+
+    # Reshape aligned_map: [n_head, h*w, d]
+    aligned_flat = aligned_map.view(n_head, -1, d_compressed)
+
+    # Compute similarity for each class: [n_head, h*w]
+    similarity_maps = []
+    for class_idx in range(n_classes):
+        # [n_head, h*w, d] @ [d] -> [n_head, h*w]
+        class_sim = torch.matmul(aligned_flat, text_embeddings_16[class_idx])
+        similarity_maps.append(class_sim)
+
+    # Stack: [N_classes, n_head, h*w]
+    similarity_maps = torch.stack(similarity_maps)
+    # Reshape: [N_classes, n_head, h, w]
+    similarity_maps = similarity_maps.view(n_classes, n_head, h, w)
+
+    # Get positive class indices from img_ann
+    positive_phrases = list(img_ann.keys())
+    positive_indices = []
+
+    # Find indices of positive phrases in text_embeddings_16
+    # We need to match positive_phrases with the classes used to create text_embeddings_16
+    # For now, assume the first n_positive classes correspond to the positive phrases
+    # This is a simplification - in practice, you'd need to map phrases to indices properly
+
+    valid_map = []
+    for k, phrase in enumerate(positive_phrases):
+        # Use k as the class index (assuming order matches)
+        class_sim = similarity_maps[k]  # [n_head, h, w]
+        valid_map.append(class_sim)
+
+    valid_map = torch.stack(valid_map)  # [n_positive, n_head, h, w]
     valid_map = valid_map.cpu()
 
     # positive prompts
     chosen_iou_list, chosen_lvl_list = [], []
 
-    for k in range(n_prompt):
-        chosen_lvl, thresh = compute_dynamic_threshold(valid_map[:, k], clip_model.positives[k], eval_params=eval_params)
+    for k in range(n_positive):
+        chosen_lvl, thresh = compute_dynamic_threshold(valid_map[k], positive_phrases[k], eval_params=eval_params)
 
         for i in range(n_head):
-            output = valid_map[i][k]
+            output = valid_map[k, i]  # [h, w]
             output = output - torch.min(output)
             output = output / (torch.max(output) - torch.min(output) + 1e-9)
 
-            save_path = image_name / 'comparison_maps' / f'{clip_model.positives[k]}_level{i}_comparison.png'
+            save_path = image_name / 'comparison_maps' / f'{positive_phrases[k]}_level{i}_comparison.png'
             save_path.parent.mkdir(exist_ok=True, parents=True)
-            plot_relevancy_and_threshold(output, clip_model.positives[k], i, save_path, threshold=thresh)
+            plot_relevancy_and_threshold(output.cpu().numpy(), positive_phrases[k], i, save_path, threshold=thresh)
 
             if i == chosen_lvl:
-                mask_pred = (output.numpy() > thresh).astype(np.uint8)
+                mask_pred = (output.cpu().numpy() > thresh).astype(np.uint8)
                 mask_pred = smooth(mask_pred)
-                mask_gt = img_ann[clip_model.positives[k]]['mask'].astype(np.uint8)
+                mask_gt = img_ann[positive_phrases[k]]['mask'].astype(np.uint8)
 
                 intersection = np.logical_and(mask_gt, mask_pred).sum()
                 union = np.logical_or(mask_gt, mask_pred).sum()
@@ -283,7 +516,7 @@ def activate_stream_with_procrustes(
         chosen_lvl_list.append(chosen_lvl)
 
         # save for visualization
-        save_path = image_name / f'chosen_{clip_model.positives[k]}.png'
+        save_path = image_name / f'chosen_{positive_phrases[k]}.png'
         vis_mask_save(mask_pred, save_path)
 
     return chosen_iou_list, chosen_lvl_list
@@ -338,7 +571,8 @@ def activate_stream(sem_map,
 
 
 def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, projection_matrix_path=None,
-               use_clip=False, use_procrustes=False, text_embeddings_path=None, q_matrix_path=None):
+               use_clip=False, use_procrustes=False, text_embeddings_path=None, q_matrix_path=None,
+               train_data_root=None, dataset_name=None, feature_level=1):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -373,11 +607,26 @@ def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, p
             # Need to load or compute Q - will do after initializing clip_model
             pass
 
+    # Load projection matrix for text embedding SVD reduction (512-dim -> target_dim)
+    projection_matrix = None
+    if projection_matrix_path and os.path.exists(projection_matrix_path):
+        logging.info(f"Loading projection matrix from {projection_matrix_path}")
+        pm_data = np.load(projection_matrix_path)
+        if 'projection_matrix' in pm_data:
+            projection_matrix = pm_data['projection_matrix']
+        else:
+            projection_matrix = pm_data
+        logging.info(f"  Projection matrix shape: {projection_matrix.shape}")
+
     # Instantiate encoder based on configuration
     if use_clip:
         # Use CLIP (OpenCLIPNetwork)
-        clip_model = OpenCLIPNetwork(device)
-        logging.info(f"Using OpenCLIPNetwork (CLIP, 512-dim)")
+        if projection_matrix is not None:
+            clip_model = OpenCLIPNetwork(device, projection_matrix=projection_matrix, target_dim=src_dim)
+            logging.info(f"Using OpenCLIPNetwork (CLIP, {src_dim}-dim with projection)")
+        else:
+            clip_model = OpenCLIPNetwork(device)
+            logging.info(f"Using OpenCLIPNetwork (CLIP, 512-dim)")
     elif src_dim == 768:
         clip_model = SigLIP2Network(device)
         logging.info(f"Using SigLIP2Network for 768-dimensional features")
@@ -388,12 +637,56 @@ def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, p
 
     # Load or compute Q matrix after clip_model is initialized
     if use_procrustes and Q is None:
-        Q = load_or_compute_procrustes_Q(
-            clip_model,
-            text_embeddings_path=text_embeddings_path,
-            svd_rank=src_dim,
-            device=device
-        )
+        if train_data_root and dataset_name:
+            # Compute per-scene Q matrix using training data
+            logging.info(f"Computing per-scene Q matrix for {dataset_name}...")
+
+            # First, compute SVD-reduced text embeddings
+            if text_embeddings_path is None:
+                raise ValueError("text_embeddings_path must be provided for per-scene Q computation")
+
+            # Load text embeddings
+            if text_embeddings_path.endswith('.pt'):
+                text_embed_data = torch.load(text_embeddings_path, weights_only=False)
+                if isinstance(text_embed_data, dict):
+                    text_embeddings = text_embed_data['embeddings'].numpy().astype(np.float32)
+                else:
+                    text_embeddings = text_embed_data.numpy().astype(np.float32)
+            elif text_embeddings_path.endswith('.npy'):
+                text_embeddings = np.load(text_embeddings_path).astype(np.float32)
+            else:
+                raise ValueError(f"Unsupported text embeddings format: {text_embeddings_path}")
+
+            # SVD reduce text embeddings from 512-dim to src_dim
+            norms = np.linalg.norm(text_embeddings, axis=1, keepdims=True)
+            text_embeddings_norm = text_embeddings / (norms + 1e-8)
+            U, S, Vt = np.linalg.svd(text_embeddings_norm, full_matrices=False)
+            V_src = Vt[:src_dim, :].T  # [512, src_dim]
+            text_embeddings_src = text_embeddings @ V_src  # [N, src_dim]
+
+            # Save text_embeddings_src for later use in similarity computation
+            text_embeddings_16_tensor = torch.from_numpy(text_embeddings_src).cuda()
+
+            # Compute per-scene Q
+            Q, metrics = compute_per_scene_Q(
+                dataset_name,
+                train_data_root,
+                text_embeddings_src,
+                svd_rank=src_dim,
+                feature_level=feature_level,
+                device=device
+            )
+        else:
+            # Fallback to old method
+            Q = load_or_compute_procrustes_Q(
+                clip_model,
+                text_embeddings_path=text_embeddings_path,
+                svd_rank=src_dim,
+                device=device
+            )
+            text_embeddings_16_tensor = None
+    else:
+        text_embeddings_16_tensor = None
 
     chosen_iou_all, chosen_lvl_list = [], []
     for j, idx in enumerate(tqdm(eval_index_list)):
@@ -415,7 +708,7 @@ def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, p
         # Choose activation function based on Procrustes mode
         if use_procrustes and Q is not None:
             c_iou_list, c_lvl = activate_stream_with_procrustes(
-                sem_feat, clip_model, Q,
+                sem_feat, clip_model, Q, text_embeddings_16_tensor,
                 image_name, img_ann,
                 eval_params=eval_params,
                 device=device
@@ -475,6 +768,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_procrustes", action="store_true", help="Use Procrustes alignment before computing similarity")
     parser.add_argument("--text_embeddings", type=str, default=None, help="Path to text embeddings for Q matrix computation (e.g., /new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt)")
     parser.add_argument("--q_matrix", type=str, default=None, help="Path to pre-computed Q matrix (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/Q_procrustes_scannet20_average_r16.npz)")
+    parser.add_argument("--train_data_root", type=str, default=None, help="Path to training data root for per-scene Q computation (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train)")
 
     args = parser.parse_args()
 
@@ -537,10 +831,23 @@ if __name__ == "__main__":
         logging.info(f"  Text embeddings: {args.text_embeddings}")
     logging.info("=" * 60)
 
+    # Determine feature level for Q matrix computation
+    feature_level = 1  # default
+    if args.feat_level is not None:
+        feature_level = args.feat_level
+    elif args.single_level:
+        # Extract level from feat_folder (e.g., "ours_30000_langfeat_1" -> 1)
+        match = re.search(r'_langfeat_(\d+)$', args.feat_folder)
+        if match:
+            feature_level = int(match.group(1))
+
     evaluate(feat_dir, output_path, gt_path, logger, eval_params,
              src_dim=args.src_dim,
              projection_matrix_path=args.projection_matrix,
              use_clip=args.use_clip,
              use_procrustes=args.use_procrustes,
              text_embeddings_path=args.text_embeddings,
-             q_matrix_path=args.q_matrix)
+             q_matrix_path=args.q_matrix,
+             train_data_root=args.train_data_root,
+             dataset_name=args.dataset_name,
+             feature_level=feature_level)

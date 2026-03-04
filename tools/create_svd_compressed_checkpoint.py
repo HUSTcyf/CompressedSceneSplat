@@ -54,7 +54,7 @@ from typing import Tuple, Dict, List, Optional
 dataset = "lerf_ovs"
 # dataset = "3DOVS"
 DATA_ROOT = "/new_data/cyf/projects/SceneSplat"
-TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train_clip/{dataset}/train"
+TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/{dataset}/train"
 CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"
 OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 
@@ -1626,7 +1626,6 @@ def process_scene_occamlgs_from_base(
 
     # Print stats
     print(f"\nStatistics:")
-    print(f"  Gaussians: {xyz.shape[0]:,}")
     print(f"  Compressed features: {compressed_features_tensor.shape}")
     print(f"  File size: {os.path.getsize(save_path) / 1024**2:.2f} MB")
 
@@ -1634,44 +1633,26 @@ def process_scene_occamlgs_from_base(
     print(f"Scene {scene} processed successfully! (OccamLGS base + grid SVD mode)")
     print(f"{'='*60}\n")
 
-
-def create_coordinate_mapping(
-    occamlgs_xyz: np.ndarray,
-    train_coord: np.ndarray
-) -> np.ndarray:
-    """Create mapping from TRAIN_ROOT coordinates to OccamLGS coordinates.
-
-    Args:
-        occamlgs_xyz: [N_occamlgs, 3] - OccamLGS checkpoint coordinates
-        train_coord: [N_train, 3] - TRAIN_ROOT coordinates
-
-    Returns:
-        mapping: [N_train, 2] - array of (train_idx, occamlgs_idx) pairs
-    """
-    print(f"Creating coordinate mapping: {train_coord.shape[0]} TRAIN_ROOT -> {occamlgs_xyz.shape[0]} OccamLGS")
-
-    # Create a dictionary for efficient lookup
-    occamlgs_coord_map = {}
-    for i, coord in enumerate(occamlgs_xyz):
-        coord_tuple = tuple(coord)
-        if coord_tuple not in occamlgs_coord_map:
-            occamlgs_coord_map[coord_tuple] = i
-
-    # Find mapping for each TRAIN_ROOT coordinate
-    mapping = []
-    missing_coords = []
-    for i, coord in enumerate(train_coord):
-        coord_tuple = tuple(coord)
-        if coord_tuple in occamlgs_coord_map:
-            mapping.append([i, occamlgs_coord_map[coord_tuple]])
-        else:
-            missing_coords.append(i)
-
-    if missing_coords:
-        print(f"  Warning: {len(missing_coords)} TRAIN_ROOT coords not found in OccamLGS checkpoint")
-
-    print(f"  Mapped {len(mapping)}/{len(train_coord)} coordinates")
-    return np.array(mapping, dtype=np.int64)
+from typing import List, Tuple, Union
+def fill_matrix_by_mask(mask: Union[List[int], np.ndarray], 
+                          matrix: Union[List[List[float]], np.ndarray]) -> np.ndarray:
+    # 转换为numpy数组
+    mask_arr = np.array(mask, dtype=int)
+    matrix_arr = np.array(matrix, dtype=float)
+    
+    # 验证输入
+    ones_count = np.sum(mask_arr == 1)
+    if ones_count != matrix_arr.shape[0]:
+        raise ValueError(f"mask中1的数量({ones_count})必须等于矩阵的行数({matrix_arr.shape[0]})")
+    
+    # 创建结果矩阵
+    result = np.zeros((len(mask_arr), matrix_arr.shape[1]), dtype=matrix_arr.dtype)
+    
+    # 使用高级索引进行赋值
+    ones_indices = np.where(mask_arr == 1)[0]
+    result[ones_indices] = matrix_arr
+    
+    return result
 
 
 def process_scene_occamlgs_with_grid_svd(
@@ -1747,26 +1728,14 @@ def process_scene_occamlgs_with_grid_svd(
     print(f"  TRAIN_ROOT coord shape: {train_coord.shape}")
 
     # Step 4: Create coordinate mapping
-    occamlgs_xyz_np = xyz.detach().cpu().numpy()
-    mapping = create_coordinate_mapping(occamlgs_xyz_np, train_coord)
+    valid_feat_path = f"{TRAIN_ROOT}/{scene}/valid_feat_mask.npy"
+    valid_feat_mask = np.load(valid_feat_path)
+    full_compressed_features = fill_matrix_by_mask(valid_feat_mask, compressed_features)
 
     # Step 5: Expand compressed features to match OccamLGS checkpoint size
     print(f"\nExpanding compressed features to match OccamLGS checkpoint size...")
     print(f"  Target size: {N_gaussians} Gaussians")
     print(f"  Source size: {N_features} features")
-
-    # Create full-size compressed features array with zero padding
-    full_compressed_features = np.zeros((N_gaussians, rank), dtype=np.float32)
-
-    # Map features from TRAIN_ROOT to OccamLGS using coordinate mapping
-    # mapping[:, 0] = TRAIN_ROOT indices, mapping[:, 1] = OccamLGS indices
-    for train_idx, occamlgs_idx in mapping:
-        full_compressed_features[occamlgs_idx] = compressed_features[train_idx]
-
-    mapped_count = mapping.shape[0]
-    unmapped_count = N_gaussians - mapped_count
-    print(f"  Mapped features: {mapped_count}")
-    print(f"  Zero-padded features: {unmapped_count}")
 
     # Convert to tensor
     compressed_features_tensor = torch.from_numpy(full_compressed_features).float()
@@ -1803,8 +1772,6 @@ def process_scene_occamlgs_with_grid_svd(
     # Print stats
     print(f"\nStatistics:")
     print(f"  Total Gaussians: {N_gaussians:,}")
-    print(f"  Mapped features: {mapped_count:,}")
-    print(f"  Zero-padded features: {unmapped_count:,}")
     print(f"  Compressed features: {compressed_features_tensor.shape}")
     print(f"  File size: {os.path.getsize(save_path) / 1024**2:.2f} MB")
 
