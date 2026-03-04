@@ -701,6 +701,17 @@ class LangPretrainZeroShotSemSegEval(HookBase):
 
     def _neighbor_voting(self, coords, initial_labels, valid_mask, query_coords=None):
         """Efficient neighbour voting with optional `query_coords`."""
+        # Handle None valid_mask - use all points
+        if valid_mask is None:
+            valid_mask = np.ones(len(coords), dtype=bool)
+
+        # Ensure coords is 2D array
+        coords = np.asarray(coords)
+        if coords.ndim == 1:
+            coords = coords.reshape(-1, 1)
+        elif coords.ndim != 2:
+            raise ValueError(f"coords must be 2D array, got shape {coords.shape}")
+
         valid_coords = coords[valid_mask]
         valid_labels = initial_labels[valid_mask]
 
@@ -711,6 +722,14 @@ class LangPretrainZeroShotSemSegEval(HookBase):
 
         kd_tree = cKDTree(valid_coords)
         query_pts = coords if query_coords is None else query_coords
+
+        # Ensure query_pts is 2D
+        query_pts = np.asarray(query_pts)
+        if query_pts.ndim == 1:
+            query_pts = query_pts.reshape(-1, 1)
+        elif query_pts.ndim != 2:
+            raise ValueError(f"query_pts must be 2D array, got shape {query_pts.shape}")
+
         _, nn_idx = kd_tree.query(query_pts, k=self.vote_k)
         if self.vote_k == 1:
             nn_idx = nn_idx[:, None]
@@ -1241,6 +1260,14 @@ class LangPretrainZeroShotSemSegEvalMulti(HookBase):
 
         kd_tree = cKDTree(valid_coords)
         query_pts = coords if query_coords is None else query_coords
+
+        # Ensure query_pts is 2D
+        query_pts = np.asarray(query_pts)
+        if query_pts.ndim == 1:
+            query_pts = query_pts.reshape(-1, 1)
+        elif query_pts.ndim != 2:
+            raise ValueError(f"query_pts must be 2D array, got shape {query_pts.shape}")
+
         _, nn_idx = kd_tree.query(query_pts, k=self.vote_k)
         if self.vote_k == 1:
             nn_idx = nn_idx[:, None]

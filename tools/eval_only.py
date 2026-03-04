@@ -30,6 +30,8 @@ def main():
                        help="Path to model checkpoint")
     parser.add_argument("--save-path", type=str, default=None,
                        help="Override save path from config")
+    parser.add_argument("--max-scenes", type=int, default=3,
+                       help="Maximum number of scenes to evaluate (default: 3)")
     args = parser.parse_args()
 
     # Import after adding project root to path
@@ -116,6 +118,14 @@ def main():
     # Build val dataset
     print(f"Building validation dataset...")
     val_dataset = build_dataset(cfg.data.val)
+
+    # Limit to max_scenes if specified
+    if args.max_scenes and args.max_scenes < len(val_dataset):
+        from torch.utils.data import Subset
+        val_dataset = Subset(val_dataset, list(range(args.max_scenes)))
+        print(f"Limited validation dataset to {args.max_scenes} scenes (out of {len(val_dataset)})")
+    else:
+        print(f"Using full validation dataset: {len(val_dataset)} scenes")
 
     if comm.get_world_size() > 1:
         val_sampler = torch.utils.data.distributed.DistributedSampler(
