@@ -39,6 +39,7 @@ def main():
 
     from pointcept.engines.defaults import default_config_parser, default_setup
     from pointcept.datasets import build_dataset
+    from pointcept.datasets.utils import collate_fn
     from pointcept.models import build_model
     from pointcept.engines.defaults import create_ddp_model
     from pointcept.engines.hooks.evaluator import LangPretrainZeroShotSemSegEval
@@ -144,7 +145,7 @@ def main():
         num_workers=num_workers,
         pin_memory=True,
         sampler=val_sampler,
-        collate_fn=getattr(val_dataset, "collate_fn", val_dataset.__class__.collate_fn),
+        collate_fn=collate_fn,
     )
 
     print(f"Val dataset: {len(val_dataset)} samples")
