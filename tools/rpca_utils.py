@@ -821,7 +821,10 @@ class StructuredRPCA_GPU:
         # Construct weight vectors for row-wise multiplication on GPU (memory-efficient)
         # D_sqrt: D^{1/2}, D_inv_sqrt: D^{-1/2}
         # Use broadcasting instead of diag to avoid OOM: [M, N] * [M, 1] instead of [M, M] @ [M, N]
-        d_sqrt = torch.sqrt(self.d)  # [M] - sqrt of grid point counts
+        # Add small epsilon to avoid division by zero for empty cells
+        epsilon = 1e-10
+        d_safe = self.d + epsilon  # Avoid division by zero
+        d_sqrt = torch.sqrt(d_safe)  # [M] - sqrt of grid point counts
         d_inv_sqrt = 1.0 / d_sqrt  # [M] - inverse sqrt of grid point counts
 
         # Save original device for moving results back at the end

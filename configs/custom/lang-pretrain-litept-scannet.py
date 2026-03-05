@@ -31,7 +31,7 @@ batch_size_test = 1 * gpu_nums
 num_worker = 24 * gpu_nums if not debug else 0
 mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 
 # ============================================================================
 # Model settings - LitePT with SVD-compressed Vision-Language Pretraining

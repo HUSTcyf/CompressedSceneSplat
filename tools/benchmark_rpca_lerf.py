@@ -69,96 +69,118 @@ def clear_gpu_cache():
 
 
 def load_lerf_features(scene_name: str = "figurines",
-                       data_root: str = "/new_data/cyf/projects/SceneSplat/output_features") -> np.ndarray:
+                       data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> np.ndarray:
     """
-    Load LERF features from checkpoint.
+    Load LERF features from original lang_feat.npy (768-dim).
 
     Args:
         scene_name: Name of the scene (figurines, ramen, teatime, waldo_kitchen)
-        data_root: Root directory for features
+        data_root: Root directory for the training data
 
     Returns:
-        Feature matrix [N, D]
+        Feature matrix [N, D] (768-dim)
     """
-    ckpt_path = Path(data_root) / scene_name / "checkpoint_with_features.pth"
+    feat_path = Path(data_root) / scene_name / "lang_feat.npy"
 
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    if not feat_path.exists():
+        raise FileNotFoundError(f"Feature file not found: {feat_path}")
 
-    print(f"Loading LERF features from: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    print(f"Loading LERF features from: {feat_path}")
+    lang_feat = np.load(feat_path)
 
-    # Extract language features (item 0[7]: [N, 16])
-    item0 = ckpt[0]
-    lang_feat = item0[7] if isinstance(item0[7], np.ndarray) else item0[7].numpy()
-    valid_mask = item0[8] if isinstance(item0[8], np.ndarray) else item0[8].numpy()
-    segment_labels = item0[13]
+    # Also load valid_feat_mask to filter
+    # mask_path = Path(data_root) / scene_name / "valid_feat_mask.npy"
+    # if mask_path.exists():
+    #     valid_mask = np.load(mask_path)
+    #     lang_feat = lang_feat[valid_mask > 0]
+    #     print(f"  Applied valid_feat_mask filter")
 
-    # Filter valid features and labels together
-    valid_indices = valid_mask > 0
-    lang_feat_valid = lang_feat[valid_indices]
-    labels_valid = segment_labels[valid_indices]
+    print(f"  Loaded shape: {lang_feat.shape}")
+    print(f"  Feature dimension: {lang_feat.shape[1]}")
+    print(f"  Data size: {lang_feat.nbytes / (1024**3):.2f} GB")
 
-    # Filter out background/invalid labels
-    valid_label_mask = labels_valid >= 0
-    lang_feat_valid = lang_feat_valid[valid_label_mask]
-
-    print(f"  Loaded shape: {lang_feat_valid.shape}")
-    print(f"  Data size: {lang_feat_valid.nbytes / (1024**2):.2f} MB")
-
-    return lang_feat_valid.astype(np.float32)
+    return lang_feat.astype(np.float32)
 
 
 def prepare_structured_rpca_data(features: np.ndarray,
-                                  grid_size: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                  scene_name: str = "figurines",
+                                  svd_data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Prepare data for StructuredRPCA_GPU.
+    Prepare data for StructuredRPCA_GPU using real grid structure from SVD file.
 
-    Simulates a grid structure where features are assigned to grid cells.
-    Rows with the same grid cell are duplicated and should use weighted SVD.
+    The checkpoint features are already filtered. We load the SVD file to get the
+    grid structure (indices) and use the compressed features as the upper triangular matrix.
 
     Args:
-        features: Input feature matrix [N, D]
-        grid_size: Size of the grid (grid_size x grid_size)
+        features: Input feature matrix [N, D] (from checkpoint, already filtered)
+        scene_name: Name of the scene (figurines, ramen, teatime, waldo_kitchen)
+        svd_data_root: Root directory for SVD files
 
     Returns:
-        A_u: Upper triangular matrix [r, n] where r <= n
-        indices: Index mapping array [n]
-        d: Repetition count array [r]
+        A_u: Upper triangular matrix [r, D] - aggregated features for each grid cell
+        indices: Index mapping array [N] - mapping each feature to its grid cell index
+        d: Repetition count array [r] - count of features per grid cell
     """
-    N, D = features.shape
+    # Load SVD file with grid structure
+    svd_path = Path(svd_data_root) / scene_name / "lang_feat_grid_svd_r16.npz"
 
-    # Assign each feature to a grid cell
-    n_grid_cells = grid_size * grid_size
-    grid_indices = np.random.randint(0, n_grid_cells, N)
+    if not svd_path.exists():
+        raise FileNotFoundError(f"SVD file not found: {svd_path}")
 
-    # For each unique grid cell, store its features
-    unique_cells = np.unique(grid_indices)
-    r = len(unique_cells)
+    print(f"Loading SVD grid structure from: {svd_path}")
+    svd_data = np.load(svd_path)
 
-    # Build upper triangular matrix
+    # Extract data
+    compressed = svd_data['compressed'].astype(np.float32)  # [r, 16] - SVD compressed features
+    full_indices = svd_data['indices']  # [N_total] - mapping for all gaussians
+
+    print(f"  SVD compressed shape: {compressed.shape}")
+    print(f"  Full indices shape: {full_indices.shape}")
+    print(f"  Input features shape: {features.shape}")
+
+    # The features from checkpoint are already filtered
+    # We need to find the corresponding indices for these filtered features
+    N_features = features.shape[0]
+    N_indices = len(full_indices)
+
+    print(f"  Features count: {N_features}")
+    print(f"  Indices count: {N_indices}")
+    print(f"  Difference: {N_indices - N_features} ({N_indices - N_features} points were filtered)")
+
+    # Assume the filtered features correspond to the first N_features elements in the indices array
+    # (This assumes checkpoint was created by taking the first N_features valid points)
+    indices_filtered = full_indices[:N_features]
+
+    # Build A_u: aggregate features by grid cell
+    # For each unique grid cell index, compute the average of all features mapping to it
+    r = compressed.shape[0]
+    D = features.shape[1]
     A_u = np.zeros((r, D), dtype=np.float32)
     d = np.zeros(r, dtype=np.float32)
 
-    for i, cell_idx in enumerate(unique_cells):
-        mask = grid_indices == cell_idx
-        # Average features in this cell
-        A_u[i] = np.mean(features[mask], axis=0)
-        d[i] = np.sum(mask)
+    # Use np.add.at for efficient aggregation
+    # First, sum features for each grid cell
+    np.add.at(A_u, indices_filtered, features)
+    # Count occurrences
+    np.add.at(d, indices_filtered, 1)
 
-    # Build index mapping (A[i] = A_u[indices[i]])
-    indices = np.zeros(N, dtype=np.int64)
-    for i, cell_idx in enumerate(unique_cells):
-        mask = grid_indices == cell_idx
-        indices[mask] = i
+    # Now compute average (divide by count, handling zero counts)
+    nonzero_mask = d > 0
+    A_u[nonzero_mask] = A_u[nonzero_mask] / d[nonzero_mask, np.newaxis]
 
     print(f"Structured RPCA data prepared:")
-    print(f"  Original: {features.shape}")
-    print(f"  Upper triangular: {A_u.shape}")
-    print(f"  Grid cells: {r}")
-    print(f"  Avg repetitions per cell: {np.mean(d):.2f}")
+    print(f"  Features used: {N_features}")
+    print(f"  Upper triangular (A_u): {A_u.shape}")
+    print(f"  Unique grid cells (r): {r}")
+    print(f"  Avg repetitions per cell: {np.mean(d[d > 0]):.2f}")
+    print(f"  Max repetitions: {int(np.max(d))}")
+    print(f"  Non-empty cells: {np.sum(d > 0)}")
+    print(f"  Empty cells: {np.sum(d == 0)}")
+    print(f"  A_u statistics: min={np.min(A_u):.6f}, max={np.max(A_u):.6f}, mean={np.mean(A_u):.6f}")
+    print(f"  A_u has NaN: {np.any(np.isnan(A_u))}")
+    print(f"  A_u has Inf: {np.any(np.isinf(A_u))}")
 
-    return A_u, indices, d
+    return A_u, indices_filtered, d
 
 
 def benchmark_rpca_cpu(features: np.ndarray,
@@ -215,6 +237,7 @@ def benchmark_rpca_cpu(features: np.ndarray,
 
     print(f"\nResult:")
     print(f"  Total time: {total_time:.4f}s")
+    print(f"  Avg iter time: {total_time / max_iter:.4f}s")
     print(f"  Final error: {error:.6e}")
     print(f"  Memory: {result.memory_mb:.2f} MB")
 
@@ -332,10 +355,11 @@ def benchmark_rpca_gpu(features: np.ndarray,
 
 
 def benchmark_structure_rpca(features: np.ndarray,
+                              scene_name: str = "figurines",
                               max_iter: int = 30,
                               tol: float = 1e-7,
                               device: str = 'cuda:0',
-                              grid_size: int = 100) -> BenchmarkResult:
+                              svd_data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> BenchmarkResult:
     """Benchmark StructuredRPCA_GPU (weighted SVD, all GPU)."""
     if not CUDA_AVAILABLE:
         raise RuntimeError("CUDA not available for StructuredRPCA_GPU")
@@ -344,8 +368,8 @@ def benchmark_structure_rpca(features: np.ndarray,
     print("BENCHMARK: structure-rpca (weighted SVD, all GPU)")
     print("="*70)
 
-    # Prepare structured data
-    A_u, indices, d = prepare_structured_rpca_data(features, grid_size=grid_size)
+    # Prepare structured data using real grid structure from SVD file
+    A_u, indices, d = prepare_structured_rpca_data(features, scene_name=scene_name, svd_data_root=svd_data_root)
 
     clear_gpu_cache()
     start_memory = get_gpu_memory()
@@ -485,13 +509,12 @@ def benchmark_structure_rpca(features: np.ndarray,
         L, E = rpca.fit(max_iter=max_iter, tol=tol, iter_print=5)
         total_time = time.time() - total_start
 
-        # Map back to full space and compute error
-        L_full, E_full, rel_error = rpca.map_to_full(torch.from_numpy(features).to(device))
-
-        # For comparison, compute reconstruction error
-        reconstructed = L_full + E_full
-        error = torch.norm(reconstructed - torch.from_numpy(features).to(device), p='fro').item()
-        error /= torch.norm(torch.from_numpy(features).to(device), p='fro').item()
+        # Compute error: compare L + E with A_u (the aggregated grid features)
+        # This is the correct comparison for structure-rpca
+        A_u_tensor = torch.from_numpy(A_u).to(device)
+        reconstructed = L + E
+        error = torch.norm(reconstructed - A_u_tensor, p='fro').item()
+        error /= torch.norm(A_u_tensor, p='fro').item()
 
     finally:
         # Restore original fit method
@@ -550,23 +573,7 @@ def run_benchmark(scene_name: str = "figurines",
 
     results = []
 
-    # 1. Benchmark rpca-cpu
-    try:
-        result_cpu = benchmark_rpca_cpu(features, max_iter=max_iter, tol=tol)
-        results.append(result_cpu)
-    except Exception as e:
-        print(f"ERROR in rpca-cpu: {e}")
-        # Add placeholder result
-        results.append(BenchmarkResult(
-            method="rpca-cpu", iterations=[], total_time=0, final_error=-1,
-            converged=False, final_iterations=0, memory_mb=0
-        ))
-
-    # Clear cache between runs
-    clear_gpu_cache()
-    time.sleep(1)
-
-    # 2. Benchmark rpca-gpu
+    # 1. Benchmark rpca-gpu (fast, run first)
     try:
         result_gpu = benchmark_rpca_gpu(features, max_iter=max_iter, tol=tol, device='cuda:0')
         results.append(result_gpu)
@@ -581,15 +588,33 @@ def run_benchmark(scene_name: str = "figurines",
     clear_gpu_cache()
     time.sleep(1)
 
-    # 3. Benchmark structure-rpca
+    # 2. Benchmark structure-rpca (fast, run second)
     try:
-        result_struct = benchmark_structure_rpca(features, max_iter=max_iter, tol=tol,
-                                                  device='cuda:0', grid_size=100)
+        result_struct = benchmark_structure_rpca(features, scene_name=scene_name,
+                                                  max_iter=max_iter, tol=tol, device='cuda:0')
         results.append(result_struct)
     except Exception as e:
         print(f"ERROR in structure-rpca: {e}")
         results.append(BenchmarkResult(
             method="structure-rpca", iterations=[], total_time=0, final_error=-1,
+            converged=False, final_iterations=0, memory_mb=0
+        ))
+
+    # Clear cache between runs
+    clear_gpu_cache()
+    time.sleep(1)
+
+    # 3. Benchmark rpca-cpu (slow, only 3 iterations, run last)
+    cpu_iter = 3
+    print(f"\nNote: rpca-cpu will run only {cpu_iter} iterations for faster testing")
+    try:
+        result_cpu = benchmark_rpca_cpu(features, max_iter=cpu_iter, tol=tol)
+        results.append(result_cpu)
+    except Exception as e:
+        print(f"ERROR in rpca-cpu: {e}")
+        # Add placeholder result
+        results.append(BenchmarkResult(
+            method="rpca-cpu", iterations=[], total_time=0, final_error=-1,
             converged=False, final_iterations=0, memory_mb=0
         ))
 

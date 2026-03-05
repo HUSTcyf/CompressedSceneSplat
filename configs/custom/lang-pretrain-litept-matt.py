@@ -31,7 +31,7 @@ batch_size_test = 1  # Always use 1 for test (tester requirement)
 num_worker = 8 * gpu_nums if not debug else 1
 mix_prob = 0.8
 empty_cache = False
-enable_amp = True
+enable_amp = False
 test_only = False
 
 # ============================================================================

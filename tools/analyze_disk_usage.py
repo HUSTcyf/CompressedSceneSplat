@@ -246,7 +246,9 @@ def create_pie_chart(
 
     if bar_chart:
         # Prepare data for bar chart (detailed breakdown of others)
-        bar_file_names = list(others_files.keys())
+        # Exclude instance.npy, segment20.npy, segment200.npy from bar chart
+        excluded_from_bar = {"instance.npy", "segment20.npy", "segment200.npy"}
+        bar_file_names = [name for name in others_files.keys() if name not in excluded_from_bar]
         bar_file_sizes = [others_files[name] for name in bar_file_names]
 
         # Sort bar data by size (descending)
@@ -602,7 +604,9 @@ def create_rank_pie_chart(
     pie_colors = ['#FF6B6B', '#4ECDC4']
 
     # Prepare bar chart data (include this rank's npz + all other files)
-    bar_file_names = list(bar_files.keys())
+    # Exclude instance.npy, segment20.npy, segment200.npy from bar chart
+    excluded_from_bar = {"instance.npy", "segment20.npy", "segment200.npy"}
+    bar_file_names = [name for name in bar_files.keys() if name not in excluded_from_bar]
     bar_file_sizes = [bar_files[name] for name in bar_file_names]
 
     # Sort bar data by size (descending)
