@@ -179,7 +179,8 @@ class LangPretrainerInference:
             )
             feature_acc = feature_acc[inverse_tensor]
 
-        # feature_acc = F.normalize(feature_acc, p=2, dim=1)  # Commented out: disabled output normalization
+        # L2 normalize features to match GT (SceneSplat original inference outputs normalized features)
+        feature_acc = F.normalize(feature_acc, p=2, dim=1)
         backbone_cpu = feature_acc.detach().cpu()
 
         outputs = {

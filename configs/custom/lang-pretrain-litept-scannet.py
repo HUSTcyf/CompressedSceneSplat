@@ -287,6 +287,7 @@ hooks = [
         enable_voting=True,
         confidence_threshold=0.1,
         svd_rank=16,  # SVD rank for text embeddings (must match model output)
+        use_procrustes=True,  # Enable on-the-fly Procrustes alignment
     ),
     dict(type="CheckpointSaver", save_freq=10),  # save checkpoint every 10 epochs
     dict(type="PreciseEvaluator", test_last=False),
@@ -303,6 +304,8 @@ test = dict(
     enable_voting=True,
     vote_k=25,
     confidence_threshold=0.1,
+    svd_rank=16,  # SVD rank for text embeddings (must match model output)
+    use_procrustes=True,  # Enable on-the-fly Procrustes alignment
 )
 
 # ============================================================================

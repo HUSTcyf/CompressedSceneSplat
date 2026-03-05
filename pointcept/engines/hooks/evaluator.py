@@ -5,6 +5,15 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import pointops
 from uuid import uuid4
+import sys
+from pathlib import Path
+
+# Add tools directory to path for Procrustes import
+_tools_path = str(Path(__file__).resolve().parents[4] / "tools")
+if _tools_path not in sys.path:
+    sys.path.insert(0, _tools_path)
+
+from compute_procrustes_alignment_simple import compute_procrustes_Q_cuda_with_labels
 
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import (
@@ -763,7 +772,7 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         return topk_labels
 
     def _load_text_embeddings(self):
-        """Load and apply SVD reduction to text embeddings (called when trainer is available)"""
+        """Load and apply SVD reduction to text embeddings if needed"""
         if self._text_embeddings_loaded:
             return
 
@@ -780,7 +789,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 self.svd_rank = model.lang_feat_dim
                 print(f"Auto-detected SVD rank from model: {self.svd_rank}")
 
-        # Apply SVD reduction if needed (inline implementation)
+        # Apply SVD reduction if needed (to match model output dimension)
+        # Then Procrustes will be applied on-the-fly for alignment
         if self.svd_rank is not None and original_dim != self.svd_rank:
             print(f"Applying SVD reduction to text embeddings: [{text_emb_tensor.shape}] -> [{text_emb_tensor.shape[0]}, {self.svd_rank}]")
             text_emb_np = text_emb_tensor.cpu().numpy() if isinstance(text_emb_tensor, torch.Tensor) else text_emb_tensor
@@ -795,11 +805,68 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             text_emb_reduced = text_emb_np @ components  # [N, rank]
 
             self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1)
+            print(f"  Reduced text_embeddings shape: {self.text_embeddings.shape}")
         else:
             self.text_embeddings = F.normalize(text_emb_tensor, p=2, dim=1)
 
         print(f"Text embeddings for ZeroShotSemSegEval with shape: {self.text_embeddings.shape}")
+        print(f"Note: SVD reduction applied. Procrustes alignment will be applied on-the-fly if use_procrustes=True")
         self._text_embeddings_loaded = True
+
+    def _compute_procrustes_q_matrix(self, point_feat, labels):
+        """
+        Compute Procrustes Q matrix on-the-fly using predicted features and GT labels.
+
+        This aligns the model's feature space with the text embedding space.
+
+        Args:
+            point_feat: [N, d] model output features (CUDA tensor)
+            labels: [N] ground truth labels (CUDA tensor)
+
+        Returns:
+            Q: [d, d] orthogonal alignment matrix (CUDA tensor)
+        """
+        print(f"\n{'='*70}")
+        print("Computing Procrustes Q matrix on-the-fly...")
+        print(f"  point_feat shape: {point_feat.shape}")
+        print(f"  labels shape: {labels.shape}")
+        print(f"  num_classes: {self.num_classes}")
+
+        # Filter valid labels (ignore_index and out-of-range)
+        valid_label_mask = (labels >= 0) & (labels < self.num_classes)
+        if valid_label_mask.sum() < labels.shape[0]:
+            print(f"  Filtering {labels.shape[0] - valid_label_mask.sum()} invalid labels")
+            point_feat_valid = point_feat[valid_label_mask]
+            labels_valid = labels[valid_label_mask]
+        else:
+            point_feat_valid = point_feat
+            labels_valid = labels
+
+        if point_feat_valid.shape[0] == 0:
+            print("  Warning: No valid labels, returning identity matrix")
+            d = point_feat.shape[1]
+            return torch.eye(d, device=point_feat.device, dtype=point_feat.dtype)
+
+        # Get unique text embeddings by class
+        # text_embeddings is [num_classes, feature_dim]
+        text_embeddings = self.text_embeddings.to(point_feat_valid.device)
+
+        # Compute Q using compute_procrustes_Q_cuda_with_labels
+        # This efficiently handles the case where many points map to the same class
+        Q, metrics = compute_procrustes_Q_cuda_with_labels(
+            point_feat_valid,  # X_c: [N, d]
+            text_embeddings,   # Y: [num_classes, d]
+            labels_valid       # labels: [N]
+        )
+
+        print(f"  Q shape: {Q.shape}")
+        print(f"  det(Q): {metrics['det_Q']:.6f}")
+        print(f"  Cosine similarity (before): {metrics['cosine_before']:.4f}")
+        print(f"  Cosine similarity (after): {metrics['cosine_after']:.4f}")
+        print(f"  Improvement: {metrics['cosine_improvement']:+.4f}")
+        print(f"{'='*70}\n")
+
+        return Q
 
     def eval(self):
         self.trainer.logger.info(
@@ -815,8 +882,15 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             print(f"Neighbor voting enabled with k={self.vote_k}")
 
         text_embeddings = self.text_embeddings.to(self.device)
+
+        # Procrustes alignment: compute Q on first batch and apply to all
+        Q_matrix = None
+        procrustes_computed = False
+
         with torch.no_grad():
             print(f"Length of val_loader: {len(self.trainer.val_loader)}")
+            print(f"use_procrustes: {self.use_procrustes}")
+
             for i, input_dict in enumerate(self.trainer.val_loader):
                 # Move data to GPU
                 input_dict = {
@@ -826,7 +900,7 @@ class LangPretrainZeroShotSemSegEval(HookBase):
 
                 # Forward pass
                 output_dict = self.trainer.model(input_dict, chunk_size=600000)
-                point_feat = output_dict["point_feat"]["feat"]  # normalized
+                point_feat = output_dict["point_feat"]["feat"]
 
                 # Get ground truth labels
                 pc_coord = None
@@ -855,16 +929,33 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 if valid_segment.numel() == 0:
                     continue
 
-                # Compute predictions with memory-efficient in-place operations
-                logits = torch.mm(point_feat, text_embeddings.t())
-                # In-place sigmoid to reuse memory: logits becomes probs
-                torch.sigmoid_(logits)  # [num_points, num_classes]
-                max_probs, pred_labels = torch.max(logits, dim=1)  # logits now holds probs
+                # === FIRST BATCH: Compute Procrustes Q matrix if enabled ===
+                if self.use_procrustes and not procrustes_computed:
+                    # Need labels for all points (not just valid) for Q computation
+                    Q_matrix = self._compute_procrustes_q_matrix(point_feat, segment)
+                    procrustes_computed = True
+
+                    # Apply Procrustes alignment to text embeddings
+                    # text_embeddings: [num_classes, d], Q: [d, d]
+                    text_embeddings = torch.mm(text_embeddings, Q_matrix.T)
+                    print(f"Applied Procrustes Q matrix to text embeddings")
+                    print(f"  text_embeddings shape: {text_embeddings.shape}")
+                    print(f"  Q shape: {Q_matrix.shape}")
+
+                # === Normalize point features for cosine similarity ===
+                point_feat_norm = F.normalize(point_feat, p=2, dim=1)
+
+                # === Compute predictions using cosine similarity ===
+                # Dot product of normalized vectors = cosine similarity
+                similarity = torch.mm(point_feat_norm, text_embeddings.t())
+                max_probs, pred_labels = torch.max(similarity, dim=1)
 
                 # Apply confidence threshold
                 pred_labels = pred_labels.cpu().numpy()
                 max_probs = max_probs.cpu().numpy()
-                pred_labels[max_probs < self.confidence_threshold] = self.ignore_index
+                # Note: similarity is in [-1, 1] for cosine, shift to [0, 1] for threshold
+                max_probs_shifted = (max_probs + 1) / 2
+                pred_labels[max_probs_shifted < self.confidence_threshold] = self.ignore_index
 
                 # Neighbor voting if enabled
                 if self.vote_k > 1 and self.enable_voting:

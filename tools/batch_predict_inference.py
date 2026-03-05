@@ -643,6 +643,9 @@ class BatchPredictorWithInference:
 
                 # Save checkpoint
                 ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_p.pth"
+                use_original_model = True
+                if use_original_model:
+                    ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_s.pth"
                 self.checkpoint_handler.save_checkpoint(new_ckpt, str(ckpt_path))
 
             except Exception as e:

@@ -18,7 +18,7 @@ import torch.utils.dlpack
 import torchvision
 from sklearn.decomposition import PCA
 from tqdm import tqdm
-
+from argparse import ArgumentParser
 import matplotlib.pyplot as plt
 from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args, get_combined_args_from_yaml
 from gaussian_renderer import GaussianModel, render

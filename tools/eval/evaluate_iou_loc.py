@@ -570,7 +570,7 @@ def activate_stream(sem_map,
     return chosen_iou_list, chosen_lvl_list
 
 
-def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=512, projection_matrix_path=None,
+def evaluate(feat_dir, output_path, gt_path, logger, eval_params, src_dim=768, projection_matrix_path=None,
                use_clip=False, use_procrustes=False, text_embeddings_path=None, q_matrix_path=None,
                train_data_root=None, dataset_name=None, feature_level=1):
 
@@ -758,7 +758,7 @@ if __name__ == "__main__":
     parser.add_argument("--stability_thresh", type=float, default=0.3)
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
-    parser.add_argument("--src_dim", type=int, default=512, help="Source dimension of language features to load (e.g., 512 for OpenCLIP, 768 for SigLIP2, 16 for SVD-compressed)")
+    parser.add_argument("--src_dim", type=int, default=768, help="Source dimension of language features to load (default: 768 for SigLIP2; options: 512 for OpenCLIP, 16 for SVD-compressed)")
     parser.add_argument("--projection_matrix", type=str, default=None, help="Path to projection matrix (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/projection_matrix_768_to_16_lerf.npy)")
 
     # CLIP model options
@@ -823,8 +823,8 @@ if __name__ == "__main__":
     logging.info("Evaluation Configuration")
     logging.info("=" * 60)
     logging.info(f"Dataset: {dataset_name}")
-    logging.info(f"Feature dimension: {args.src_dim}")
-    logging.info(f"Using CLIP: {args.use_clip}")
+    logging.info(f"Feature dimension: {args.src_dim} {'(SigLIP2)' if args.src_dim == 768 and not args.use_clip else '(CLIP)' if args.src_dim == 512 and args.use_clip else '(SVD-compressed)' if args.src_dim == 16 else ''}")
+    logging.info(f"Encoder: {'CLIP (OpenCLIPNetwork)' if args.use_clip else 'SigLIP2Network'}")
     logging.info(f"Using Procrustes: {args.use_procrustes}")
     if args.use_procrustes:
         logging.info(f"  Q matrix path: {args.q_matrix}")

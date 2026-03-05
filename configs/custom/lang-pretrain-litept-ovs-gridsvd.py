@@ -55,7 +55,7 @@ train = dict(type="DensityInvariantTrainer")
 # SVD-compressed language feature dimension
 # When using svd_rank=16, we predict 16-dimensional compressed features
 # This is much more memory-efficient than predicting full 768-dim features
-svd_rank = 32  # SVD compression rank (8, 16, 32 are common choices)
+svd_rank = 8  # SVD compression rank (8, 16, 32 are common choices)
 lang_feat_dim = svd_rank  # Decoder output matches SVD rank
 FD = lang_feat_dim
 
