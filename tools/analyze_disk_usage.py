@@ -1108,6 +1108,105 @@ def print_grid_svd_stats(
         print(f"{'-' * 80}")
 
 
+def save_grid_svd_stats(
+    split_name: str,
+    file_sizes: Dict[str, int],
+    file_counts: Dict[str, int],
+    total_size: int,
+    output_path: str,
+    max_gb: bool = False,
+) -> None:
+    """
+    Save detailed grid SVD statistics to a JSON file.
+
+    Args:
+        split_name: Name of the split (e.g., "train", "test")
+        file_sizes: Dictionary mapping file names to sizes in bytes
+        file_counts: Dictionary mapping file names to counts
+        total_size: Total size of all files in the split
+        output_path: Path to save the statistics file
+        max_gb: Whether to cap units at GB/GiB level
+    """
+    import json
+
+    output_path = Path(output_path)
+
+    # Ensure .json extension
+    if output_path.suffix.lower() != ".json":
+        output_path = output_path.with_suffix(".json")
+
+    # Filter grid SVD related files
+    grid_svd_files = {}
+    grid_svd_total_size = 0
+    grid_svd_total_count = 0
+
+    # Patterns for grid SVD files
+    for file_name, size in file_sizes.items():
+        is_grid_svd = (
+            file_name.startswith("lang_feat_grid_svd") or
+            file_name == "grid_meta_data.json" or
+            file_name == "lang_feat_index.npy"
+        )
+        if is_grid_svd:
+            count = file_counts.get(file_name, 0)
+            grid_svd_files[file_name] = {
+                "size": size,
+                "count": count,
+            }
+            grid_svd_total_size += size
+            grid_svd_total_count += count
+
+    if not grid_svd_files:
+        print(f"[WARNING] No grid SVD files found in {split_name.upper()} set, skipping save.")
+        return
+
+    # Calculate percentage of total
+    percentage_of_total = (grid_svd_total_size / total_size * 100) if total_size > 0 else 0
+
+    # Group lang_feat_grid_svd by rank
+    rank_groups = {}
+    for file_name, data in grid_svd_files.items():
+        if file_name.startswith("lang_feat_grid_svd") and file_name.endswith(".npz"):
+            match = re.search(r'_r(\d+)\.npz$', file_name)
+            if match:
+                rank = int(match.group(1))
+                if rank not in rank_groups:
+                    rank_groups[rank] = {"size": 0, "count": 0}
+                rank_groups[rank]["size"] += data["size"]
+                rank_groups[rank]["count"] += data["count"]
+
+    # Build JSON data structure
+    stats_data = {
+        "split": split_name,
+        "total_size_bytes": total_size,
+        "grid_svd_total_size_bytes": grid_svd_total_size,
+        "grid_svd_total_count": grid_svd_total_count,
+        "percentage_of_total": round(percentage_of_total, 2),
+        "files": {
+            file_name: {
+                "size_bytes": data["size"],
+                "count": data["count"],
+                "size_mb": round(data["size"] / (1024 * 1024), 2),
+                "percentage_of_svd": round((data["size"] / grid_svd_total_size * 100) if grid_svd_total_size > 0 else 0, 2),
+            }
+            for file_name, data in sorted(grid_svd_files.items(), key=lambda x: x[1]["size"], reverse=True)
+        },
+        "by_rank": {
+            f"r{rank}": {
+                "total_size_bytes": group["size"],
+                "count": group["count"],
+                "avg_size_bytes": round(group["size"] / group["count"] if group["count"] > 0 else 0, 2),
+            }
+            for rank, group in sorted(rank_groups.items())
+        }
+    }
+
+    # Save as JSON
+    with open(output_path, 'w') as f:
+        json.dump(stats_data, f, indent=2)
+    print(f"Saved grid SVD statistics to {output_path}")
+
+
 def merge_all_datasets(args) -> int:
     """
     Merge all datasets (scannet, scannetpp, matterport3d) and show combined statistics.
@@ -1342,6 +1441,25 @@ def merge_all_datasets(args) -> int:
                 max_gb=max_gb,
             )
 
+            # Save stats to file if requested
+            if args.save_stats:
+                output_path = Path(args.save_stats)
+                if output_path.suffix:
+                    stem = output_path.stem
+                    suffix = output_path.suffix
+                    output_path = output_path.parent / f"{stem}_{dataset_name}{suffix}"
+                else:
+                    output_path = output_path / f"{dataset_name}_stats"
+
+                save_grid_svd_stats(
+                    dataset_name,
+                    data["file_sizes"],
+                    data["file_counts"],
+                    data["total_size"],
+                    str(output_path),
+                    max_gb=max_gb,
+                )
+
         # Print merged grid SVD stats
         print_grid_svd_stats(
             "all_datasets_merged",
@@ -1350,6 +1468,25 @@ def merge_all_datasets(args) -> int:
             total_size_all,
             max_gb=max_gb,
         )
+
+        # Save merged stats to file if requested
+        if args.save_stats:
+            output_path = Path(args.save_stats)
+            if output_path.suffix:
+                stem = output_path.stem
+                suffix = output_path.suffix
+                output_path = output_path.parent / f"{stem}_all_datasets{suffix}"
+            else:
+                output_path = output_path / "all_datasets_stats"
+
+            save_grid_svd_stats(
+                "all_datasets_merged",
+                merged_file_sizes,
+                merged_file_counts,
+                total_size_all,
+                str(output_path),
+                max_gb=max_gb,
+            )
 
     # Create visualization if requested
     if args.save_plot:
@@ -1521,12 +1658,23 @@ def main():
         help="Show detailed statistics for grid SVD related files only (lang_feat_grid_svd*.npz, grid_meta_data.json, lang_feat_index.npy)",
     )
     parser.add_argument(
+        "--save-stats",
+        type=str,
+        default=None,
+        help="Save grid SVD statistics to JSON file (requires --grid-svd-stats)",
+    )
+    parser.add_argument(
         "--max-gb",
         action="store_true",
         help="Cap units at GB/GiB level (never show TB/TiB) - both GB and GiB will be displayed",
     )
 
     args = parser.parse_args()
+
+    # Validate --save-stats requires --grid-svd-stats
+    if args.save_stats and not args.grid_svd_stats:
+        print("[ERROR] --save-stats requires --grid-svd-stats to be specified")
+        return 1
 
     # Handle --merge-all-datasets option
     if args.merge_all_datasets:
@@ -1804,6 +1952,28 @@ def main():
                 data["total_size"],
                 max_gb=args.max_gb,
             )
+
+            # Save stats to file if requested
+            if args.save_stats:
+                # Generate output path for this split
+                output_path = Path(args.save_stats)
+                if len(args.splits) > 1:
+                    # Multiple splits: append split name to filename
+                    if output_path.suffix:
+                        stem = output_path.stem
+                        suffix = output_path.suffix
+                        output_path = output_path.parent / f"{stem}_{split}{suffix}"
+                    else:
+                        output_path = output_path / f"{split}_stats"
+
+                save_grid_svd_stats(
+                    split,
+                    data["file_sizes"],
+                    data["file_counts"],
+                    data["total_size"],
+                    str(output_path),
+                    max_gb=args.max_gb,
+                )
 
     print("\n" + "=" * 80)
     print("Analysis complete!")

@@ -5,6 +5,7 @@ __pycache__
 **/*.egg-info/
 **/dist/
 *.so
+*.json
 exp
 exp_runs
 weights
