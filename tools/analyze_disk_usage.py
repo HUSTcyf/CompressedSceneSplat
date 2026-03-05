@@ -256,7 +256,11 @@ def create_pie_chart(
         bar_file_names, bar_file_sizes = zip(*bar_data) if bar_data else ([], [])
 
         # Create figure with subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+        # Use wider figure for merge-all-datasets mode
+        if dataset_name == "scenesplat" and split_name == "all_datasets":
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 7))
+        else:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
 
         # Pie chart (only lang_feat vs others)
         wedges, texts, autotexts = ax1.pie(
@@ -265,21 +269,36 @@ def create_pie_chart(
             colors=pie_colors,
             autopct='%1.1f%%',
             startangle=90,
-            textprops={'fontsize': 12, 'weight': 'bold'},
+            textprops={'fontsize': 16, 'weight': 'bold'},
             explode=(0.05, 0),  # Slightly explode lang_feat slice
         )
 
         # Make percentage text more readable
         for autotext in autotexts:
             autotext.set_color('white')
-            autotext.set_fontsize(14)
+            autotext.set_fontsize(18)
             autotext.set_weight('bold')
+
+        # Add legend below pie chart
+        legend_labels = []
+        for i, (label, size) in enumerate(zip(pie_labels, pie_sizes)):
+            percentage = (size / total_size * 100) if total_size > 0 else 0
+            legend_labels.append(f"{label}: {percentage:.1f}%")
+
+        ax1.legend(
+            wedges,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.02),
+            fontsize=12,
+            frameon=True,
+        )
 
         # Set titles with consistent font size
         ax1.set_title(f'{dataset_name.upper()} - {split_name} SET\nFile Type Distribution',
-                      fontsize=12, fontweight='bold', pad=20)
-        ax2.set_title(f'Detailed Breakdown of "others" (excluding lang_feat.npy)',
-                      fontsize=12, fontweight='bold', pad=20)
+                      fontsize=22, fontweight='bold', pad=20)
+        ax2.set_title(f'Detailed Breakdown of "others" (w/o lang_feat)',
+                      fontsize=22, fontweight='bold', pad=20)
 
         # Bar chart for absolute sizes of others (excluding lang_feat)
         # Convert to appropriate units
@@ -300,9 +319,9 @@ def create_pie_chart(
         bar_colors = [color_palette[i % len(color_palette)] for i in range(len(bar_file_names))]
 
         bars = ax2.barh(range(len(bar_file_names)), sizes_in_unit, color=bar_colors)
-        ax2.set_xlabel(f'Size ({unit_label})', fontsize=11, fontweight='bold')
+        ax2.set_xlabel(f'Size ({unit_label})', fontsize=14, fontweight='bold')
         ax2.set_yticks(range(len(bar_file_names)))
-        ax2.set_yticklabels(bar_file_names)
+        ax2.set_yticklabels(bar_file_names, fontsize=12)
         ax2.invert_yaxis()
 
         # Add value labels on bars
@@ -310,20 +329,25 @@ def create_pie_chart(
             width = bar.get_width()
             ax2.text(width, bar.get_y() + bar.get_height()/2,
                     f' {size:.2f} {unit_label}',
-                    ha='left', va='center', fontsize=9, fontweight='bold')
+                    ha='left', va='center', fontsize=12, fontweight='bold')
 
         plt.tight_layout()
+        plt.subplots_adjust(bottom=0.2)  # Make room for legend below pie chart
 
         # Add total info at the bottom
         total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
         total_files = sum(file_counts.values())
         fig.text(0.5, 0.02, f'Total: {total_size_str} | Files: {total_files:,}',
-                 ha='center', fontsize=12, fontweight='bold')
+                 ha='center', fontsize=14, fontweight='bold')
     else:
         # Pie chart only
         if detailed_pie:
             # Detailed pie chart with legend on the side
-            fig, ax = plt.subplots(1, 1, figsize=(16, 10))
+            # Use wider figure for merge-all-datasets mode
+            if dataset_name == "scenesplat" and split_name == "all_datasets":
+                fig, ax = plt.subplots(1, 1, figsize=(18, 10))  # Width: 18 inches
+            else:
+                fig, ax = plt.subplots(1, 1, figsize=(16, 10))
 
             # Group file types for detailed breakdown
             # Priority order: lang_feat, coord, color, opacity, quat, scale, valid_feat_mask, others
@@ -441,7 +465,7 @@ def create_pie_chart(
                 startangle=90,
                 pctdistance=0.85,
                 wedgeprops={'edgecolor': 'white', 'linewidth': 1},
-                textprops={'fontsize': 14, 'weight': 'bold'},
+                textprops={'fontsize': 18, 'weight': 'bold'},
                 explode=explode_list,
             )
 
@@ -449,7 +473,7 @@ def create_pie_chart(
             for autotext in autotexts:
                 if autotext.get_text():  # Only style non-empty text
                     autotext.set_color('black')
-                    autotext.set_fontsize(16)
+                    autotext.set_fontsize(20)
                     autotext.set_weight('bold')
 
             # Create legend with file type, size, and percentage (without lang_feat.npy and others)
@@ -473,32 +497,47 @@ def create_pie_chart(
 
             # Add legend in top-right corner (further right to avoid overlap)
             if legend_labels:
+                # Adjust legend position for merge-all-datasets mode (wider figure)
+                if dataset_name == "scenesplat" and split_name == "all_datasets":
+                    # For wider figure (20 inches), position legend closer to pie
+                    # Align y=0.92 with fig.text position
+                    legend_loc = "upper left"
+                    legend_bbox = (0.8, 1)  # Closer to pie, aligned with fig.text
+                else:
+                    # Default position
+                    legend_loc = "upper right"
+                    legend_bbox = (1.2, 1)
+
                 legend = ax.legend(
                     legend_wedges,
                     legend_labels,
                     title="File Types",
-                    loc="upper right",
-                    bbox_to_anchor=(1.2, 1),
-                    fontsize=11,
-                    title_fontsize=13,
+                    loc=legend_loc,
+                    bbox_to_anchor=legend_bbox,
+                    fontsize=14,
+                    title_fontsize=16,
                     frameon=True,
                 )
 
             ax.set_title(f'{dataset_name.upper()} - {split_name} SET\nFile Type Distribution',
-                        fontsize=16, fontweight='bold', pad=20)
+                        fontsize=24, fontweight='bold', pad=20)
 
             # Add total info to the right of legend area (moved down to avoid title overlap)
             total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
             total_files = sum(file_counts.values())
-            fig.text(0.87, 0.92, f'Total: {total_size_str} | Files: {total_files:,}',
-                    ha='right', va='top', fontsize=11, fontweight='bold',
+            fig.text(0.9, 0.92, f'Total: {total_size_str} | Files: {total_files:,}',
+                    ha='right', va='top', fontsize=14, fontweight='bold',
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='wheat', alpha=0.5))
 
             plt.tight_layout()
             plt.subplots_adjust(top=0.88)  # Make room for legend on the right
         else:
             # Simple pie chart (lang_feat vs others)
-            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+            # Use wider figure for merge-all-datasets mode
+            if dataset_name == "scenesplat" and split_name == "all_datasets":
+                fig, ax = plt.subplots(1, 1, figsize=(14, 8))
+            else:
+                fig, ax = plt.subplots(1, 1, figsize=(10, 8))
 
             wedges, texts, autotexts = ax.pie(
                 pie_sizes,
@@ -506,7 +545,7 @@ def create_pie_chart(
                 colors=pie_colors,
                 autopct='%1.1f%%',
                 startangle=90,
-                textprops={'fontsize': 14, 'weight': 'bold'},
+                textprops={'fontsize': 18, 'weight': 'bold'},
                 explode=(0.05, 0),
                 pctdistance=0.85,
             )
@@ -514,17 +553,17 @@ def create_pie_chart(
             # Make percentage text more readable
             for autotext in autotexts:
                 autotext.set_color('white')
-                autotext.set_fontsize(16)
+                autotext.set_fontsize(20)
                 autotext.set_weight('bold')
 
             ax.set_title(f'{dataset_name.upper()} - {split_name} SET\nFile Type Distribution',
-                        fontsize=16, fontweight='bold', pad=20)
+                        fontsize=24, fontweight='bold', pad=20)
 
             # Add total info at the bottom
             total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
             total_files = sum(file_counts.values())
             fig.text(0.5, 0.02, f'Total: {total_size_str} | Files: {total_files:,}',
-                    ha='center', fontsize=14, fontweight='bold')
+                    ha='center', fontsize=16, fontweight='bold')
 
             plt.tight_layout()
 
@@ -604,10 +643,29 @@ def create_rank_pie_chart(
     pie_colors = ['#FF6B6B', '#4ECDC4']
 
     # Prepare bar chart data (include this rank's npz + all other files)
-    # Exclude instance.npy, segment20.npy, segment200.npy from bar chart
+    # Merge excluded files into a combined category instead of removing them
     excluded_from_bar = {"instance.npy", "segment20.npy", "segment200.npy"}
-    bar_file_names = [name for name in bar_files.keys() if name not in excluded_from_bar]
-    bar_file_sizes = [bar_files[name] for name in bar_file_names]
+    bar_file_names = []
+    bar_file_sizes = []
+    others_excluded_size = 0
+
+    for name, size in bar_files.items():
+        if name == rank_label:
+            # Keep rank label as is
+            bar_file_names.append(name)
+            bar_file_sizes.append(size)
+        elif name in excluded_from_bar:
+            # Add excluded files to a combined category
+            others_excluded_size += size
+        else:
+            # Keep other files as is
+            bar_file_names.append(name)
+            bar_file_sizes.append(size)
+
+    # Add combined excluded files if any
+    if others_excluded_size > 0:
+        bar_file_names.append("instance/segment files")
+        bar_file_sizes.append(others_excluded_size)
 
     # Sort bar data by size (descending)
     bar_data = sorted(zip(bar_file_names, bar_file_sizes), key=lambda x: x[1], reverse=True)
@@ -623,21 +681,36 @@ def create_rank_pie_chart(
         colors=pie_colors,
         autopct='%1.1f%%',
         startangle=90,
-        textprops={'fontsize': 12, 'weight': 'bold'},
+        textprops={'fontsize': 16, 'weight': 'bold'},
         explode=(0.05, 0),  # Slightly explode lang_feat R{rank} slice
     )
 
     # Make percentage text more readable
     for autotext in autotexts:
         autotext.set_color('white')
-        autotext.set_fontsize(14)
+        autotext.set_fontsize(18)
         autotext.set_weight('bold')
+
+    # Add legend below pie chart
+    legend_labels = []
+    for i, (label, size) in enumerate(zip(pie_labels, pie_sizes)):
+        percentage = (size / total_size * 100) if total_size > 0 else 0
+        legend_labels.append(f"{label}: {percentage:.1f}%")
+
+    ax1.legend(
+        wedges,
+        legend_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.02),
+        fontsize=12,
+        frameon=True,
+    )
 
     # Set titles with consistent font size
     ax1.set_title(f'{dataset_name.upper()} - {split_name} SET\nSVD Rank {rank} Distribution',
-                  fontsize=12, fontweight='bold', pad=20)
+                  fontsize=22, fontweight='bold', pad=20)
     ax2.set_title('Detailed Breakdown of All Files',
-                  fontsize=12, fontweight='bold', pad=20)
+                  fontsize=22, fontweight='bold', pad=20)
 
     # Bar chart for absolute sizes
     # Convert to appropriate units
@@ -658,9 +731,9 @@ def create_rank_pie_chart(
     bar_colors = [color_palette[i % len(color_palette)] for i in range(len(bar_file_names))]
 
     bars = ax2.barh(range(len(bar_file_names)), sizes_in_unit, color=bar_colors)
-    ax2.set_xlabel(f'Size ({unit_label})', fontsize=11, fontweight='bold')
+    ax2.set_xlabel(f'Size ({unit_label})', fontsize=14, fontweight='bold')
     ax2.set_yticks(range(len(bar_file_names)))
-    ax2.set_yticklabels(bar_file_names)
+    ax2.set_yticklabels(bar_file_names, fontsize=12)
     ax2.invert_yaxis()
 
     # Add value labels on bars
@@ -668,9 +741,10 @@ def create_rank_pie_chart(
         width = bar.get_width()
         ax2.text(width, bar.get_y() + bar.get_height()/2,
                 f' {size:.2f} {unit_label}',
-                ha='left', va='center', fontsize=9, fontweight='bold')
+                ha='left', va='center', fontsize=12, fontweight='bold')
 
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.2)  # Make room for legend below pie chart
 
     # Add total info at the bottom
     total_size_str = f"{format_size(total_size, base10=False)} ({format_size(total_size, base10=True)})"
@@ -680,7 +754,7 @@ def create_rank_pie_chart(
         for name in bar_file_names if name != rank_label
     )
     fig.text(0.5, 0.02, f'Total: {total_size_str} | Files: {total_files:,}',
-             ha='center', fontsize=12, fontweight='bold')
+             ha='center', fontsize=14, fontweight='bold')
 
     # Save figure
     if output_path is None:
