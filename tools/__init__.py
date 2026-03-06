@@ -3,19 +3,21 @@
 
 import sys
 from types import ModuleType
+import importlib
 
 # Create alias modules for backward compatibility
 def _create_module_alias(full_module_name, target_module):
     """Create a module alias in sys.modules for backward compatibility."""
     if full_module_name not in sys.modules:
-        # Import the target module
-        parts = target_module.split('.')
-        target = __import__(target_module)
-        for part in parts[1:]:
-            target = getattr(target, part)
-
-        # Create the alias module
-        sys.modules[full_module_name] = target
+        try:
+            # Import the target module using importlib
+            target = importlib.import_module(target_module)
+            # Create the alias module
+            sys.modules[full_module_name] = target
+        except ImportError as e:
+            # If the target module doesn't exist, skip this alias
+            # This can happen when running from a different directory
+            print(f"Warning: Could not import {target_module} for alias {full_module_name}: {e}")
 
 # Set up module aliases for backward compatibility
 # Old path -> New path
@@ -43,14 +45,17 @@ def _setup_aliases():
 _setup_aliases()
 
 # Also import commonly used classes/functions for direct access
-from tools.compression.rpca_utils import (
-    RPCA_GPU,
-    RPCA_CPU,
-    StructuredRPCA_GPU,
-    svt_gpu,
-    auto_rpca,
-    apply_rpca,
-)
+try:
+    from tools.compression.rpca_utils import (
+        RPCA_GPU,
+        RPCA_CPU,
+        StructuredRPCA_GPU,
+        svt_gpu,
+        auto_rpca,
+        apply_rpca,
+    )
+except ImportError:
+    pass
 
 __all__ = [
     # From compression/
