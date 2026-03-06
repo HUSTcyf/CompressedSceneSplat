@@ -8,12 +8,12 @@ from uuid import uuid4
 import sys
 from pathlib import Path
 
-# Add tools directory to path for Procrustes import
-_tools_path = str(Path(__file__).resolve().parents[4] / "tools")
-if _tools_path not in sys.path:
-    sys.path.insert(0, _tools_path)
+# Add project root to path for Procrustes import
+_project_root = str(Path(__file__).resolve().parents[4])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
-from compute_procrustes_alignment_simple import compute_procrustes_Q_cuda_with_labels
+from tools.compute_procrustes_alignment_simple import compute_procrustes_Q_cuda_with_labels
 
 import pointcept.utils.comm as comm
 from pointcept.utils.misc import (
