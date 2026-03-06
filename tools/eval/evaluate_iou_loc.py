@@ -755,7 +755,7 @@ if __name__ == "__main__":
     parser.add_argument("--feat_base_path", type=str, default=None, help="Base path for features (e.g., /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs)")
     parser.add_argument("--single_level", action="store_true", help="Use single feature level (level 0) instead of multiple levels")
     parser.add_argument("--feat_level", type=int, default=None, help="Specific feature level to use (0, 1, 2, or 3). Overrides --single_level behavior.")
-    parser.add_argument("--stability_thresh", type=float, default=0.3)
+    parser.add_argument("--stability_thresh", type=float, default=0.5, help="Maximum gradient value considered stable (default: 0.5, relaxed from 0.3)")
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
     parser.add_argument("--src_dim", type=int, default=768, help="Source dimension of language features to load (default: 768 for SigLIP2; options: 512 for OpenCLIP, 16 for SVD-compressed)")

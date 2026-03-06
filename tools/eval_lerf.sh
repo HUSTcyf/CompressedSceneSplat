@@ -39,7 +39,7 @@ SRC_DIM=768
 TEXT_EMBEDDINGS_PATH="/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs_text_embeddings_siglip2.pt"
 
 # Evaluation parameters
-STABILITY_THRESH=0.3
+STABILITY_THRESH=0.5  # Default stability threshold (relaxed from 0.3 to 0.5)
 MIN_MASK_SIZE=0.001
 MAX_MASK_SIZE=0.95
 

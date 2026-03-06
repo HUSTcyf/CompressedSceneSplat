@@ -140,17 +140,28 @@ def compute_dynamic_threshold(valid_map, object_name, eval_params=None, thresh_r
         stability = calculate_stability_metrics(scores, pixel_counts, thresh_range, eval_params=eval_params)
         stable_regions = find_stable_regions(stability, eval_params=eval_params)
         if len(stable_regions) == 0:
-            # Try with relaxed threshold if no stable regions found
-            print(f"  Warning: Found 0 stable regions with thresh={eval_params['stability_thresh']}, trying relaxed threshold...")
-            relaxed_params = eval_params.copy()
-            relaxed_params['stability_thresh'] = 1.0  # Very relaxed
-            stable_regions = find_stable_regions(stability, eval_params=relaxed_params)
+            # Try with increasingly relaxed thresholds if no stable regions found
+            # Start from current threshold and increment by 0.1 until finding stable regions
+            initial_thresh = eval_params['stability_thresh']
+            current_thresh = initial_thresh
+            max_thresh = 2.0  # Maximum threshold to try
+            thresh_increment = 0.1
+
+            print(f"  Warning: Found 0 stable regions with thresh={initial_thresh}, trying relaxed thresholds...")
+            while current_thresh <= max_thresh:
+                relaxed_params = eval_params.copy()
+                relaxed_params['stability_thresh'] = current_thresh
+                stable_regions = find_stable_regions(stability, eval_params=relaxed_params)
+                if len(stable_regions) > 0:
+                    print(f"  Found {len(stable_regions)} stable regions with thresh={current_thresh}")
+                    break
+                current_thresh += thresh_increment
+
             if len(stable_regions) == 0:
-                print(f"  Warning: Still 0 stable regions with thresh=1.0, using fallback")
+                print(f"  Warning: Still 0 stable regions after trying up to thresh={max_thresh}, using fallback")
                 score_gradients.append(999)
                 thresholds.append(0.5)
             else:
-                print(f"  Found {len(stable_regions)} stable regions with relaxed threshold")
                 valid_mask = stability['valid_regions']
                 (start_idx, end_idx) = stable_regions[-1]
                 if np.any(valid_mask[start_idx:end_idx+1]):

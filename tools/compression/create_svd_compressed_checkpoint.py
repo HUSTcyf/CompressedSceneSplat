@@ -47,7 +47,7 @@ import argparse
 import numpy as np
 import torch
 from pathlib import Path
-from typing import Tuple, Dict, List, Optional
+from typing import Tuple, Dict, List, Optional, Union
 
 
 # Default paths
@@ -105,8 +105,8 @@ def get_available_scenes(
     train_dir = Path(TRAIN_ROOT)
     checkpoint_dir = Path(CHECKPOINT_ROOT)
 
-    # Build sequence suffix
-    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
 
     # Find all scenes with SVD files
     svd_scenes = set()
@@ -174,8 +174,8 @@ def load_grid_svd_compressed_features(scene: str, rank: int = SVD_RANK, feature_
     Returns:
         compressed_features: [N_gaussians, rank] - full compressed feature array
     """
-    # Build sequence suffix
-    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
     grid_svd_path = f"{TRAIN_ROOT}/{scene}/lang_feat_grid_svd_r{rank}{seq_suffix}.npz"
 
     if not os.path.exists(grid_svd_path):
@@ -221,8 +221,8 @@ def get_svd_compressed_features_from_original(
     Returns:
         svd_compressed: [N_gaussians, rank] - SVD compressed features
     """
-    # Build sequence suffix
-    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
 
     # Load original features
     lang_feat_path = f"{TRAIN_ROOT}/{scene}/lang_feat{seq_suffix}.npy"
@@ -764,8 +764,8 @@ def load_checkpoint(ckpt_path: str, scene: str, feature_level: Optional[int] = N
         model_params: 13-element tuple in capture_language_feature() format
         iteration: iteration number
     """
-    # Build sequence suffix
-    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
     print(f"Loading checkpoint from: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
@@ -1387,8 +1387,8 @@ def process_scene_direct_svd(
     print(f"Processing scene: {scene} (Direct SVD mode, rank={rank}, seq={feature_level})")
     print(f"{'='*60}\n")
 
-    # Build sequence suffix
-    seq_suffix = f"_{feature_level}" if feature_level is not None else ""
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
 
     # Load Gaussian parameters from TRAIN_ROOT
     coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feature_level)
@@ -1633,8 +1633,186 @@ def process_scene_occamlgs_from_base(
     print(f"Scene {scene} processed successfully! (OccamLGS base + grid SVD mode)")
     print(f"{'='*60}\n")
 
-from typing import List, Tuple, Union
-def fill_matrix_by_mask(mask: Union[List[int], np.ndarray], 
+def reconstruct_features_from_svd(
+    compressed_features: np.ndarray,
+    Vt: np.ndarray,
+    valid_feat_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Reconstruct 768-dimensional features from compressed SVD features using inverse projection.
+
+    This function performs the inverse of SVD compression:
+    - compressed_features: [N, rank] - SVD compressed features
+    - Vt: [rank, 768] or [768, 768] - right singular vectors (transposed)
+    - Reconstructed: compressed @ Vt -> [N, 768]
+
+    Args:
+        compressed_features: [N, rank] - SVD compressed features
+        Vt: [rank, 768] or [768, 768] - right singular vectors (transposed)
+        valid_feat_mask: Optional [N_original] mask for filling invalid positions
+
+    Returns:
+        reconstructed_features: [N, 768] - reconstructed 768-dimensional features
+    """
+    print(f"Reconstructing 768D features from {compressed_features.shape} compressed features...")
+
+    rank = compressed_features.shape[1]
+
+    # Handle Vt format
+    if Vt.shape[0] == 768 and Vt.shape[1] == 768:
+        # Full Vt matrix [768, 768], extract first rank rows
+        Vt_r = Vt[:rank, :]  # [rank, 768]
+    elif Vt.shape[0] == rank and Vt.shape[1] == 768:
+        # Already truncated Vt [rank, 768]
+        Vt_r = Vt
+    else:
+        raise ValueError(f"Unexpected Vt shape: {Vt.shape}. Expected [768, 768] or [rank, 768]")
+
+    # Reconstruct using inverse SVD projection: compressed @ Vt
+    # compressed: [N, rank], Vt_r: [rank, 768] -> result: [N, 768]
+    reconstructed = compressed_features @ Vt_r  # [N, 768]
+
+    print(f"  Reconstructed features shape: {reconstructed.shape}")
+    print(f"  Compression rank: {rank}")
+    print(f"  Reconstruction uses Vt_r shape: {Vt_r.shape}")
+
+    # Handle valid_feat_mask if provided
+    if valid_feat_mask is not None:
+        N_original = valid_feat_mask.shape[0]
+        N_compressed = compressed_features.shape[0]
+
+        if N_compressed != N_original:
+            # Features were pre-filtered, need to pad back
+            print(f"  Padding reconstructed features from {N_compressed} to {N_original}...")
+            reconstructed_full = np.zeros((N_original, 768), dtype=np.float32)
+            reconstructed_full[valid_feat_mask] = reconstructed
+            reconstructed = reconstructed_full
+            print(f"  Final reconstructed features shape: {reconstructed.shape}")
+
+    return reconstructed
+
+
+def process_scene_reconstruct_768d(
+    scene: str,
+    rank: int = SVD_RANK,
+    output_dir: Optional[str] = None,
+    feature_level: Optional[int] = None,
+):
+    """Process a scene by reconstructing 768D features from compressed SVD features.
+
+    This mode:
+    1. Loads compressed SVD features from lang_feat_grid_svd_r*.npz
+    2. Loads SVD V matrix from lang_feat_svd.npz (computed from original lang_feat.npy)
+    3. Reconstructs 768D features using inverse SVD projection: compressed @ Vt
+    4. Saves checkpoint with 768D reconstructed features
+
+    Args:
+        scene: Scene name
+        rank: SVD compression rank (default 16)
+        output_dir: Output directory (default OUTPUT_ROOT)
+        feature_level: Feature level number (1, 2, 3, etc.) for sequence-based files
+    """
+    print(f"\n{'='*60}")
+    print(f"Processing scene: {scene} (Reconstruct 768D mode, rank={rank}, seq={feature_level})")
+    print(f"{'='*60}\n")
+
+    # Build sequence suffix (only add suffix if feature_level is explicitly > 0)
+    # This matches the behavior where default/level 0 means no suffix
+    seq_suffix = f"_{feature_level}" if feature_level is not None and feature_level > 0 else ""
+    scene_dir = Path(TRAIN_ROOT) / scene
+
+    # Step 1: Load compressed SVD features
+    print("Step 1: Loading compressed SVD features...")
+    grid_svd_path = scene_dir / f"lang_feat_grid_svd_r{rank}{seq_suffix}.npz"
+    print(f"  Looking for: {grid_svd_path}")
+    if not grid_svd_path.exists():
+        raise FileNotFoundError(f"Grid SVD file not found: {grid_svd_path}")
+
+    data = np.load(grid_svd_path)
+    compressed = data['compressed']  # [N_unique, rank]
+    indices = data['indices']  # [N_gaussians]
+
+    # Reconstruct full compressed array
+    compressed_full = compressed[indices]  # [N_gaussians, rank]
+    print(f"  Compressed features shape: {compressed_full.shape}")
+
+    # Step 2: Load SVD V matrix
+    print("\nStep 2: Loading SVD V matrix...")
+    svd_path = scene_dir / "lang_feat_svd.npz"
+    if not svd_path.exists():
+        raise FileNotFoundError(f"SVD file not found: {svd_path}")
+
+    svd_data = np.load(svd_path)
+    Vt = svd_data['Vt']  # [768, 768]
+    print(f"  Vt shape: {Vt.shape}")
+
+    # Step 3: Load valid_feat_mask for proper reconstruction
+    print("\nStep 3: Loading valid feature mask...")
+    valid_mask_path = scene_dir / "valid_feat_mask.npy"
+    if valid_mask_path.exists():
+        valid_feat_mask = np.load(valid_mask_path).astype(np.bool_)
+        print(f"  Valid feat mask: {valid_feat_mask.sum()} valid, {(~valid_feat_mask).sum()} invalid")
+    else:
+        print("  Warning: valid_feat_mask not found, assuming all features are valid")
+        valid_feat_mask = None
+
+    # Step 4: Reconstruct 768D features
+    print("\nStep 4: Reconstructing 768D features...")
+    reconstructed_768d = reconstruct_features_from_svd(
+        compressed_full, Vt, valid_feat_mask
+    )
+    print(f"  Reconstructed 768D features shape: {reconstructed_768d.shape}")
+
+    # Step 5: Load Gaussian parameters
+    print("\nStep 5: Loading Gaussian parameters...")
+    coord, color, opacity, quat, scale = load_gaussian_params_from_train_root(scene, feature_level)
+
+    # Convert to torch tensor
+    reconstructed_tensor = torch.from_numpy(reconstructed_768d).float()
+
+    # Load valid_feat_mask as torch tensor
+    if valid_mask_path.exists():
+        valid_feat_mask_tensor = torch.from_numpy(valid_feat_mask)
+    else:
+        valid_feat_mask_tensor = torch.ones(reconstructed_tensor.shape[0], dtype=torch.bool)
+
+    # Step 6: Create checkpoint with 768D features
+    print("\nStep 6: Creating checkpoint with 768D features...")
+    model_params = create_model_params_from_gaussian_data(
+        coord, color, opacity, quat, scale,
+        reconstructed_tensor,
+        valid_feat_mask=valid_feat_mask_tensor,
+        use_occamlgs_format=True
+    )
+
+    # Step 7: Save checkpoint
+    if output_dir is None:
+        output_dir = OUTPUT_ROOT
+    save_path = f"{output_dir}/{scene}/checkpoint_with_features_768d.pth"
+    save_checkpoint(model_params, 0, save_path)
+
+    # Also save the 768D features as .npy
+    lang_feat_path = f"{output_dir}/{scene}/language_features_768d.npy"
+    np.save(lang_feat_path, reconstructed_768d)
+    print(f"Also saved 768D language features to: {lang_feat_path}")
+
+    # Print statistics
+    original_size = compressed_full.shape[0] * 768 * 4  # float32
+    compressed_size = compressed_full.shape[0] * rank * 4
+    reconstruction_size = reconstructed_768d.shape[0] * 768 * 4
+
+    print(f"\nStatistics:")
+    print(f"  Gaussians: {coord.shape[0]:,}")
+    print(f"  Compressed size: {compressed_size / 1024**2:.2f} MB ({compressed_full.shape})")
+    print(f"  Reconstructed size: {reconstruction_size / 1024**2:.2f} MB ({reconstructed_768d.shape})")
+    print(f"  Compression ratio (768->16): {original_size / compressed_size:.2f}x")
+    print(f"  Reconstruction ratio (16->768): {reconstruction_size / compressed_size:.2f}x")
+
+    print(f"\n{'='*60}")
+    print(f"Scene {scene} processed successfully! (Reconstruct 768D mode)")
+    print(f"{'='*60}\n")
+
+
+def fill_matrix_by_mask(mask: Union[List[int], np.ndarray],
                           matrix: Union[List[List[float]], np.ndarray]) -> np.ndarray:
     # 转换为numpy数组
     mask_arr = np.array(mask, dtype=int)
@@ -1822,6 +2000,11 @@ Examples:
   python tools/create_svd_compressed_checkpoint.py --scene figurines --train-occamlgs --feature-level 1 --rank 16
   python tools/create_svd_compressed_checkpoint.py --all-scenes --train-occamlgs
 
+  # Reconstruct 768D features from compressed SVD
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --reconstruct
+  python tools/create_svd_compressed_checkpoint.py --scene figurines --reconstruct --rank 16
+  python tools/create_svd_compressed_checkpoint.py --all-scenes --reconstruct
+
   # Compare Grid SVD vs SVD compression error
   python tools/create_svd_compressed_checkpoint.py --scene figurines --compare
   python tools/create_svd_compressed_checkpoint.py --all-scenes --compare --rank 8
@@ -1887,10 +2070,15 @@ Examples:
         help="OccamLGS base mode: Load base checkpoint (without language features) from OccamLGS + grid SVD features from TRAIN_ROOT"
     )
     parser.add_argument(
+        "--reconstruct",
+        action="store_true",
+        help="Reconstruct 768D features from compressed SVD features (requires lang_feat_grid_svd_r*.npz and lang_feat_svd.npz)"
+    )
+    parser.add_argument(
         "--feature-level",
         type=int,
-        default=1,
-        help="Feature level for sequence-based files (default: 1). Used for lang_feat_{level}.npy, lang_feat_grid_svd_r{rank}_{level}.npz, etc."
+        default=None,
+        help="Feature level for sequence-based files (default: None=no suffix). Used for lang_feat_{level}.npy, lang_feat_grid_svd_r{rank}_{level}.npz, etc."
     )
 
     args = parser.parse_args()
@@ -2004,7 +2192,10 @@ Examples:
         parser.error("Cannot specify both --scene and --all-scenes")
 
     # Choose processing function based on mode
-    if args.occamlgs and args.use_grid_svd:
+    if args.reconstruct:
+        # Reconstruct mode: reconstruct 768D features from compressed SVD
+        process_func = process_scene_reconstruct_768d
+    elif args.occamlgs and args.use_grid_svd:
         # OccamLGS + Grid SVD mode: load OccamLGS checkpoint + pre-computed grid SVD features from TRAIN_ROOT
         process_func = process_scene_occamlgs_with_grid_svd
     elif args.occamlgs_base:
@@ -2025,8 +2216,10 @@ Examples:
 
     # Process scenes
     if args.scene:
-        # OccamLGS-Base, OccamLGS, and Direct modes use different parameters
-        if args.occamlgs_base:
+        # Reconstruct, OccamLGS-Base, OccamLGS, and Direct modes use different parameters
+        if args.reconstruct:
+            process_func(args.scene, args.rank, args.output_dir, args.feature_level)
+        elif args.occamlgs_base:
             process_func(args.scene, args.iteration, args.feature_level, args.rank, args.output_dir)
         elif args.occamlgs:
             process_func(args.scene, args.iteration, args.feature_level, args.rank, args.output_dir)
@@ -2077,8 +2270,10 @@ Examples:
 
         for scene in scenes:
             try:
-                # OccamLGS-Base, OccamLGS+GridSVD, OccamLGS, and Direct modes use different parameters
-                if args.occamlgs_base:
+                # Reconstruct, OccamLGS-Base, OccamLGS+GridSVD, OccamLGS, and Direct modes use different parameters
+                if args.reconstruct:
+                    process_func(scene, args.rank, args.output_dir, args.feature_level)
+                elif args.occamlgs_base:
                     process_func(scene, args.iteration, args.feature_level, args.rank, args.output_dir)
                 elif args.occamlgs:
                     # This covers both --occamlgs and --occamlgs --use-grid-svd (same signature)

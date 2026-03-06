@@ -4,6 +4,8 @@
 # SVD rank (must match training)
 FD = 16  # Feature dimension
 svd_rank = 16
+FD = 8
+svd_rank = 8
 
 # Model configuration (MUST match training exactly)
 model = dict(
@@ -77,9 +79,7 @@ collect_keys_test = (
 
 inference = dict(
     transform=[
-        # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
-        dict(type="FilterValidPoints", key="valid_feat_mask"),
-        # FilterCoordOutliers is applied in load_scene_data() before transforms
+        # FilterValidPoints and FilterCoordOutliers are applied in load_scene_data() before transforms
         # This allows proper expansion of features back to original size
         dict(type="CenterShift", apply_z=True),
         dict(type="NormalizeColor"),
