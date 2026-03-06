@@ -5,41 +5,44 @@ import sys
 from types import ModuleType
 import importlib
 
-# Create alias modules for backward compatibility
-def _create_module_alias(full_module_name, target_module):
-    """Create a module alias in sys.modules for backward compatibility."""
-    if full_module_name not in sys.modules:
-        try:
-            # Import the target module using importlib
-            target = importlib.import_module(target_module)
-            # Create the alias module
-            sys.modules[full_module_name] = target
-        except ImportError as e:
-            # If the target module doesn't exist, skip this alias
-            # This can happen when running from a different directory
-            print(f"Warning: Could not import {target_module} for alias {full_module_name}: {e}")
+# Create a lazy module class that imports on first access
+class _LazyModule:
+    """A lazy module that imports the target module on first attribute access."""
+    def __init__(self, target_module):
+        self.__target_module__ = target_module
+        self.__module__ = None
 
-# Set up module aliases for backward compatibility
-# Old path -> New path
-_MODULE_ALIASES = {
+    def __getattr__(self, name):
+        if self.__module__ is None:
+            try:
+                self.__module__ = importlib.import_module(self.__target_module__)
+            except ImportError as e:
+                raise ImportError(
+                    f"Could not import {self.__target_module__}: {e}"
+                ) from e
+        return getattr(self.__module__, name)
+
+    def __repr__(self):
+        if self.__module__ is None:
+            return f"<lazy module '{self.__target_module__}'>"
+        return repr(self.__module__)
+
+# Set up module aliases for backward compatibility using lazy loading
+def _setup_aliases():
+    """Set up all module aliases using lazy loading."""
+
     # Moved to compression/
-    "tools.rpca_utils": "tools.compression.rpca_utils",
+    sys.modules['tools.rpca_utils'] = _LazyModule('tools.compression.rpca_utils')
 
     # Moved to projection/
-    "tools.compute_procrustes_alignment": "tools.projection.compute_procrustes_alignment_simple",
-    "tools.compute_procrustes_alignment_simple": "tools.projection.compute_procrustes_alignment_simple",
+    sys.modules['tools.compute_procrustes_alignment'] = _LazyModule('tools.projection.compute_procrustes_alignment_simple')
+    sys.modules['tools.compute_procrustes_alignment_simple'] = _LazyModule('tools.projection.compute_procrustes_alignment_simple')
 
     # Moved to visualization/
-    "tools.visualize_semantic_segmentation": "tools.visualization.visualize_semantic_segmentation",
+    sys.modules['tools.visualize_semantic_segmentation'] = _LazyModule('tools.visualization.visualize_semantic_segmentation')
 
     # Moved to data/
-    "tools.feature_map_renderer": "tools.data.feature_map_renderer",
-}
-
-def _setup_aliases():
-    """Set up all module aliases."""
-    for old_name, new_name in _MODULE_ALIASES.items():
-        _create_module_alias(old_name, new_name)
+    sys.modules['tools.feature_map_renderer'] = _LazyModule('tools.data.feature_map_renderer')
 
 # Set up aliases when this module is imported
 _setup_aliases()
