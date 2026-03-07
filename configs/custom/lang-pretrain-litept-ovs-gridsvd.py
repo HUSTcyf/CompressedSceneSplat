@@ -55,7 +55,7 @@ train = dict(type="DensityInvariantTrainer")
 # SVD-compressed language feature dimension
 # When using svd_rank=16, we predict 16-dimensional compressed features
 # This is much more memory-efficient than predicting full 768-dim features
-svd_rank = 8  # SVD compression rank (8, 16, 32 are common choices)
+svd_rank = 16  # SVD compression rank (8, 16, 32 are common choices)
 lang_feat_dim = svd_rank  # Decoder output matches SVD rank
 FD = lang_feat_dim
 
@@ -165,13 +165,13 @@ model = dict(
 
         # AggregatedContrastiveLoss: DISABLED for 16-dim training
         # Re-enable only when using SVD rank 32 or higher
-        # dict(
-        #     type="AggregatedContrastiveLoss",
-        #     temperature=0.2,
-        #     reduction="mean",
-        #     loss_weight=0.1,
-        #     schedule="all",
-        # ),
+        dict(
+            type="AggregatedContrastiveLoss",
+            temperature=0.2,
+            reduction="mean",
+            loss_weight=0.2,
+            schedule="all",
+        ),
     ],
 )
 
@@ -214,7 +214,7 @@ density_invariant = dict(
 # ============================================================================
 # Scheduler settings
 # ============================================================================
-eval_epoch = 10  # total eval & checkpoint epoch
+eval_epoch = 20  # total eval & checkpoint epoch
 epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 
 # ============================================================================
@@ -223,14 +223,11 @@ epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 # Base optimizer configuration
 optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
 
-# Gradient clipping (configured separately, used in trainer)
-clip_grad = 1.0
-
 # Scheduler configuration
 scheduler = dict(
     type="OneCycleLR",
     # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dim_scale, dec0, dec0.mlp, dec0.fc]
-    max_lr=[0.001, 0.001, 0.0001, 0.001, 0.00005, 0.00002, 0.00001],
+    max_lr=[0.001, 0.001, 0.0001, 0.001, 0.00005, 0.00004, 0.00004],
     pct_start=0.1,
     anneal_strategy="cos",
     div_factor=10.0,
@@ -284,16 +281,17 @@ param_dicts = [
     # Lower expansion ratio reduces gradient amplification while maintaining capacity
     dict(
         keyword="dec0.block1.mlp",
-        lr=0.00002,  # 98% lower than encoder block lr
+        lr=0.00004,  # 96% lower than encoder block lr
         weight_decay=0.2,  # 4× higher weight decay
     ),
 
     # Group 6: Specifically target fc1/fc2 linear layers in dec0.block1.mlp
     # These are the layers where weight explosion was observed (L2 norm max=6.87)
     # fc1: [32,16], fc2: [16,32] - gradient amplification reduced due to lower mlp_ratio
+    # Using same lr as Group 5 (dec0.mlp) for consistent training
     dict(
         keyword="dec0.block1.mlp.0.fc",
-        lr=0.00001,  # 99% lower than encoder block lr (minimum viable)
+        lr=0.00004,  # Same as dec0.mlp for consistent training
         weight_decay=0.3,  # 6× higher weight decay for strongest regularization
     ),
 ]
@@ -317,55 +315,56 @@ data = dict(
     train=dict(
         type="ConcatDataset",  # Use ConcatDataset to combine multiple data sources
         datasets=[
-            dict(
-                type=dataset_type,
-                split="train",  # Use 'train' subdirectory (matches train/* pattern)
-                data_root=data_root_ovs_1,  # First data source: lerf_ovs
-                sample_tail_classes=False,
-                load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat
-                svd_rank=svd_rank,  # SVD rank to load (uses the svd_rank variable defined above)
-                transform=[
-                    # Initial preprocessing
-                    dict(type="CenterShift", apply_z=True),
-                    # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
-                    dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
-                    # Step 2: Filter valid points (those with valid language features)
-                    dict(type="FilterValidPoints", key="valid_feat_mask"),
-                    # Step 3: Re-center coordinates to the filtered dense region
-                    dict(type="CenterShift", apply_z=True),
-                    # Step 4: GridSampleAveraged for representative sampling (with feature averaging)
-                    dict(
-                        type="GridSampleAveraged",
-                        grid_size=0.01,
-                        hash_type="fnv",
-                        mode="train",
-                        keys=(
-                            "coord",
-                            "color",
-                            "opacity",
-                            "quat",
-                            "scale",
-                            "lang_feat",
-                            "valid_feat_mask",
-                            "point_to_grid",
-                            "segment",
-                        ),
-                        return_grid_coord=True,
-                        average_keys=("color", "opacity", "quat", "scale"),
-                        first_keys=("coord",),
-                    ),
-                    # Step 5: SphereCrop to reduce point count and prevent OOM
-                    dict(type="SphereCrop", point_max=204800, mode="random"),
-                    dict(type="NormalizeColor"),
-                    dict(type="ToTensor"),
-                    dict(
-                        type="Collect",
-                        keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
-                        feat_keys=("color", "opacity", "quat", "scale"),
-                    ),
-                ],
-                test_mode=False,
-            ),
+            # TEMPORARILY DISABLED: lerf_ovs dataset
+            # dict(
+            #     type=dataset_type,
+            #     split="train",  # Use 'train' subdirectory (matches train/* pattern)
+            #     data_root=data_root_ovs_1,  # First data source: lerf_ovs
+            #     sample_tail_classes=False,
+            #     load_compressed_lang_feat=True,  # Load SVD-compressed lang_feat
+            #     svd_rank=svd_rank,  # SVD rank to load (uses the svd_rank variable defined above)
+            #     transform=[
+            #         # Initial preprocessing
+            #         dict(type="CenterShift", apply_z=True),
+            #         # Step 1: Filter outliers (removes long-tail boundary points, keeps dense 98% region)
+            #         dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+            #         # Step 2: Filter valid points (those with valid language features)
+            #         dict(type="FilterValidPoints", key="valid_feat_mask"),
+            #         # Step 3: Re-center coordinates to the filtered dense region
+            #         dict(type="CenterShift", apply_z=True),
+            #         # Step 4: GridSampleAveraged for representative sampling (with feature averaging)
+            #         dict(
+            #             type="GridSampleAveraged",
+            #             grid_size=0.01,
+            #             hash_type="fnv",
+            #             mode="train",
+            #             keys=(
+            #                 "coord",
+            #                 "color",
+            #                 "opacity",
+            #                 "quat",
+            #                 "scale",
+            #                 "lang_feat",
+            #                 "valid_feat_mask",
+            #                 "point_to_grid",
+            #                 "segment",
+            #             ),
+            #             return_grid_coord=True,
+            #             average_keys=("color", "opacity", "quat", "scale"),
+            #             first_keys=("coord",),
+            #         ),
+            #         # Step 5: SphereCrop to reduce point count and prevent OOM
+            #         dict(type="SphereCrop", point_max=204800, mode="random"),
+            #         dict(type="NormalizeColor"),
+            #         dict(type="ToTensor"),
+            #         dict(
+            #             type="Collect",
+            #             keys=("coord", "grid_coord", "lang_feat", "valid_feat_mask", "name", "scene_path", "point_to_grid", "segment"),
+            #             feat_keys=("color", "opacity", "quat", "scale"),
+            #         ),
+            #     ],
+            #     test_mode=False,
+            # ),
             dict(
                 type=dataset_type,
                 split="train",  # Use 'train' subdirectory (matches train/* pattern)
@@ -421,7 +420,7 @@ data = dict(
     val=dict(
         type=dataset_type,
         split="val",  # Use 'val' subdirectory
-        data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
+        data_root=data_root_ovs_2,  # Use 3DOVS parent directory
         transform=[
             # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
             dict(type="FilterValidPoints", key="valid_feat_mask"),
@@ -451,7 +450,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         split="val",  # Use 'val' subdirectory
-        data_root=data_root_ovs_1,  # Use lerf_ovs parent directory
+        data_root=data_root_ovs_2,  # Use 3DOVS parent directory
         transform=[
             # CRITICAL: Filter valid points FIRST to match SVD lang_feat size
             dict(type="FilterValidPoints", key="valid_feat_mask"),

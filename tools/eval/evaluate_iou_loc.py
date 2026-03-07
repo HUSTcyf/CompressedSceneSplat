@@ -19,13 +19,22 @@ import json
 from tqdm import tqdm
 from PIL import Image
 
-# Add parent directory to path for Procrustes functions
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from compute_procrustes_alignment_simple import (
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add project root to sys.path FIRST
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+# Import Procrustes functions using absolute import
+from tools.compute_procrustes_alignment_simple import (
     perform_svd_reduction,
     compute_procrustes_Q,
 )
 
+# Local modules in same directory
 import colormaps
 from openclip_encoder import OpenCLIPNetwork
 from siglip2_encoder import SigLIP2Network

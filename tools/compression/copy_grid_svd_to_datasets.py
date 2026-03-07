@@ -51,9 +51,14 @@ import argparse
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# Add project root to Python path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 
 # Scene to dataset mapping

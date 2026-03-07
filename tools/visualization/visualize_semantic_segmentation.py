@@ -38,14 +38,21 @@ Usage:
 """
 
 import argparse
-import numpy as np
-import trimesh
-from pathlib import Path
 import sys
 import json
+from pathlib import Path
 
-# Add SceneSplat path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+import numpy as np
+import trimesh
 
 from pointcept.utils.misc import neighbor_voting
 

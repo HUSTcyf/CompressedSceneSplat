@@ -180,7 +180,10 @@ class LangPretrainerInference:
             feature_acc = feature_acc[inverse_tensor]
 
         # L2 normalize features to match GT (SceneSplat original inference outputs normalized features)
-        feature_acc = F.normalize(feature_acc, p=2, dim=1)
+        # DISABLED: Commented out to fix train-inference mismatch
+        # During training, features are NOT normalized before computing loss
+        # To maintain consistency, we also skip normalization during inference
+        # feature_acc = F.normalize(feature_acc, p=2, dim=1)
         backbone_cpu = feature_acc.detach().cpu()
 
         outputs = {

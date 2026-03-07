@@ -26,14 +26,18 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 from PIL import Image
 
-# Add tools directory to path
-TOOLS_DIR = str(Path(__file__).resolve().parents[1] / "tools")
-if TOOLS_DIR not in sys.path:
-    sys.path.insert(0, TOOLS_DIR)
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add project root to sys.path FIRST
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
-from gaussian_renderer import GaussianModel, render
-from scene.colmap_loader import read_intrinsics_binary, read_extrinsics_binary, qvec2rotmat
+# Import Gaussian Splatting modules using absolute imports
+from tools.gaussian_renderer import GaussianModel, render
+from tools.scene.colmap_loader import read_intrinsics_binary, read_extrinsics_binary, qvec2rotmat
 
 # Default paths
 CHECKPOINT_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs"

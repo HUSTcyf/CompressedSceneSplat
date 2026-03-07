@@ -72,6 +72,13 @@ class Criteria(object):
                 # Always call detach() before item() to avoid issues with non-leaf tensors
                 loss_values[name] = loss_value.detach().item()
 
+            # Print all losses on a single line
+            l1_val = loss_values.get('l1_loss', 0.0)
+            cos_val = loss_values.get('cos_loss', 0.0)
+            contrast_val = loss_values.get('contrast_loss', 0.0)
+            total_val = loss.detach().item()
+            print(f"L1={l1_val:.6f}, Cos={cos_val:.6f}, Contrast={contrast_val:.6f}, Total={total_val:.6f}")
+
             # Return total loss, individual loss values, and per-dimension losses
             return loss, loss_values, per_dim_losses, per_dim_weights
         else:

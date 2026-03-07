@@ -1481,28 +1481,6 @@ class DensityInvariantTrainer(TrainerBase):
                         per_dim_losses = None
                         per_dim_weights = None
 
-                    # DEBUG: Verify loss calculation consistency (first iteration of first scenario)
-                    if self.comm_info["iter"] == 0 and i == 0:
-                        print(f"\n[DEBUG] Loss calculation verification - Scenario: {scenario_name}")
-                        print(f"  loss_result type: {type(loss_result)}")
-                        print(f"  loss (total): {loss.item():.6f}")
-                        if loss_dict:
-                            l1_val = loss_dict.get('l1_loss', 0.0)
-                            cos_val = loss_dict.get('cos_loss', 0.0)
-                            r2d_val = loss_dict.get('rendered2d_loss', 0.0)
-                            print(f"  l1_loss: {l1_val:.6f}")
-                            print(f"  cos_loss: {cos_val:.6f}")
-                            print(f"  rendered2d_loss: {r2d_val:.6f}")
-                            print(f"  l1 + cos + r2d: {l1_val + cos_val + r2d_val:.6f}")
-                            print(f"  Match (|l1+cos+r2d - total| < 0.01): {abs((l1_val + cos_val + r2d_val) - loss.item()) < 0.01}")
-                            # Check if loss weights are applied correctly
-                            # Expected: Total = L1_raw*1.0 + Cos_raw*0.5 + Rendered2D_raw*1.0
-                            # If loss_dict already contains weighted values, then Total should equal L1 + Cos + Rendered2D
-                        else:
-                            print(f"  WARNING: loss_dict is None! verbose_losses may be disabled!")
-                        if per_dim_losses and 'per_dim_l1' in per_dim_losses:
-                            print(f"  Per-dimension L1 losses available for visualization")
-
                     # Store this scenario's loss for current iteration (will be averaged later)
                     # NOTE: This is only this scenario's individual loss, NOT the total training loss
                     # The actual total_loss used for backprop is computed later (sum of all scenarios + consistency)
@@ -1510,7 +1488,7 @@ class DensityInvariantTrainer(TrainerBase):
                         'total': loss.item(),  # Single scenario loss
                         'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
                         'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
-                        'rendered2d': loss_dict.get('rendered2d_loss', 0.0) if loss_dict else 0.0,
+                        'contrast': loss_dict.get('contrast_loss', 0.0) if loss_dict else 0.0,
                         'per_dim_l1': per_dim_losses.get('per_dim_l1') if per_dim_losses else None,
                         'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
                     }
@@ -1542,7 +1520,7 @@ class DensityInvariantTrainer(TrainerBase):
                 avg_total = sum(v['total'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
                 avg_l1 = sum(v['l1'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
                 avg_cos = sum(v['cos'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-                avg_rendered2d = sum(v['rendered2d'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+                avg_contrast = sum(v['contrast'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
 
                 # Aggregate per-dimension L1 losses (average across scenarios)
                 per_dim_l1_list = [v['per_dim_l1'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1'] is not None]
@@ -1570,7 +1548,7 @@ class DensityInvariantTrainer(TrainerBase):
                         'total_loss': [],
                         'l1_loss': [],
                         'cos_loss': [],
-                        'rendered2d_loss': [],
+                        'contrast_loss': [],
                         'per_dim_l1': [],  # List of tensors, each [D]
                         'per_dim_l1_weights': [],  # List of tensors, each [D]
                         'iterations': [],
@@ -1582,8 +1560,8 @@ class DensityInvariantTrainer(TrainerBase):
                     self.per_scene_losses[scene_name]['per_dim_l1'] = []
                 if 'per_dim_l1_weights' not in self.per_scene_losses[scene_name]:
                     self.per_scene_losses[scene_name]['per_dim_l1_weights'] = []
-                if 'rendered2d_loss' not in self.per_scene_losses[scene_name]:
-                    self.per_scene_losses[scene_name]['rendered2d_loss'] = []
+                if 'contrast_loss' not in self.per_scene_losses[scene_name]:
+                    self.per_scene_losses[scene_name]['contrast_loss'] = []
 
                 # Get the loss values for this iteration
                 if scene_name == real_scene_name:
@@ -1591,7 +1569,7 @@ class DensityInvariantTrainer(TrainerBase):
                     total_loss = avg_total
                     l1_loss = avg_l1
                     cos_loss = avg_cos
-                    rendered2d_loss = avg_rendered2d
+                    contrast_loss = avg_contrast
                     per_dim_l1 = avg_per_dim_l1
                     per_dim_l1_weights = avg_per_dim_l1_weights
                 else:
@@ -1600,7 +1578,7 @@ class DensityInvariantTrainer(TrainerBase):
                         total_loss = self.per_scene_losses[scene_name]['total_loss'][-1]
                         l1_loss = self.per_scene_losses[scene_name]['l1_loss'][-1]
                         cos_loss = self.per_scene_losses[scene_name]['cos_loss'][-1]
-                        rendered2d_loss = self.per_scene_losses[scene_name]['rendered2d_loss'][-1] if self.per_scene_losses[scene_name]['rendered2d_loss'] else 0.0
+                        contrast_loss = self.per_scene_losses[scene_name]['contrast_loss'][-1] if self.per_scene_losses[scene_name]['contrast_loss'] else 0.0
                         per_dim_l1 = self.per_scene_losses[scene_name]['per_dim_l1'][-1] if self.per_scene_losses[scene_name]['per_dim_l1'] else None
                         per_dim_l1_weights = self.per_scene_losses[scene_name]['per_dim_l1_weights'][-1] if self.per_scene_losses[scene_name]['per_dim_l1_weights'] else None
                     else:
@@ -1608,7 +1586,7 @@ class DensityInvariantTrainer(TrainerBase):
                         total_loss = 0.0
                         l1_loss = 0.0
                         cos_loss = 0.0
-                        rendered2d_loss = 0.0
+                        contrast_loss = 0.0
                         per_dim_l1 = None
                         per_dim_l1_weights = None
 
@@ -1616,7 +1594,7 @@ class DensityInvariantTrainer(TrainerBase):
                 self.per_scene_losses[scene_name]['total_loss'].append(total_loss)
                 self.per_scene_losses[scene_name]['l1_loss'].append(l1_loss)
                 self.per_scene_losses[scene_name]['cos_loss'].append(cos_loss)
-                self.per_scene_losses[scene_name]['rendered2d_loss'].append(rendered2d_loss)
+                self.per_scene_losses[scene_name]['contrast_loss'].append(contrast_loss)
                 self.per_scene_losses[scene_name]['per_dim_l1'].append(per_dim_l1)
                 self.per_scene_losses[scene_name]['per_dim_l1_weights'].append(per_dim_l1_weights)
                 self.per_scene_losses[scene_name]['iterations'].append(true_global_iter)

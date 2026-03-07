@@ -12,8 +12,14 @@ import sys
 import os
 from pathlib import Path
 
-# Add tools directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from ... import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add project root to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import pyrpca
 try:
@@ -23,8 +29,8 @@ except ImportError:
     PYRPCA_AVAILABLE = False
     print("WARNING: pyrpca not available. Install with: pip install pyrpca")
 
-# Import our implementations
-from rpca_utils import RPCA_CPU
+# Import our implementations using absolute import
+from tools.compression.rpca_utils import RPCA_CPU
 
 
 def create_test_matrix(m: int = 100, n: int = 50, rank: int = 5,

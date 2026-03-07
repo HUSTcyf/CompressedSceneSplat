@@ -9,7 +9,6 @@ __pycache__
 exp
 exp_runs
 weights
-data
 log
 logs/
 *.log

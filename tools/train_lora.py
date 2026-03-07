@@ -30,8 +30,10 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
+# Add project root to sys.path and import PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from pointcept.models.utils.lora import (
     LoRALinear,

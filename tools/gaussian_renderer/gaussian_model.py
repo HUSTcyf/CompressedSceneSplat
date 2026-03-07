@@ -17,11 +17,11 @@ import os
 import json
 
 from plyfile import PlyData, PlyElement
-from utils.sh_utils import RGB2SH
-from utils.system_utils import mkdir_p
-from utils.graphics_utils import BasicPointCloud
-from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
-from utils.general_utils import strip_symmetric, build_scaling_rotation
+from tools.utils.sh_utils import RGB2SH
+from tools.utils.system_utils import mkdir_p
+from tools.utils.graphics_utils import BasicPointCloud
+from tools.utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from tools.utils.general_utils import strip_symmetric, build_scaling_rotation
 
 class GaussianModel:
 

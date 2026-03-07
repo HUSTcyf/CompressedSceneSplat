@@ -15,10 +15,14 @@ import torch.nn.functional as F
 from pathlib import Path
 import sys
 
-# Add tools directory to path
-_tools_path = str(Path(__file__).resolve().parent / "tools")
-if _tools_path not in sys.path:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 from compute_procrustes_alignment_simple import compute_procrustes_Q_cuda_with_labels
 

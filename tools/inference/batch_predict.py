@@ -58,6 +58,7 @@ Usage:
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
@@ -66,10 +67,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-# Add project root to Python path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-import sys
-sys.path.insert(0, str(PROJECT_ROOT))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 from pointcept.datasets.transform import Compose, TRANSFORMS
 from pointcept.models import build_model

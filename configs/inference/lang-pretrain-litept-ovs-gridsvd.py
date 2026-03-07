@@ -4,8 +4,6 @@
 # SVD rank (must match training)
 FD = 16  # Feature dimension
 svd_rank = 16
-FD = 8
-svd_rank = 8
 
 # Model configuration (MUST match training exactly)
 model = dict(

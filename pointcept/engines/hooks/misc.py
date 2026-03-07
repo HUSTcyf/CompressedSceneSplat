@@ -763,7 +763,7 @@ class PerSceneLossVisualizer(HookBase):
                 'total_loss': list(new_loss_data['total_loss']),
                 'l1_loss': list(new_loss_data.get('l1_loss', [])),
                 'cos_loss': list(new_loss_data.get('cos_loss', [])),
-                'rendered2d_loss': list(new_loss_data.get('rendered2d_loss', [])),
+                'contrast_loss': list(new_loss_data.get('contrast_loss', [])),
                 'iterations': list(new_loss_data['iterations']),  # Already global!
                 'epochs': list(new_loss_data['epochs']),  # Already set by trainer!
             }
@@ -781,8 +781,8 @@ class PerSceneLossVisualizer(HookBase):
                         accumulated['l1_loss'].append(new_loss_data['l1_loss'][i])
                     if new_loss_data.get('cos_loss'):
                         accumulated['cos_loss'].append(new_loss_data['cos_loss'][i])
-                    if new_loss_data.get('rendered2d_loss'):
-                        accumulated['rendered2d_loss'].append(new_loss_data['rendered2d_loss'][i])
+                    if new_loss_data.get('contrast_loss'):
+                        accumulated['contrast_loss'].append(new_loss_data['contrast_loss'][i])
                     existing_iters.add(global_iter)
 
     def after_epoch(self):
@@ -821,19 +821,20 @@ class PerSceneLossVisualizer(HookBase):
             self._generate_plots("final")
 
     def _verify_loss_data_consistency(self):
-        """Verify that loss data is consistent: Total should equal L1 + Cos (approximately)."""
+        """Verify that loss data is consistent: Total should equal L1 + Cos + Contrast (approximately)."""
         import numpy as np
 
         for scene_name, loss_data in self._accumulated_losses.items():
             total = np.array(loss_data['total_loss'])
             l1 = np.array(loss_data.get('l1_loss', []))
             cos = np.array(loss_data.get('cos_loss', []))
+            contrast = np.array(loss_data.get('contrast_loss', []))
 
-            if len(l1) > 0 and len(cos) > 0:
+            if len(l1) > 0 and len(cos) > 0 and len(contrast) > 0:
                 # Check consistency for first 10 points
                 inconsistent_count = 0
                 for i in range(min(10, len(total))):
-                    expected = l1[i] + cos[i]
+                    expected = l1[i] + cos[i] + contrast[i]
                     actual = total[i]
                     if abs(expected - actual) > 0.01 and actual > 0:  # Allow small numerical errors
                         inconsistent_count += 1
@@ -841,16 +842,17 @@ class PerSceneLossVisualizer(HookBase):
                 if inconsistent_count > 0:
                     self.trainer.logger.warning(
                         f"[PerSceneLossVisualizer] Scene '{scene_name}': "
-                        f"{inconsistent_count}/10 data points have Total != L1 + Cos"
+                        f"{inconsistent_count}/10 data points have Total != L1 + Cos + Contrast"
                     )
-                    # Print first 5 points for debugging
+                    # Print first 5 points for debugging - all on same line as requested
                     for i in range(min(5, len(total))):
-                        expected = l1[i] + cos[i] if i < len(l1) and i < len(cos) else None
-                        if expected is not None:
+                        if i < len(l1) and i < len(cos) and i < len(contrast):
+                            expected = l1[i] + cos[i] + contrast[i]
+                            actual = total[i]
                             self.trainer.logger.info(
-                                f"  Point {i}: Total={total[i]:.6f}, L1={l1[i]:.6f}, "
-                                f"Cos={cos[i]:.6f}, L1+Cos={expected:.6f}, "
-                                f"Diff={expected-total[i]:.6f}"
+                                f"  Point {i}: Total={actual:.6f}, L1={l1[i]:.6f}, "
+                                f"Cos={cos[i]:.6f}, Contrast={contrast[i]:.6f}, "
+                                f"L1+Cos+Contrast={expected:.6f}, Diff={expected-actual:.6f}"
                             )
 
     def _generate_plots(self, suffix):
@@ -903,7 +905,7 @@ class PerSceneLossVisualizer(HookBase):
                     'total_loss': [loss_data['total_loss'][-1]],
                     'l1_loss': [loss_data['l1_loss'][-1]],
                     'cos_loss': [loss_data['cos_loss'][-1]],
-                    'rendered2d_loss': [loss_data.get('rendered2d_loss', [0.0])[-1]] if loss_data.get('rendered2d_loss') else [0.0],
+                    'contrast_loss': [loss_data.get('contrast_loss', [0.0])[-1]] if loss_data.get('contrast_loss') else [0.0],
                     'iterations': [loss_data['iterations'][-1]],
                     'epochs': [loss_data['epochs'][-1]],
                 }
@@ -983,8 +985,8 @@ class PerSceneLossVisualizer(HookBase):
                        loss_data['per_dim_l1'] and
                        loss_data['per_dim_l1'][0] is not None)
 
-        # Check if rendered2d_loss is available
-        has_rendered2d = 'rendered2d_loss' in loss_data and loss_data['rendered2d_loss']
+        # Check if contrast_loss is available
+        has_contrast = 'contrast_loss' in loss_data and loss_data['contrast_loss']
 
         # Create figure with subplots (5 rows if per-dim data available, otherwise 4)
         n_rows = 5 if has_per_dim else 4
@@ -1032,20 +1034,20 @@ class PerSceneLossVisualizer(HookBase):
         ax.grid(True, alpha=0.3)
         ax.set_title('Cosine Loss over Training', fontsize=12)
 
-        # Plot 4: Rendered2D Loss (if available)
+        # Plot 4: Contrastive Loss (if available)
         ax = axes[3]
-        if has_rendered2d:
-            rendered2d_loss = np.concatenate([[0], np.array(loss_data['rendered2d_loss'])])
-            ax.plot(iterations, rendered2d_loss, 'c-', linewidth=1, alpha=0.7, label='Rendered2D Loss')
-            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        if has_contrast:
+            contrast_loss = np.concatenate([[0], np.array(loss_data['contrast_loss'])])
+            ax.plot(iterations, contrast_loss, 'c-', linewidth=1, alpha=0.7, label='Contrastive Loss')
+            ax.set_ylabel('Contrastive Loss', fontsize=11)
         else:
-            ax.text(0.5, 0.5, 'Rendered2D Loss data not available',
+            ax.text(0.5, 0.5, 'Contrastive Loss data not available',
                    ha='center', va='center', transform=ax.transAxes)
-            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+            ax.set_ylabel('Contrastive Loss', fontsize=11)
         ax.set_xlabel('Iteration', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_title('Rendered2D Loss over Training', fontsize=12)
+        ax.set_title('Contrastive Loss over Training', fontsize=12)
 
         # Plot 5: Per-Dimension L1 Loss (if available)
         if has_per_dim:
@@ -1129,6 +1131,8 @@ class PerSceneLossVisualizer(HookBase):
                 json_data['l1_loss'] = [float(x) for x in loss_data['l1_loss']]
             if loss_data['cos_loss']:
                 json_data['cos_loss'] = [float(x) for x in loss_data['cos_loss']]
+            if loss_data.get('contrast_loss'):
+                json_data['contrast_loss'] = [float(x) for x in loss_data['contrast_loss']]
 
             # Save per-dimension loss data if available
             if 'per_dim_l1' in loss_data and loss_data['per_dim_l1']:
@@ -1182,8 +1186,8 @@ class PerSceneLossVisualizer(HookBase):
                 scene_losses[scene_name]['l1_loss'] = np.array(loss_data['l1_loss'])
             if loss_data.get('cos_loss'):
                 scene_losses[scene_name]['cos_loss'] = np.array(loss_data['cos_loss'])
-            if loss_data.get('rendered2d_loss'):
-                scene_losses[scene_name]['rendered2d_loss'] = np.array(loss_data['rendered2d_loss'])
+            if loss_data.get('contrast_loss'):
+                scene_losses[scene_name]['contrast_loss'] = np.array(loss_data['contrast_loss'])
 
         # Interpolate losses for all scenes at common iteration points
         # Use iteration 0 as the starting point (loss = 0)
@@ -1191,13 +1195,13 @@ class PerSceneLossVisualizer(HookBase):
         avg_total_loss = []
         avg_l1_loss = []
         avg_cos_loss = []
-        avg_rendered2d_loss = []
+        avg_contrast_loss = []
 
         for iter_val in interp_iterations:
             total_losses_at_iter = []
             l1_losses_at_iter = []
             cos_losses_at_iter = []
-            rendered2d_losses_at_iter = []
+            contrast_losses_at_iter = []
 
             for scene_name, scene_data in scene_losses.items():
                 iter_idx = np.searchsorted(scene_data['iterations'], iter_val)
@@ -1253,35 +1257,35 @@ class PerSceneLossVisualizer(HookBase):
                             loss = (1 - t) * cos_loss[iter_idx - 1] + t * cos_loss[iter_idx]
                     cos_losses_at_iter.append(loss)
 
-                # Same for Rendered2D loss
-                if 'rendered2d_loss' in scene_data:
-                    rendered2d_loss = scene_data['rendered2d_loss']
+                # Same for Contrastive loss
+                if 'contrast_loss' in scene_data:
+                    contrast_loss = scene_data['contrast_loss']
                     if iter_idx == 0:
                         loss = 0
-                    elif iter_idx >= len(rendered2d_loss):
-                        loss = rendered2d_loss[-1]
+                    elif iter_idx >= len(contrast_loss):
+                        loss = contrast_loss[-1]
                     else:
                         iter_prev = scene_data['iterations'][iter_idx - 1]
                         iter_next = scene_data['iterations'][iter_idx]
                         if iter_next == iter_prev:
-                            loss = rendered2d_loss[iter_idx - 1]
+                            loss = contrast_loss[iter_idx - 1]
                         else:
                             t = (iter_val - iter_prev) / (iter_next - iter_prev)
-                            loss = (1 - t) * rendered2d_loss[iter_idx - 1] + t * rendered2d_loss[iter_idx]
-                    rendered2d_losses_at_iter.append(loss)
+                            loss = (1 - t) * contrast_loss[iter_idx - 1] + t * contrast_loss[iter_idx]
+                    contrast_losses_at_iter.append(loss)
 
             avg_total_loss.append(np.mean(total_losses_at_iter))
             if l1_losses_at_iter:
                 avg_l1_loss.append(np.mean(l1_losses_at_iter))
             if cos_losses_at_iter:
                 avg_cos_loss.append(np.mean(cos_losses_at_iter))
-            if rendered2d_losses_at_iter:
-                avg_rendered2d_loss.append(np.mean(rendered2d_losses_at_iter))
+            if contrast_losses_at_iter:
+                avg_contrast_loss.append(np.mean(contrast_losses_at_iter))
 
         avg_total_loss = np.array(avg_total_loss)
         avg_l1_loss = np.array(avg_l1_loss) if avg_l1_loss else None
         avg_cos_loss = np.array(avg_cos_loss) if avg_cos_loss else None
-        avg_rendered2d_loss = np.array(avg_rendered2d_loss) if avg_rendered2d_loss else None
+        avg_contrast_loss = np.array(avg_contrast_loss) if avg_contrast_loss else None
 
         # Get max epoch info
         max_epoch = 0
@@ -1332,19 +1336,19 @@ class PerSceneLossVisualizer(HookBase):
         ax.grid(True, alpha=0.3)
         ax.set_title('Average Cosine Loss over Training', fontsize=12, fontweight='bold')
 
-        # Plot 4: Rendered2D Loss (if available)
+        # Plot 4: Contrastive Loss (if available)
         ax = axes[3]
-        if avg_rendered2d_loss is not None:
-            ax.plot(interp_iterations, avg_rendered2d_loss, 'c-', linewidth=2, alpha=0.8, label=f'Average Rendered2D Loss (N={len(plot_data)})')
-            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+        if avg_contrast_loss is not None:
+            ax.plot(interp_iterations, avg_contrast_loss, 'c-', linewidth=2, alpha=0.8, label=f'Average Contrastive Loss (N={len(plot_data)})')
+            ax.set_ylabel('Contrastive Loss', fontsize=11)
         else:
-            ax.text(0.5, 0.5, 'Rendered2D Loss data not available',
+            ax.text(0.5, 0.5, 'Contrastive Loss data not available',
                    ha='center', va='center', transform=ax.transAxes)
-            ax.set_ylabel('Rendered2D Loss', fontsize=11)
+            ax.set_ylabel('Contrastive Loss', fontsize=11)
         ax.set_xlabel('Iteration', fontsize=10)
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.set_title('Average Rendered2D Loss over Training', fontsize=12, fontweight='bold')
+        ax.set_title('Average Contrastive Loss over Training', fontsize=12, fontweight='bold')
 
         # Add statistics text box
         stats_text = f"Average Statistics:\n"
@@ -1352,8 +1356,8 @@ class PerSceneLossVisualizer(HookBase):
         stats_text += f"  Min Total Loss: {avg_total_loss.min():.4f}\n"
         stats_text += f"  Max Total Loss: {avg_total_loss.max():.4f}\n"
         stats_text += f"  Final Total Loss: {avg_total_loss[-1]:.4f}\n"
-        if avg_rendered2d_loss is not None:
-            stats_text += f"  Final Rendered2D Loss: {avg_rendered2d_loss[-1]:.4f}\n"
+        if avg_contrast_loss is not None:
+            stats_text += f"  Final Contrastive Loss: {avg_contrast_loss[-1]:.4f}\n"
         stats_text += f"  Total Iterations: {len(interp_iterations)}"
 
         fig.text(0.02, 0.5, stats_text, fontsize=9, verticalalignment='center',

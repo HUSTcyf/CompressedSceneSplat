@@ -27,8 +27,14 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict
 import gc
 
-# Add tools directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import RPCA utilities
 from rpca_utils import RPCA_CPU, RPCA_GPU, StructuredRPCA_GPU, CUDA_AVAILABLE, RPCA_CPU_AVAILABLE

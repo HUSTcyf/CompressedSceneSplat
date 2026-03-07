@@ -31,14 +31,21 @@ import numpy as np
 from pathlib import Path
 from typing import Tuple, Dict
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add project root to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 from pointcept.datasets import build_dataset
 from pointcept.models import build_model
 from pointcept.utils.config import Config
 from pointcept.utils.logger import get_root_logger
 
-# Import SVD and Procrustes functions from compute_procrustes_alignment_simple.py
+# Import SVD and Procrustes functions using absolute import
 from tools.compute_procrustes_alignment_simple import (
     perform_svd_reduction,
     compute_procrustes_Q,

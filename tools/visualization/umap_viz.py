@@ -26,8 +26,14 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Patch
 from matplotlib.colors import ListedColormap
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Import PROJECT_ROOT - handle both script and module execution
+try:
+    from .. import PROJECT_ROOT  # Relative import when run as module
+except ImportError:
+    # Fallback when run as script: add parent dir to sys.path
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
 # Try to import GPU-accelerated UMAP (RAPIDS cuML)
 CUML_AVAILABLE = False

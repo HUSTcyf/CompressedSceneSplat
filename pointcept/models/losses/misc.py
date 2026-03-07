@@ -78,7 +78,8 @@ class L1Loss(nn.Module):
             # Sum the loss over all valid samples
             loss = loss.sum()
 
-        print("l1 loss:", self.loss_weight * loss.item())
+        # Print disabled - now handled by Criteria builder for consolidated output
+        # print("l1 loss:", self.loss_weight * loss.item())
         return self.loss_weight * loss
 
 
@@ -240,7 +241,8 @@ class WeightedL1Loss(nn.Module):
         elif self.reduction == "sum":
             loss = loss.sum()
 
-        print(f"weighted l1 loss: {self.loss_weight * loss.item():.6f}, weights: [{dim_weights.min().item():.2f}, {dim_weights.max().item():.2f}]")
+        # Print disabled - now handled by Criteria builder for consolidated output
+        # print(f"weighted l1 loss: {self.loss_weight * loss.item():.6f}, weights: [{dim_weights.min().item():.2f}, {dim_weights.max().item():.2f}]")
         return self.loss_weight * loss
 
 
@@ -509,7 +511,8 @@ class CosineSimilarity(nn.Module):
         elif self.reduction == "sum":
             loss = loss.sum()
 
-        print("cosine loss:", self.loss_weight * loss.item())
+        # Print disabled - now handled by Criteria builder for consolidated output
+        # print("cosine loss:", self.loss_weight * loss.item())
         return self.loss_weight * loss
 
 
@@ -839,15 +842,16 @@ class SVDWeightedL1Loss(nn.Module):
 
         weighted_loss = self.loss_weight * loss
 
-        # Print with strategy info and variance statistics
-        if self.weight_strategy == "variance" and self.dim_variance is not None:
-            var_stats = self.dim_variance.detach().cpu().numpy()
-            print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
-                  f"weight_range=[{weights.min():.3f}, {weights.max():.3f}], "
-                  f"variance_range=[{var_stats.min():.6f}, {var_stats.max():.6f}]")
-        else:
-            print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
-                  f"weight_range=[{weights.min():.3f}, {weights.max():.3f}]")
+        # Print disabled - now handled by Criteria builder for consolidated output
+        # # Print with strategy info and variance statistics
+        # if self.weight_strategy == "variance" and self.dim_variance is not None:
+        #     var_stats = self.dim_variance.detach().cpu().numpy()
+        #     print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
+        #           f"weight_range=[{weights.min():.3f}, {weights.max():.3f}], "
+        #           f"variance_range=[{var_stats.min():.6f}, {var_stats.max():.6f}]")
+        # else:
+        #     print(f"svd_weighted_l1 ({strategy_str}): loss={weighted_loss.item():.6f}, "
+        #           f"weight_range=[{weights.min():.3f}, {weights.max():.3f}]")
 
         if return_per_dim:
             # Return tuple (loss, dict) for compatibility with verbose_losses
