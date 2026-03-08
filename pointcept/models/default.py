@@ -82,6 +82,9 @@ class LangPretrainer(nn.Module):
         criteria=None,
         verbose_losses=False,
         dim_scale_dim=None,  # Dimension for dim_scale parameter (default: 16 for SVD-r16)
+        norm_range_min=-1.0,  # Min value for output normalization range
+        norm_range_max=1.0,  # Max value for output normalization range
+        enable_normalize=True,  # Whether to normalize output to [norm_range_min, norm_range_max]
     ):
         super().__init__()
         self.backbone = build_model(backbone)
@@ -95,6 +98,11 @@ class LangPretrainer(nn.Module):
             dim_scale_dim = 16  # Default for SVD-r16 models
         dim_scale_init = torch.ones(dim_scale_dim)
         self.dim_scale = nn.Parameter(dim_scale_init)
+
+        # Normalization settings
+        self.norm_range_min = norm_range_min
+        self.norm_range_max = norm_range_max
+        self.enable_normalize = enable_normalize
 
     def forward(self, input_dict, chunk_size=None):
         if (
@@ -111,6 +119,10 @@ class LangPretrainer(nn.Module):
         if feat.shape[-1] == self.dim_scale.shape[-1]:
             feat = feat * self.dim_scale
         # else: skip scaling for non-SVD models (e.g., PT-v3m1 with 768-dim output)
+
+        # Apply tanh activation to constrain output to [-1, 1] range
+        # This replaces the min-max normalization with a learnable activation
+        feat = torch.tanh(feat)
 
         point_feat["feat"] = feat
 
@@ -167,6 +179,10 @@ class LangPretrainer(nn.Module):
             if chunk_point_feat["feat"].shape[-1] == self.dim_scale.shape[-1]:
                 chunk_point_feat["feat"] = chunk_point_feat["feat"] * self.dim_scale
             # else: skip scaling for non-SVD models (e.g., PT-v3m1 with 768-dim output)
+
+            # Apply tanh activation to constrain output to [-1, 1] range
+            # This replaces the min-max normalization with a learnable activation
+            chunk_point_feat["feat"] = torch.tanh(chunk_point_feat["feat"])
 
             if is_training:
                 # Pass coord, Gaussian parameters, and scene_path for Rendered2DLoss

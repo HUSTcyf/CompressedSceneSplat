@@ -1761,6 +1761,17 @@ class Rendered2DLoss(nn.Module):
                 # Get GT render as tensor
                 gt_tensor = torch.from_numpy(gt_data).to(device)  # [H, W, D]
 
+                # Normalize GT features to [-1, 1] range (per-pixel normalization)
+                # Each pixel's D-dimensional feature vector is normalized independently
+                gt_min = gt_tensor.min(dim=-1, keepdim=True).values  # [H, W, 1]
+                gt_max = gt_tensor.max(dim=-1, keepdim=True).values  # [H, W, 1]
+                gt_range = gt_max - gt_min
+                # Raise error if range is zero for any pixel
+                if (gt_range <= 0).any():
+                    raise ValueError(f"GT feature range is zero or negative for some pixels. Min range: {gt_range.min().item()}")
+                # Normalize to [0, 1] then scale to [-1, 1]
+                gt_tensor = 2 * (gt_tensor - gt_min) / gt_range - 1
+
                 # Create mask for valid pixels (where alpha > 0)
                 valid_pixel_mask = render_alphas[0, ..., 0] > 0.01  # [H, W]
 

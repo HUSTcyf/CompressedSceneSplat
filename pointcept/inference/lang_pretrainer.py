@@ -172,6 +172,8 @@ class LangPretrainerInference:
         if torch.any(valid):
             feature_acc[valid] = feature_acc[valid] / feature_count[valid].unsqueeze(1)
 
+        # No need for additional normalization - model output is already in [-1, 1] due to tanh activation
+
         inverse_map = prepared.get("inverse")
         if inverse_map is not None:
             inverse_tensor = torch.as_tensor(

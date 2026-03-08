@@ -221,13 +221,15 @@ epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
 # Optimizer settings with mode-collapse prevention
 # ============================================================================
 # Base optimizer configuration
-optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
+# INCREASED lr by 10x: 0.001 -> 0.01 to address slow convergence
+optimizer = dict(type="AdamW", lr=0.01, weight_decay=0.05)
 
 # Scheduler configuration
 scheduler = dict(
     type="OneCycleLR",
     # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dim_scale, dec0, dec0.mlp, dec0.fc]
-    max_lr=[0.001, 0.001, 0.0001, 0.001, 0.00005, 0.00004, 0.00004],
+    # INCREASED all values by 10x to address decoder learning rate being too low
+    max_lr=[0.01, 0.01, 0.001, 0.01, 0.0005, 0.0004, 0.0004],
     pct_start=0.1,
     anneal_strategy="cos",
     div_factor=10.0,
@@ -254,34 +256,40 @@ scheduler = dict(
 #   backbone.dec.dec{s}.block{i}.mlp.{j}.fc{k}.{weight|bias}
 #   where: s=stage (3,2,1,0), i=block_index (0,1), j=mlp_index (0), k=fc_layer (1,2)
 #   Problematic layers: dec0.block1.mlp.0.fc1, dec0.block1.mlp.0.fc2
+#
+# UPDATED: All learning rates increased by 10x to fix slow convergence
 # ============================================================================
 param_dicts = [
     # Group 1: Encoder transformer blocks
     # Keep original learning rate for encoder (features extraction is stable)
-    dict(keyword="enc.block", lr=0.001, weight_decay=0.05),
+    # INCREASED: 0.001 -> 0.01
+    dict(keyword="enc.block", lr=0.01, weight_decay=0.05),
 
     # Group 2: Decoder transformer blocks (higher stages: dec3, dec2, dec1)
-    # Reduced learning rate for decoder blocks to prevent collapse
-    dict(keyword="dec.block", lr=0.0001, weight_decay=0.05),
+    # INCREASED: 0.0001 -> 0.001
+    dict(keyword="dec.block", lr=0.001, weight_decay=0.05),
 
     # Group 3: Dimension-wise scaling (for SVD feature magnitude compensation)
-    dict(keyword="dim_scale", lr=0.001, weight_decay=0.05),
+    # INCREASED: 0.001 -> 0.01
+    dict(keyword="dim_scale", lr=0.01, weight_decay=0.05),
 
     # Group 4: Final decoder stage (dec4/s=0 in code, outputs 16-dim features)
     # This is the bottleneck stage with extreme gradient amplification
     # Channels: 126→64→32→16, causing 8× gradient amplification
+    # INCREASED: 0.00005 -> 0.0005 (10×, still 50× lower than encoder for stability)
     dict(
         keyword="dec0",  # Matches all layers in final decoder stage (s=0)
-        lr=0.00005,  # 95% lower than encoder block lr
+        lr=0.0005,  # 50× lower than encoder block lr (was 200× lower)
         weight_decay=0.15,  # 3× higher weight decay for regularization
     ),
 
     # Group 5: dec0.block1 MLP (specific problematic layer)
     # The MLP with mlp_ratio=2 on 16-dim features: 16→32→16 (reduced from 16→64→16)
     # Lower expansion ratio reduces gradient amplification while maintaining capacity
+    # INCREASED: 0.00004 -> 0.0004 (10×)
     dict(
         keyword="dec0.block1.mlp",
-        lr=0.00004,  # 96% lower than encoder block lr
+        lr=0.0004,  # 25× lower than encoder block lr (was 25× lower)
         weight_decay=0.2,  # 4× higher weight decay
     ),
 
@@ -289,9 +297,10 @@ param_dicts = [
     # These are the layers where weight explosion was observed (L2 norm max=6.87)
     # fc1: [32,16], fc2: [16,32] - gradient amplification reduced due to lower mlp_ratio
     # Using same lr as Group 5 (dec0.mlp) for consistent training
+    # INCREASED: 0.00004 -> 0.0004 (10×)
     dict(
         keyword="dec0.block1.mlp.0.fc",
-        lr=0.00004,  # Same as dec0.mlp for consistent training
+        lr=0.0004,  # Same as dec0.mlp for consistent training
         weight_decay=0.3,  # 6× higher weight decay for strongest regularization
     ),
 ]
