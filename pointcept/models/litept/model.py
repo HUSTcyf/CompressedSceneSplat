@@ -595,6 +595,8 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        pdnorm_ln=False,  # Use LayerNorm for decoder upsampling layers (fixes BatchNorm explosion)
+        pdnorm_bn=True,   # Use BatchNorm for decoder upsampling layers (default, may explode)
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -620,6 +622,14 @@ class LitePT(PointModule):
         bn_layer = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
         ln_layer = nn.LayerNorm
         act_layer = nn.GELU
+
+        # Choose norm layer for decoder upsampling layers based on pdnorm_ln/pdnorm_bn
+        # pdnorm_ln=True: Use LayerNorm (prevents BatchNorm explosion in decoder)
+        # pdnorm_bn=True: Use BatchNorm (default, may cause running_var explosion)
+        if pdnorm_ln:
+            dec_norm_layer = ln_layer
+        else:
+            dec_norm_layer = bn_layer
 
         self.embedding = Embedding(
             in_channels=in_channels,
@@ -695,7 +705,7 @@ class LitePT(PointModule):
                         in_channels=dec_channels[s + 1],
                         skip_channels=enc_channels[s],
                         out_channels=dec_channels[s],
-                        norm_layer=bn_layer,
+                        norm_layer=dec_norm_layer,  # Use LayerNorm if pdnorm_ln=True, else BatchNorm
                         act_layer=act_layer,
                     ),
                     name="up",

@@ -735,7 +735,10 @@ class DensityInvariantTrainer(TrainerBase):
         # Base configuration
         self.epoch = 0
         self.start_epoch = 0
-        self.max_epoch = cfg.eval_epoch
+        # CRITICAL FIX: Use cfg.epoch for max_epoch, NOT cfg.eval_epoch
+        # eval_epoch is for evaluation frequency (e.g., every 20 epochs)
+        # epoch is the total number of training epochs (e.g., 200)
+        self.max_epoch = cfg.epoch
         self.best_metric_value = -torch.inf
 
         # Logger
@@ -763,6 +766,25 @@ class DensityInvariantTrainer(TrainerBase):
         self.use_compressed_features = self.density_config.get('use_compressed_features', True)
         self.svd_rank = self.density_config.get('svd_rank', None)  # SVD compression rank to load
         self.batched_forward = self.density_config.get('batched_forward', True)  # NEW: batched or separate forward
+
+        # Per-dimension correlation monitoring
+        self.enable_per_dim_monitor = cfg.get('enable_per_dim_monitor', True)
+        self.per_dim_log_freq = cfg.get('per_dim_log_freq', 100)
+        self.per_dim_monitor = None
+
+        if self.enable_per_dim_monitor and self.rank == 0:  # Only on main process
+            from pointcept.utils.per_dim_monitor import PerDimMonitor
+            self.per_dim_monitor = PerDimMonitor(
+                num_dims=self.svd_rank if self.svd_rank else 16,
+                log_freq=self.per_dim_log_freq,
+                target_dim0_corr=cfg.get('target_dim0_corr', 0.90),
+                target_minor_corr=cfg.get('target_minor_corr', 0.30),
+                warmup_iters=cfg.get('per_dim_warmup_iters', 200),
+            )
+            self.logger.info("=> Per-Dimension Monitoring enabled:")
+            self.logger.info(f"   Log frequency: every {self.per_dim_log_freq} iterations")
+            self.logger.info(f"   Target Dim 0 correlation: {cfg.get('target_dim0_corr', 0.90)}")
+            self.logger.info(f"   Target Minor correlation: {cfg.get('target_minor_corr', 0.30)}")
 
         self.logger.info("=> Density-Invariant Training Configuration:")
         self.logger.info(f"   Rank: {self.rank}/{self.world_size}")
@@ -1268,6 +1290,66 @@ class DensityInvariantTrainer(TrainerBase):
                 print(f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}")
                 assert False, "Input feat contains NaN/Inf! Check data loading."
 
+            # ========================================
+            # Decoder Layer Monitoring Setup (register hooks BEFORE forward pass)
+            # ========================================
+            decoder_layer_outputs = {}
+            decoder_hooks = []
+
+            def create_debug_hook(layer_name):
+                def hook(module, input, output):
+                    # Store output statistics
+                    if isinstance(output, torch.Tensor):
+                        output_data = output
+                    elif isinstance(output, tuple) and len(output) > 0:
+                        output_data = output[0]
+                    else:
+                        return
+
+                    with torch.no_grad():
+                        output_np = output_data.detach().cpu()
+                        decoder_layer_outputs[layer_name] = {
+                            'shape': list(output_data.shape),
+                            'has_nan': torch.isnan(output_data).any().item(),
+                            'has_inf': torch.isinf(output_data).any().item(),
+                            'min': output_np.min().item(),
+                            'max': output_np.max().item(),
+                            'mean': output_np.mean().item(),
+                            'std': output_np.std().item(),
+                            'abs_mean': output_np.abs().mean().item(),
+                            'abs_max': output_np.abs().max().item(),
+                            'num_zeros': (output_np == 0).sum().item(),
+                            'num_elements': output_np.numel(),
+                        }
+                return hook
+            return create_debug_hook
+
+            # Register hooks for all decoder layers BEFORE forward pass
+            if hasattr(backbone, 'dec'):
+                decoder = backbone.dec
+                for dec_name in ['dec0', 'dec1', 'dec2', 'dec3']:
+                    if hasattr(decoder, dec_name):
+                        dec_layer = getattr(decoder, dec_name)
+                        # Hook for upsampling layers
+                        if hasattr(dec_layer, 'up'):
+                            hook = dec_layer.up.register_forward_hook(
+                                create_debug_hook(f'dec.{dec_name}.up')
+                            )
+                            decoder_hooks.append(hook)
+                        # Hook for skip connection layers
+                        if hasattr(dec_layer, 'up_skip'):
+                            hook = dec_layer.up_skip.register_forward_hook(
+                                create_debug_hook(f'dec.{dec_name}.up_skip')
+                            )
+                            decoder_hooks.append(hook)
+                        # Hook for block layers
+                        if hasattr(dec_layer, 'blocks'):
+                            for block_idx, block in enumerate(decoder.blocks):
+                                hook = block.register_forward_hook(
+                                    create_debug_hook(f'dec.{dec_name}.block{block_idx}')
+                                )
+                                decoder_hooks.append(hook)
+
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
                 from pointcept.models.utils.structure import Point
                 point = Point(batched_input)
@@ -1310,14 +1392,47 @@ class DensityInvariantTrainer(TrainerBase):
                     print("==== [MODEL COLLAPSE ANALYSIS - ITER 0] ====", flush=True)
                     print("="*80, flush=True)
 
-                    # Get decoder last layer bias
-                    if hasattr(self.model, 'module'):
-                        backbone = self.model.module.backbone
-                    else:
-                        backbone = self.model.backbone
+                    # Print collected decoder layer statistics
+                    print(f"\n[0] Decoder Layer Statistics ({len(decoder_layer_outputs)} layers monitored):", flush=True)
 
-                    # Try to find the decoder's final layer bias
-                    dec_bias = None
+                    # Sort layers by name for consistent output
+                    sorted_layers = sorted(decoder_layer_outputs.keys())
+
+                    for layer_name in sorted_layers:
+                        stats = decoder_layer_outputs[layer_name]
+                        status_icon = "✓"
+                        status_msg = "OK"
+
+                        # Check for anomalies
+                        if stats['has_nan']:
+                            status_icon = "🚨"
+                            status_msg = "NaN DETECTED!"
+                        elif stats['has_inf']:
+                            status_icon = "🚨"
+                            status_msg = "Inf DETECTED!"
+                        elif stats['abs_max'] > 1000:
+                            status_icon = "🚨"
+                            status_msg = f"EXTREME (max={stats['abs_max']:.2f})"
+                        elif stats['abs_max'] > 100:
+                            status_icon = "⚠️"
+                            status_msg = f"Large (max={stats['abs_max']:.2f})"
+                        elif stats['abs_mean'] < 1e-6:
+                            status_icon = "⚠️"
+                            status_msg = f"Near-zero (mean={stats['abs_mean']:.2e})"
+                        elif stats['num_zeros'] / stats['num_elements'] > 0.5:
+                            status_icon = "⚠️"
+                            status_msg = f"50% zeros ({stats['num_zeros']}/{stats['num_elements']})"
+
+                        print(f"    {status_icon} {layer_name:40s} {status_msg}", flush=True)
+                        if status_icon in ["🚨", "⚠️"]:
+                            print(f"       shape={stats['shape']}, min={stats['min']:.4f}, max={stats['max']:.4f}, "
+                                  f"mean={stats['mean']:.6f}, std={stats['std']:.6f}", flush=True)
+
+                    # Remove hooks after collecting data
+                    for hook in decoder_hooks:
+                        hook.remove()
+
+                    # Get decoder last layer bias
                     if hasattr(backbone, 'dec'):
                         decoder = backbone.dec
                         # Look for the final output layer (usually named 'out', 'cls', or is the last layer)
@@ -1335,68 +1450,35 @@ class DensityInvariantTrainer(TrainerBase):
                                     break
 
                     if dec_bias is not None:
-                        print(f"\n[0] Decoder last layer bias:", flush=True)
                         dec_bias_np = dec_bias.detach().cpu().numpy()
-                        for d in range(min(16, len(dec_bias_np))):
-                            print(f"    dim[{d}]: {dec_bias_np[d]:.6f}", flush=True)
+                        bias_max = abs(dec_bias_np).max()
+                        bias_mean = abs(dec_bias_np).mean()
+                        icon = "✓" if bias_max < 10 else "⚠️"
+                        print(f"\n[0.1] Decoder last layer bias: {icon} max={bias_max:.4f}, mean={bias_mean:.4f}", flush=True)
 
+                # Simplified backbone output info
                 if self.comm_info['iter'] == 0:
-                    print(f"\n[1] Backbone output (feat_before_scale):", flush=True)
-                    print(f"    shape: {feat_before_scale.shape}", flush=True)
-                    means = feat_before_scale.mean(dim=0).detach().cpu().numpy()
-                    stds = feat_before_scale.std(dim=0).detach().cpu().numpy()
-                    mins = feat_before_scale.min(dim=0)[0].detach().cpu().numpy()
-                    maxs = feat_before_scale.max(dim=0)[0].detach().cpu().numpy()
-                    for d in range(min(8, feat_before_scale.shape[1])):
-                        print(f"    dim[{d}]: mean={means[d]:.6f}, std={stds[d]:.6f}, min={mins[d]:.6f}, max={maxs[d]:.6f}", flush=True)
+                    print(f"\n[1] Backbone output shape: {feat_before_scale.shape}", flush=True)
 
                 # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
                 # The LangPretrainer wrapper applies tanh, but trainer bypasses it
                 # We MUST apply tanh here for consistency!
                 batched_features = torch.tanh(feat_before_scale)
 
+                # Simplified after tanh info
                 if self.comm_info['iter'] == 0:
-                    print(f"\n[2] After tanh (final pred features):", flush=True)
-                    means = batched_features.mean(dim=0).detach().cpu().numpy()
-                    stds = batched_features.std(dim=0).detach().cpu().numpy()
-                    mins = batched_features.min(dim=0)[0].detach().cpu().numpy()
-                    maxs = batched_features.max(dim=0)[0].detach().cpu().numpy()
-                    for d in range(min(8, batched_features.shape[1])):
-                        print(f"    dim[{d}]: mean={means[d]:.6f}, std={stds[d]:.6f}, min={mins[d]:.6f}, max={maxs[d]:.6f}", flush=True)
-
-                    # Check sample-to-sample correlation (detect mode collapse)
-                    N = batched_features.shape[0]
-                    if N > 1000:
-                        half = N // 2
-                        # Make sure both halves have same size
-                        first_half = batched_features[:half, 0].detach().cpu().numpy()
-                        second_half = batched_features[half:2*half, 0].detach().cpu().numpy()
-                        first_half_mean = first_half.mean()
-                        second_half_mean = second_half.mean()
-                        import numpy as np
-                        corr = np.corrcoef(first_half, second_half)[0, 1]
-                        print(f"\n[3] Sample correlation check (mode collapse detection):", flush=True)
-                        print(f"    First half mean: {first_half_mean:.6f} (n={len(first_half)})", flush=True)
-                        print(f"    Second half mean: {second_half_mean:.6f} (n={len(second_half)})", flush=True)
-                        print(f"    Correlation between halves: {corr:.6f}", flush=True)
-                        if corr > 0.99:
-                            print(f"    WARNING: Correlation > 0.99 indicates MODE COLLAPSE!", flush=True)
-
+                    print(f"\n[2] After tanh shape: {batched_features.shape}", flush=True)
                     print("="*80 + "\n", flush=True)
 
                 # NAN CHECK: Detect NaN after tanh
                 if torch.isnan(batched_features).any():
-                    print(f"\n🚨 NaN DETECTED AFTER TANH!")
-                    print(f"  feat_before_scale NaN: {torch.isnan(feat_before_scale).any().item()}")
-                    assert False, "Features contain NaN after tanh! Training stopped."
+                    raise AssertionError("🚨 NaN AFTER TANH! Check feat_before_scale.")
 
                 # STABILITY CHECK: Detect extreme values that might cause numerical instability
                 feat_max = batched_features.abs().max().item()
                 feat_mean = batched_features.abs().mean().item()
                 if feat_max > 1000.0 or feat_mean > 100.0:
-                    print(f"\n⚠️ WARNING: Extreme feature values detected!")
-                    print(f"  feat_max: {feat_max:.2f}, feat_mean: {feat_mean:.2f}")
-                    print(f"  This may lead to numerical instability or NaN in loss computation.")
+                    print(f"⚠️ WARNING: Extreme features (max={feat_max:.2f}, mean={feat_mean:.2f}) - may cause instability")
 
             # Clean up large intermediate tensors to free memory before loss computation
             del point, point_feat, batched_input
@@ -1427,8 +1509,7 @@ class DensityInvariantTrainer(TrainerBase):
                     valid_ratio = valid_mask.float().mean().item()
                     # Warn about low valid ratios
                     if valid_ratio < 0.5:
-                        print(f"\n⚠️ WARNING: Scenario {i} has low valid_feat_mask ratio: {valid_ratio:.2%}")
-                        print(f"  This may cause training instability!")
+                        print(f"⚠️ WARNING: Scenario {i} has low valid_feat_mask ratio: {valid_ratio:.2%} (may cause instability)")
                 else:
                     valid_mask = torch.ones(scenario_point_counts[i], dtype=torch.bool, device=device)
 
@@ -1446,9 +1527,7 @@ class DensityInvariantTrainer(TrainerBase):
                     scenario_input['lang_feat'] = sample_dict['lang_feat']
                     # Check if lang_feat contains NaN
                     if torch.isnan(scenario_input['lang_feat']).any():
-                        print(f"\n🚨 NaN DETECTED IN lang_feat for scenario {i}!")
-                        print(f"  This is a data loading issue, not a model issue!")
-                        assert False, "Target lang_feat contains NaN! Check data pipeline."
+                        raise AssertionError(f"🚨 NaN in lang_feat for scenario {i}! Check data pipeline.")
 
                 # Add segment labels if present
                 if 'labels' in sample_dict:
@@ -1494,151 +1573,36 @@ class DensityInvariantTrainer(TrainerBase):
 
                     # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
                     if self.comm_info['iter'] == 0 and i == 0:
-                        print(f"\n[6] Pred vs Target at loss computation (scenario {i}):", flush=True)
-                        print(f"    scenario_feat shape: {scenario_feat.shape}", flush=True)
-                        print(f"    lang_feat shape: {lang_feat.shape if lang_feat is not None else 'None'}", flush=True)
-
-                        # Get decoder bias for comparison
-                        dec_bias = None
-                        if hasattr(self.model, 'module'):
-                            backbone = self.model.module.backbone
-                        else:
-                            backbone = self.model.backbone
-
-                        if hasattr(backbone, 'dec'):
-                            decoder = backbone.dec
-                            if hasattr(decoder, 'out'):
-                                dec_bias = decoder.out.bias
-                            elif hasattr(decoder, 'cls'):
-                                dec_bias = decoder.cls.bias
-                            elif hasattr(decoder, 'fc'):
-                                dec_bias = decoder.fc.bias
-                            else:
-                                for name, module in reversed(list(decoder.named_modules())):
-                                    if isinstance(module, torch.nn.Linear):
-                                        dec_bias = module.bias
-                                        break
+                        print(f"\n[6] Pred vs Target Analysis (scenario {i}):", flush=True)
 
                         if lang_feat is not None:
-                            print(f"\n    Pred statistics:", flush=True)
-                            for d in range(min(8, scenario_feat.shape[1])):
-                                mean_d = scenario_feat[:, d].mean().item()
-                                std_d = scenario_feat[:, d].std().item()
-                                print(f"      dim[{d}]: mean={mean_d:.6f}, std={std_d:.6f}", flush=True)
-                            print(f"\n    Target (lang_feat) statistics:", flush=True)
-                            gt_means = []
-                            for d in range(min(8, lang_feat.shape[1])):
-                                mean_d = lang_feat[:, d].mean().item()
-                                std_d = lang_feat[:, d].std().item()
-                                gt_means.append(mean_d)
-                                print(f"      dim[{d}]: mean={mean_d:.6f}, std={std_d:.6f}", flush=True)
+                            import torch.nn.functional as F
+                            import numpy as np
 
-                            # Compare decoder bias with GT means
-                            if dec_bias is not None and len(gt_means) > 0:
-                                print(f"\n    Decoder bias vs GT mean comparison:", flush=True)
-                                dec_bias_np = dec_bias.detach().cpu().numpy()
-                                for d in range(min(8, len(gt_means))):
-                                    bias_val = dec_bias_np[d] if d < len(dec_bias_np) else 0.0
-                                    gt_mean = gt_means[d]
-                                    diff = gt_mean - bias_val
-                                    print(f"      dim[{d}]: bias={bias_val:.6f}, GT_mean={gt_mean:.6f}, diff={diff:.6f}", flush=True)
+                            # Compute overall difference statistics
+                            pred_np = scenario_feat.detach().cpu().numpy()
+                            gt_np = lang_feat.detach().cpu().numpy()
+                            diff = np.abs(pred_np - gt_np)
+                            overall_max_diff = diff.max()
+                            overall_mean_diff = diff.mean()
 
-                            # CRITICAL: Check coord-lang_feat correspondence
-                            # Verify that spatial neighbors have similar lang_feat values
-                            coord = scenario_input.get('coord')
-                            print(f"\n    [COORD-LANG_FEAT CORRESPONDENCE CHECK - DEBUG]:", flush=True)
-                            print(f"      coord available: {coord is not None}", flush=True)
-                            print(f"      lang_feat available: {lang_feat is not None}", flush=True)
-                            if coord is not None:
-                                print(f"      coord shape: {coord.shape}", flush=True)
-                            if lang_feat is not None:
-                                print(f"      lang_feat shape: {lang_feat.shape}", flush=True)
+                            # Compute cosine similarity
+                            pred_norm = F.normalize(scenario_feat, p=2, dim=1)  # [N, 16]
+                            gt_norm = F.normalize(lang_feat, p=2, dim=1)  # [N, 16]
+                            cos_sim_per_row = (pred_norm * gt_norm).sum(dim=1)  # [N]
 
-                            if coord is not None and lang_feat is not None:
-                                try:
-                                    print(f"\n    [COORD-LANG_FEAT CORRESPONDENCE CHECK]:", flush=True)
-                                    coord_np = coord.detach().cpu().numpy()
-                                    lang_np = lang_feat.detach().cpu().numpy()
+                            cos_mean = cos_sim_per_row.mean().item()
+                            cos_min = cos_sim_per_row.min().item()
 
-                                    # Simplified check: Use first 1000 points for efficiency
-                                    check_size = min(1000, len(coord_np))
-                                    coord_check = coord_np[:check_size]
-                                    lang_check = lang_np[:check_size]
+                            # Compact output: one line for differences, one for similarity
+                            status = "✓" if cos_mean > 0.5 else ("⚠️" if cos_mean > 0.1 else "🚨")
+                            print(f"    {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
+                                  f"CosSim: mean={cos_mean:.4f}, min={cos_min:.4f}", flush=True)
 
-                                    # Find spatial neighbors by checking distances in a small window
-                                    # For each point, look at nearby points in the array (assuming some spatial locality)
-                                    window_size = 10
-                                    lang_dim1_diffs = []
-                                    random_diffs = []
+                            if cos_mean < 0.1:
+                                print(f"    🚨 WARNING: Very low cosine similarity! Model may be learning trivial solutions.", flush=True)
 
-                                    import numpy as np
-                                    np.random.seed(42)
-                                    for i in range(min(100, check_size - window_size)):
-                                        # Check next few points in array as proxy for spatial neighbors
-                                        # (assuming data loading preserves some spatial locality)
-                                        sample_lang_dim1 = lang_check[i, 1]
-                                        neighbor_lang_dim1 = lang_check[i+1:i+1+window_size, 1]
-                                        avg_diff = np.abs(neighbor_lang_dim1 - sample_lang_dim1).mean()
-                                        lang_dim1_diffs.append(avg_diff)
-
-                                        # Random pair for comparison
-                                        rand_idx = np.random.randint(0, check_size)
-                                        rand_diff = abs(lang_check[rand_idx, 1] - sample_lang_dim1)
-                                        random_diffs.append(rand_diff)
-
-                                    avg_neighbor_diff = np.mean(lang_dim1_diffs)
-                                    avg_random_diff = np.mean(random_diffs)
-                                    print(f"      Average lang_feat[1] difference for adjacent points: {avg_neighbor_diff:.6f}", flush=True)
-                                    print(f"      Average lang_feat[1] difference for random pairs: {avg_random_diff:.6f}", flush=True)
-
-                                    # Analyze dim[1] distribution (check for bimodal pattern)
-                                    lang_dim1 = lang_np[:, 1]
-                                    neg_ratio = (lang_dim1 < 0).sum() / len(lang_dim1)
-                                    print(f"\n    [LANG_FEAT DIM[1] DISTRIBUTION]:", flush=True)
-                                    print(f"      Negative ratio: {neg_ratio:.2%} ({(lang_dim1 < 0).sum()}/{len(lang_dim1)})", flush=True)
-                                    print(f"      Mean: {lang_dim1.mean():.6f}, Std: {lang_dim1.std():.6f}", flush=True)
-                                    print(f"      Min: {lang_dim1.min():.6f}, Max: {lang_dim1.max():.6f}", flush=True)
-
-                                    # Check if there's a spatial pattern to the dim[1] values
-                                    # Split coord into 3D spatial bins and check dim[1] in each bin
-                                    print(f"\n    [SPATIAL DISTRIBUTION OF LANG_FEAT DIM[1]]:", flush=True)
-                                    coord_range = coord_np.max(axis=0) - coord_np.min(axis=0)
-
-                                    # Sample points from different spatial regions
-                                    for region in ['corner1', 'corner2', 'center']:
-                                        if region == 'corner1':
-                                            # Points near min corner
-                                            mask = (
-                                                (coord_np[:, 0] < coord_np[:, 0].mean()) &
-                                                (coord_np[:, 1] < coord_np[:, 1].mean()) &
-                                                (coord_np[:, 2] < coord_np[:, 2].mean())
-                                            )
-                                        elif region == 'corner2':
-                                            # Points near max corner
-                                            mask = (
-                                                (coord_np[:, 0] >= coord_np[:, 0].mean()) &
-                                                (coord_np[:, 1] >= coord_np[:, 1].mean()) &
-                                                (coord_np[:, 2] >= coord_np[:, 2].mean())
-                                            )
-                                        else:
-                                            # Points near center
-                                            mask = (
-                                                (coord_np[:, 0] >= coord_np[:, 0].min() + coord_range[0] * 0.4) &
-                                                (coord_np[:, 0] < coord_np[:, 0].min() + coord_range[0] * 0.6) &
-                                                (coord_np[:, 1] >= coord_np[:, 1].min() + coord_range[1] * 0.4) &
-                                                (coord_np[:, 1] < coord_np[:, 1].min() + coord_range[1] * 0.6) &
-                                                (coord_np[:, 2] >= coord_np[:, 2].min() + coord_range[2] * 0.4) &
-                                                (coord_np[:, 2] < coord_np[:, 2].min() + coord_range[2] * 0.6)
-                                            )
-
-                                        region_lang = lang_np[mask, 1]
-                                        if len(region_lang) > 0:
-                                            neg_ratio_region = (region_lang < 0).sum() / len(region_lang)
-                                            print(f"      {region}: n={len(region_lang)}, dim[1]={region_lang.mean():.4f}, neg_ratio={neg_ratio_region:.2%}", flush=True)
-                                except Exception as e:
-                                    print(f"      ERROR during correspondence check: {e}", flush=True)
-                                    import traceback
-                                    traceback.print_exc()
+                            print("="*80 + "\n", flush=True)
 
                     # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
                     criteria_kwargs = {
@@ -2043,16 +2007,8 @@ class DensityInvariantTrainer(TrainerBase):
                 skip_reason = f"exceeds extreme threshold {fixed_threshold}"
 
             if should_skip:
-                print(f"\n⚠️ WARNING: Loss spike detected - SKIPPING ITERATION to prevent NaN!")
-                print(f"  Reason: {skip_reason}")
-                print(f"  Current loss: {loss_value:.4f}")
-                if self._loss_ma is not None:
-                    print(f"  Moving average: {self._loss_ma:.4f}")
-                    print(f"  Ratio: {loss_value / (self._loss_ma + 1e-8):.2f}x")
-                print(f"  scenario_losses: {[f'{l.item():.2f}' for l in scenario_losses]}")
-                print(f"  Skipping backward pass and optimizer step.")
-                print(f"  This prevents large gradients from corrupting weights.")
-
+                ma_info = f" MA={self._loss_ma:.4f} ({loss_value/(self._loss_ma+1e-8):.1f}x)" if self._loss_ma is not None else ""
+                print(f"⚠️ Loss spike ({skip_reason}): curr={loss_value:.4f}{ma_info} - skipping backward pass")
                 # IMPORTANT: Return early to skip backward pass and optimizer step
                 # This is the key fix - we don't compute gradients or update weights
                 return
@@ -2060,11 +2016,7 @@ class DensityInvariantTrainer(TrainerBase):
         # NAN CHECK: Detect and handle NaN loss before backward pass
         # This prevents cascading NaN failures that can corrupt the entire model
         if torch.isnan(total_loss).any() or torch.isinf(total_loss).any():
-            print(f"\n🚨 NaN/Inf DETECTED IN TOTAL LOSS! Skipping backward pass.")
-            print(f"  total_loss: {total_loss.item()}")
-            print(f"  scenario_losses: {[f'{l.item():.6f}' for l in scenario_losses]}")
-            print(f"  Current iteration: {self.iter}")
-            print(f"  Current epoch: {self.epoch}")
+            print(f"🚨 NaN/Inf loss (iter={self.iter}, epoch={self.epoch}): total={total_loss.item()}, scenarios={[f'{l.item():.2f}' for l in scenario_losses]}")
             # Try to identify which scenario caused the NaN
             for i, (loss, scenario) in enumerate(zip(scenario_losses, scenarios_to_use)):
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
@@ -2085,13 +2037,11 @@ class DensityInvariantTrainer(TrainerBase):
             for name, param in self.model.named_parameters():
                 if param.grad is not None:
                     if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                        print(f"\n🚨 NaN/Inf DETECTED IN SCALED GRADIENTS (before unscale)!")
-                        print(f"  Parameter: {name}")
+                        print(f"🚨 NaN/Inf in scaled grad: {name}")
                         has_nan_grad_before_unscale = True
 
             if has_nan_grad_before_unscale:
-                print(f"  Skipping unscale_() and optimizer step!")
-                print(f"  Calling scaler.update() to reduce scale factor...")
+                print(f"  Skipping unscale_() and optimizer step, reducing scale...")
                 self.scaler.update()
                 self.optimizer.zero_grad()
                 return
@@ -2200,12 +2150,7 @@ class DensityInvariantTrainer(TrainerBase):
                 # 3. Prevents complete stagnation when gradients are consistently large
                 reduced_grad_scale = 0.1  # Scale factor for gradient reduction
 
-                print(f"\n⚠️ WARNING: Large gradient detected - using reduced step size!")
-                print(f"  Reason: {skip_reason}")
-                print(f"  Max gradient: {max_grad:.4f}")
-                print(f"  Parameter: {max_grad_param}")
-                print(f"  Consecutive large grad count: {self._consecutive_large_grad_count}")
-                print(f"  Scaling all gradients by {reduced_grad_scale} instead of skipping update.")
+                print(f"⚠️ Large grad ({skip_reason}): max={max_grad:.4f} in {max_grad_param}, scaling grads by {reduced_grad_scale}")
 
                 # Apply reduced scale to all gradients
                 for param in self.model.parameters():
@@ -2222,9 +2167,7 @@ class DensityInvariantTrainer(TrainerBase):
                 if param.grad is not None and 'dec' in name:
                     decoder_grad_norm = param.grad.norm().item()
                     if decoder_grad_norm > self.cfg.decoder_grad_warn_threshold:
-                        print(f"\n⚠️ WARNING: Large decoder gradient detected!")
-                        print(f"  Parameter: {name}")
-                        print(f"  Gradient norm: {decoder_grad_norm:.4f} (threshold: {self.cfg.decoder_grad_warn_threshold})")
+                        print(f"⚠️ WARNING: Large decoder grad: {name} norm={decoder_grad_norm:.4f} (threshold: {self.cfg.decoder_grad_warn_threshold})")
 
             # Store old scale to check if scaler reduced it
             old_scale = self.scaler.get_scale()
@@ -2250,19 +2193,10 @@ class DensityInvariantTrainer(TrainerBase):
                     nan_params_after_step.append(f"  {name} ({nan_count} NaN/Inf)")
 
             if has_nan_in_backbone_after_step:
-                print(f"\n🚨 CRITICAL: Backbone weights contain NaN/Inf AFTER optimizer step!")
-                print(f"  This indicates the optimizer created invalid weights.")
-                print(f"  Affected parameters:")
-                for p in nan_params_after_step[:5]:  # Show first 5
-                    print(p)
-                if len(nan_params_after_step) > 5:
-                    print(f"  ... and {len(nan_params_after_step) - 5} more")
-                print(f"  Scale factor: {new_scale}")
-                print(f"  Possible causes:")
-                print(f"    1. Learning rate too high for current scale")
-                print(f"    2. Gradient clipping not preventing large updates")
-                print(f"    3. Numerical instability in optimizer")
-                raise RuntimeError("Optimizer step created NaN/Inf weights! Training stopped.")
+                params_str = ", ".join(nan_params_after_step[:3])
+                if len(nan_params_after_step) > 3:
+                    params_str += f" +{len(nan_params_after_step)-3} more"
+                raise RuntimeError(f"🚨 NaN/Inf in backbone AFTER step! Scale={new_scale}. Params: {params_str}")
 
             # WARNING: Monitor extreme weight values (no clipping, just warn)
             # This warns about weights that might cause NaN in subsequent iterations
@@ -2270,15 +2204,12 @@ class DensityInvariantTrainer(TrainerBase):
             for name, param in self.model.named_parameters():
                 max_abs_weight = param.data.abs().max().item()
                 if max_abs_weight > max_weight_value:
-                    print(f"\n⚠️ WARNING: Extreme weight values detected!")
-                    print(f"  Parameter: {name}")
-                    print(f"  Max absolute weight: {max_abs_weight:.4f} (threshold: {max_weight_value})")
+                    print(f"⚠️ WARNING: Extreme weight: {name} max={max_abs_weight:.4f} (threshold: {max_weight_value})")
 
             # Check if scaler was reduced (indicates inf/NaN gradients were detected)
             new_scale = self.scaler.get_scale()
             if new_scale < old_scale:
-                print(f"\n⚠️ WARNING: GradScaler reduced from {old_scale} to {new_scale}")
-                print(f"  This indicates inf/NaN gradients were auto-detected and skipped.")
+                print(f"⚠️ WARNING: GradScaler reduced {old_scale} → {new_scale} (inf/NaN grads auto-skipped)")
 
             if old_scale <= new_scale:
                 self.scheduler.step()
@@ -2358,6 +2289,60 @@ class DensityInvariantTrainer(TrainerBase):
 
             # for scenario, loss in zip(scenarios_to_use, scenario_losses):
             #     print(f"[Epoch {self.epoch}, Iter {step}] Loss {scenario}: {loss.item():.6f}")
+
+        # =====================================================================
+        # Per-Dimension Correlation Monitoring
+        # =====================================================================
+        if (
+            self.enable_per_dim_monitor
+            and self.per_dim_monitor is not None
+            and self.comm_info["iter"] % self.per_dim_log_freq == 0
+        ):
+            # Get predictions and ground truth from the first scenario
+            if len(scenario_outputs) > 0:
+                first_output = scenario_outputs[0]
+                pred_feat = first_output.get('feat')
+
+                # Get ground truth from input_dict
+                gt_feat = input_dict.get('lang_feat')
+
+                if pred_feat is not None and gt_feat is not None:
+                    # Apply valid mask if available
+                    valid_mask = input_dict.get('valid_feat_mask', None)
+                    if valid_mask is None:
+                        # Create all-ones mask if not available
+                        valid_mask = torch.ones(pred_feat.shape[0], dtype=torch.bool, device=pred_feat.device)
+
+                    # Update per-dim monitor
+                    self.per_dim_monitor.update(
+                        pred=pred_feat,
+                        gt=gt_feat,
+                        valid_mask=valid_mask,
+                        iteration=self.comm_info["iter"],
+                        epoch=self.epoch,
+                    )
+
+                    # Check for trivial solution
+                    if self.per_dim_monitor.is_trivial_solution():
+                        self.logger.warning(
+                            f"[Iteration {self.comm_info['iter']}] ⚠️ TRIVIAL SOLUTION DETECTED! "
+                            f"Model may be predicting constant values. "
+                            f"Dim 0 corr: {self.per_dim_monitor.history['dim0_corr'][-1]:.4f}, "
+                            f"Minor corr: {self.per_dim_monitor.history['minor_corr_mean'][-1]:.4f}"
+                        )
+
+                    # Check for convergence
+                    if self.per_dim_monitor.is_learning_principal_component():
+                        self.logger.info(
+                            f"[Iteration {self.comm_info['iter']}] ✓ Principal component converged! "
+                            f"Dim 0 correlation: {self.per_dim_monitor.best_dim0_corr:.4f}"
+                        )
+
+                    if self.per_dim_monitor.is_learning_minor_components():
+                        self.logger.info(
+                            f"[Iteration {self.comm_info['iter']}] ✓ Minor components converged! "
+                            f"Minor correlation: {self.per_dim_monitor.best_minor_corr:.4f}"
+                        )
             # print(f"[Epoch {self.epoch}, Iter {step}] Total Loss: {total_loss.item():.6f}")
 
             # # TIMING: Print timing information to console
@@ -2489,6 +2474,26 @@ class DensityInvariantTrainer(TrainerBase):
     def after_train(self):
         comm.synchronize()
         torch.cuda.empty_cache()
+
+        # Save per-dim monitoring history
+        if self.per_dim_monitor is not None and comm.is_main_process():
+            history_path = os.path.join(self.cfg.save_path, "per_dim_correlation_history.json")
+            self.per_dim_monitor.save_history(history_path)
+
+            # Print final summary
+            summary = self.per_dim_monitor.get_summary()
+            print("\n" + "="*80)
+            print("PER-DIMENSION CORRELATION MONITORING SUMMARY")
+            print("="*80)
+            print(f"\nTotal iterations: {summary['total_iterations']}")
+            print(f"Final Dim 0 correlation: {summary['final_dim0_corr']:.4f}")
+            print(f"Final Minor correlation: {summary['final_minor_corr']:.4f}")
+            print(f"Best Dim 0 correlation: {summary['best_dim0_corr']:.4f}")
+            print(f"Best Minor correlation: {summary['best_minor_corr']:.4f}")
+            print(f"\nDim 0 converged (target {self.target_dim0_corr:.2f}): {summary['converged_dim0']}")
+            print(f"Minor converged (target {self.target_minor_corr:.2f}): {summary['converged_minor']}")
+            print(f"Trivial solution detected: {summary['is_trivial']}")
+            print("="*80 + "\n")
 
         for h in self.hooks:
             h.after_train()
