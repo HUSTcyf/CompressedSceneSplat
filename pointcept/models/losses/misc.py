@@ -813,52 +813,6 @@ class SVDWeightedL1Loss(nn.Module):
         Returns:
             SVD-weighted L1 loss (or tuple with loss dict if return_per_dim=True)
         """
-        # DEBUG: Verify pred-target correspondence (only print once)
-        if not hasattr(self, '_debug_printed'):
-            import numpy as np
-            print(f"\n[SVDWeightedL1Loss DEBUG] Verifying pred-target correspondence:")
-            print(f"  pred shape: {pred.shape}, target shape: {target.shape}")
-            print(f"  valid_feat_mask shape: {valid_feat_mask.shape}, valid count: {valid_feat_mask.sum().item()}")
-
-            # CRITICAL TEST: Check if pred is collapsed to constant values
-            print(f"  **PRED COLLAPSE CHECK:**")
-            for d in range(min(4, pred.shape[1])):
-                p_d = pred[:, d].detach().cpu().numpy()
-                unique_vals = len(np.unique(np.round(p_d, 4)))
-                print(f"    pred dim[{d}]: mean={p_d.mean():.6f}, std={p_d.std():.6f}, unique_vals={unique_vals}")
-
-            print(f"  **TARGET VARIANCE CHECK:**")
-            for d in range(min(4, target.shape[1])):
-                t_d = target[:, d].detach().cpu().numpy()
-                unique_vals = len(np.unique(np.round(t_d, 4)))
-                print(f"    target dim[{d}]: mean={t_d.mean():.6f}, std={t_d.std():.6f}, unique_vals={unique_vals}")
-
-            # Test: Check correlation between adjacent pred values (should be low if pred is diverse)
-            pred_cpu = pred.detach().cpu()
-            if pred.shape[0] > 100:
-                pred_first_half = pred_cpu[:pred.shape[0]//2, 0]
-                pred_second_half = pred_cpu[pred.shape[0]//2:, 0]
-                correlation_halves = np.corrcoef(pred_first_half.numpy(), pred_second_half.numpy())[0, 1]
-                print(f"  **SPLIT SAMPLE TEST:**")
-                print(f"    First half pred[0] mean: {pred_first_half.mean():.6f}")
-                print(f"    Second half pred[0] mean: {pred_second_half.mean():.6f}")
-                print(f"    Correlation between halves: {correlation_halves:.6f}")
-                if correlation_halves > 0.99:
-                    print(f"    -> WARNING: pred values are nearly identical across samples (MODE COLLAPSE!)")
-
-            # Test: Check if target has meaningful structure
-            target_cpu = target.detach().cpu()
-            if target.shape[0] > 100:
-                # Sample different indices and check if target varies
-                sample_indices = [0, 100, 1000, 10000, 50000, 100000, 150000, 200000]
-                sample_indices = [i for i in sample_indices if i < target.shape[0]]
-                print(f"  **TARGET VALUE DIVERSITY CHECK:**")
-                for idx in sample_indices:
-                    t_val = target_cpu[idx].numpy()
-                    print(f"    target[{idx}]: first4=[{t_val[0]:.4f}, {t_val[1]:.4f}, {t_val[2]:.4f}, {t_val[3]:.4f}], norm={np.linalg.norm(t_val):.4f}")
-
-            self._debug_printed = True
-
         # Extract valid features
         valid_pred = pred[valid_feat_mask > 0]  # [M, D]
         valid_target = target[valid_feat_mask > 0]  # [M, D]
@@ -902,15 +856,6 @@ class SVDWeightedL1Loss(nn.Module):
             loss = loss.sum()
 
         weighted_loss = self.loss_weight * loss
-
-        # Debug: Print weights for first few iterations
-        if self.num_updates <= 5 and self.weight_strategy in ("variance", "std"):
-            stat_name = "std" if self.weight_strategy == "std" else "variance"
-            stat_values = self.dim_variance.detach().cpu().numpy()
-            weight_values = weights.detach().cpu().numpy()
-            print(f"\n[SVDWeightedL1Loss] {stat_name}-based weights (update {int(self.num_updates)}):")
-            for d in range(len(weights)):
-                print(f"  dim[{d}]: {stat_name}={stat_values[d]:.6f}, weight={weight_values[d]:.4f}")
 
         # Print disabled - now handled by Criteria builder for consolidated output
         # # Print with strategy info and variance statistics

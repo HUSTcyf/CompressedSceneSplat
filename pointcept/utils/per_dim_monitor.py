@@ -165,7 +165,7 @@ class PerDimMonitor:
 
         # Log if needed
         if iteration % self.log_freq == 0:
-            self._log_correlations(iteration, epoch, correlations, dim0_corr, minor_corr_mean)
+            self._log_correlations(iteration, epoch, correlations, dim0_corr, minor_corr_mean, minor_corr_std)
 
         # Update history
         self.history['iterations'].append(iteration)
@@ -189,38 +189,23 @@ class PerDimMonitor:
         correlations: np.ndarray,
         dim0_corr: float,
         minor_corr_mean: float,
+        minor_corr_std: float,
     ):
         """Log correlation metrics."""
-        print(f"\n{'='*80}")
-        print(f"Iteration {iteration} (Epoch {epoch}) - Per-Dimension Correlations")
-        print(f"{'='*80}")
-
-        print(f"\nDim 0 (Principal): {dim0_corr:.4f} (best: {self.best_dim0_corr:.4f})")
-        print(f"Dims 1-15 (Minor):  {minor_corr_mean:.4f} ± {minor_corr_std:.4f} (best: {self.best_minor_corr:.4f})")
-
-        print(f"\nPer-dimension correlations:")
-        for i, corr in enumerate(correlations):
-            marker = "✓" if corr >= self.target_dim0_corr else "✗" if i == 0 else " "
-            if i > 0 and corr >= self.target_minor_corr:
-                marker = "✓"
-            print(f"  Dim {i:2d}: {corr:7.4f} {marker}")
-
-        print(f"\nTargets: Dim 0 >= {self.target_dim0_corr:.2f}, Minor >= {self.target_minor_corr:.2f}")
-
         # Status
         status = []
         if self.converged_dim0:
-            status.append("✓ Dim 0 CONVERGED")
+            status.append("✓ Dim0")
         else:
-            status.append("✗ Dim 0 not converged")
+            status.append("✗ Dim0")
 
         if self.converged_minor:
-            status.append("✓ Minor CONVERGED")
+            status.append("✓ Minor")
         else:
-            status.append("✗ Minor not converged")
+            status.append("✗ Minor")
 
-        print(f"\nStatus: {' | '.join(status)}")
-        print(f"{'='*80}\n")
+        status_str = " | ".join(status)
+        print(f"[PerDim] Dim0={dim0_corr:.4f} (best:{self.best_dim0_corr:.4f}) | Minor={minor_corr_mean:.4f}±{minor_corr_std:.4f} (best:{self.best_minor_corr:.4f}) | {status_str}")
 
     def is_learning_principal_component(self) -> bool:
         """Check if principal component (dim 0) is being learned."""

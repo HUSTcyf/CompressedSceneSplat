@@ -1051,6 +1051,7 @@ class DensityInvariantTrainer(TrainerBase):
         for key in input_dict.keys():
             if isinstance(input_dict[key], torch.Tensor):
                 input_dict[key] = input_dict[key].cuda(non_blocking=True)
+
         data_load_time = time.time() - data_load_start
 
         # Extract input data
@@ -1062,6 +1063,7 @@ class DensityInvariantTrainer(TrainerBase):
 
         if coord is None or feat is None:
             raise ValueError("Input must contain 'coord' and 'feat'")
+
 
         # Log initial data statistics
         scene_name = input_dict.get('name', 'unknown')
@@ -1296,60 +1298,6 @@ class DensityInvariantTrainer(TrainerBase):
             decoder_layer_outputs = {}
             decoder_hooks = []
 
-            def create_debug_hook(layer_name):
-                def hook(module, input, output):
-                    # Store output statistics
-                    if isinstance(output, torch.Tensor):
-                        output_data = output
-                    elif isinstance(output, tuple) and len(output) > 0:
-                        output_data = output[0]
-                    else:
-                        return
-
-                    with torch.no_grad():
-                        output_np = output_data.detach().cpu()
-                        decoder_layer_outputs[layer_name] = {
-                            'shape': list(output_data.shape),
-                            'has_nan': torch.isnan(output_data).any().item(),
-                            'has_inf': torch.isinf(output_data).any().item(),
-                            'min': output_np.min().item(),
-                            'max': output_np.max().item(),
-                            'mean': output_np.mean().item(),
-                            'std': output_np.std().item(),
-                            'abs_mean': output_np.abs().mean().item(),
-                            'abs_max': output_np.abs().max().item(),
-                            'num_zeros': (output_np == 0).sum().item(),
-                            'num_elements': output_np.numel(),
-                        }
-                return hook
-            return create_debug_hook
-
-            # Register hooks for all decoder layers BEFORE forward pass
-            if hasattr(backbone, 'dec'):
-                decoder = backbone.dec
-                for dec_name in ['dec0', 'dec1', 'dec2', 'dec3']:
-                    if hasattr(decoder, dec_name):
-                        dec_layer = getattr(decoder, dec_name)
-                        # Hook for upsampling layers
-                        if hasattr(dec_layer, 'up'):
-                            hook = dec_layer.up.register_forward_hook(
-                                create_debug_hook(f'dec.{dec_name}.up')
-                            )
-                            decoder_hooks.append(hook)
-                        # Hook for skip connection layers
-                        if hasattr(dec_layer, 'up_skip'):
-                            hook = dec_layer.up_skip.register_forward_hook(
-                                create_debug_hook(f'dec.{dec_name}.up_skip')
-                            )
-                            decoder_hooks.append(hook)
-                        # Hook for block layers
-                        if hasattr(dec_layer, 'blocks'):
-                            for block_idx, block in enumerate(decoder.blocks):
-                                hook = block.register_forward_hook(
-                                    create_debug_hook(f'dec.{dec_name}.block{block_idx}')
-                                )
-                                decoder_hooks.append(hook)
-
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
                 from pointcept.models.utils.structure import Point
                 point = Point(batched_input)
@@ -1384,91 +1332,18 @@ class DensityInvariantTrainer(TrainerBase):
                 # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
                 # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
 
-                # ====================================================================
-                # DEBUG: Comprehensive model collapse analysis (first iteration only)
-                # ====================================================================
-                if self.comm_info['iter'] == 0:
-                    print("\n" + "="*80, flush=True)
-                    print("==== [MODEL COLLAPSE ANALYSIS - ITER 0] ====", flush=True)
-                    print("="*80, flush=True)
+                # Decoder hooks setup (disabled for cleaner output)
+                decoder_layer_outputs = {}
+                decoder_hooks = []
 
-                    # Print collected decoder layer statistics
-                    print(f"\n[0] Decoder Layer Statistics ({len(decoder_layer_outputs)} layers monitored):", flush=True)
-
-                    # Sort layers by name for consistent output
-                    sorted_layers = sorted(decoder_layer_outputs.keys())
-
-                    for layer_name in sorted_layers:
-                        stats = decoder_layer_outputs[layer_name]
-                        status_icon = "✓"
-                        status_msg = "OK"
-
-                        # Check for anomalies
-                        if stats['has_nan']:
-                            status_icon = "🚨"
-                            status_msg = "NaN DETECTED!"
-                        elif stats['has_inf']:
-                            status_icon = "🚨"
-                            status_msg = "Inf DETECTED!"
-                        elif stats['abs_max'] > 1000:
-                            status_icon = "🚨"
-                            status_msg = f"EXTREME (max={stats['abs_max']:.2f})"
-                        elif stats['abs_max'] > 100:
-                            status_icon = "⚠️"
-                            status_msg = f"Large (max={stats['abs_max']:.2f})"
-                        elif stats['abs_mean'] < 1e-6:
-                            status_icon = "⚠️"
-                            status_msg = f"Near-zero (mean={stats['abs_mean']:.2e})"
-                        elif stats['num_zeros'] / stats['num_elements'] > 0.5:
-                            status_icon = "⚠️"
-                            status_msg = f"50% zeros ({stats['num_zeros']}/{stats['num_elements']})"
-
-                        print(f"    {status_icon} {layer_name:40s} {status_msg}", flush=True)
-                        if status_icon in ["🚨", "⚠️"]:
-                            print(f"       shape={stats['shape']}, min={stats['min']:.4f}, max={stats['max']:.4f}, "
-                                  f"mean={stats['mean']:.6f}, std={stats['std']:.6f}", flush=True)
-
-                    # Remove hooks after collecting data
-                    for hook in decoder_hooks:
-                        hook.remove()
-
-                    # Get decoder last layer bias
-                    if hasattr(backbone, 'dec'):
-                        decoder = backbone.dec
-                        # Look for the final output layer (usually named 'out', 'cls', or is the last layer)
-                        if hasattr(decoder, 'out'):
-                            dec_bias = decoder.out.bias
-                        elif hasattr(decoder, 'cls'):
-                            dec_bias = decoder.cls.bias
-                        elif hasattr(decoder, 'fc'):
-                            dec_bias = decoder.fc.bias
-                        else:
-                            # Try to find the last Linear layer
-                            for name, module in reversed(list(decoder.named_modules())):
-                                if isinstance(module, torch.nn.Linear):
-                                    dec_bias = module.bias
-                                    break
-
-                    if dec_bias is not None:
-                        dec_bias_np = dec_bias.detach().cpu().numpy()
-                        bias_max = abs(dec_bias_np).max()
-                        bias_mean = abs(dec_bias_np).mean()
-                        icon = "✓" if bias_max < 10 else "⚠️"
-                        print(f"\n[0.1] Decoder last layer bias: {icon} max={bias_max:.4f}, mean={bias_mean:.4f}", flush=True)
-
-                # Simplified backbone output info
-                if self.comm_info['iter'] == 0:
-                    print(f"\n[1] Backbone output shape: {feat_before_scale.shape}", flush=True)
+                # Remove hooks if any
+                for hook in decoder_hooks:
+                    hook.remove()
 
                 # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
                 # The LangPretrainer wrapper applies tanh, but trainer bypasses it
                 # We MUST apply tanh here for consistency!
                 batched_features = torch.tanh(feat_before_scale)
-
-                # Simplified after tanh info
-                if self.comm_info['iter'] == 0:
-                    print(f"\n[2] After tanh shape: {batched_features.shape}", flush=True)
-                    print("="*80 + "\n", flush=True)
 
                 # NAN CHECK: Detect NaN after tanh
                 if torch.isnan(batched_features).any():
@@ -1573,8 +1448,6 @@ class DensityInvariantTrainer(TrainerBase):
 
                     # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
                     if self.comm_info['iter'] == 0 and i == 0:
-                        print(f"\n[6] Pred vs Target Analysis (scenario {i}):", flush=True)
-
                         if lang_feat is not None:
                             import torch.nn.functional as F
                             import numpy as np
@@ -1596,13 +1469,8 @@ class DensityInvariantTrainer(TrainerBase):
 
                             # Compact output: one line for differences, one for similarity
                             status = "✓" if cos_mean > 0.5 else ("⚠️" if cos_mean > 0.1 else "🚨")
-                            print(f"    {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
+                            print(f"    Pred vs Target: {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
                                   f"CosSim: mean={cos_mean:.4f}, min={cos_min:.4f}", flush=True)
-
-                            if cos_mean < 0.1:
-                                print(f"    🚨 WARNING: Very low cosine similarity! Model may be learning trivial solutions.", flush=True)
-
-                            print("="*80 + "\n", flush=True)
 
                     # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
                     criteria_kwargs = {
@@ -1665,7 +1533,16 @@ class DensityInvariantTrainer(TrainerBase):
                         'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
                     }
 
+                # Build output dict with loss components for InformationWriter logging
                 output = dict(loss=loss, feat=scenario_feat)
+                # Add individual loss components for display in training logs
+                # loss_dict contains Python floats from Criteria, need to convert back to tensors
+                if loss_dict:
+                    device = loss.device if isinstance(loss, torch.Tensor) else torch.device('cpu')
+                    # Use scalar tensors (0-dim) with requires_grad=False for logging
+                    output['l1_loss'] = torch.tensor(float(loss_dict.get('l1_loss', 0.0)), device=device)
+                    output['cos_loss'] = torch.tensor(float(loss_dict.get('cos_loss', 0.0)), device=device)
+                    output['contrast_loss'] = torch.tensor(float(loss_dict.get('contrast_loss', 0.0)), device=device)
                 scenario_outputs.append(output)
                 scenario_losses.append(loss)
 
@@ -1945,7 +1822,9 @@ class DensityInvariantTrainer(TrainerBase):
         #     consistency_loss_dict['grid_alignment'] = grid_alignment_loss.item()
 
         # Compute weighted total loss
-        total_loss = 0.0
+        # Initialize as scalar tensor to ensure it's compatible with InformationWriter
+        device = scenario_losses[0].device if scenario_losses else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        total_loss = torch.tensor(0.0, device=device, dtype=scenario_losses[0].dtype if scenario_losses else torch.float32)
         for loss, scenario in zip(scenario_losses, scenarios_to_use):
             weight = self.scenario_weights.get(scenario, 1.0)
             total_loss = total_loss + weight * loss
@@ -2364,21 +2243,25 @@ class DensityInvariantTrainer(TrainerBase):
             #               f"consistency={timing.get('consistency', 0)/total*100:.1f}%, "
             #               f"backward={timing.get('backward', 0)/total*100:.1f}%")
 
-            for sample_dict in scenario_samples:
-                scenario = sample_dict['scenario']
-                ratio = sample_dict['sampling_ratio']
-                self.writer.add_scalar(
-                    f"train/sampling_ratio_{scenario}",
-                    ratio.item(),
-                    global_step
-                )
+            if comm.is_main_process() and self.writer is not None:
+                step = self.comm_info.get("iter", 0)
+                global_step = self.epoch * len(self.train_loader) + step
 
-                num_points = sample_dict['num_points']
-                self.writer.add_scalar(
-                    f"train/num_points_{scenario}_rank{self.rank}",
-                    num_points,
-                    global_step
-                )
+                for sample_dict in scenario_samples:
+                    scenario = sample_dict['scenario']
+                    ratio = sample_dict['sampling_ratio']
+                    self.writer.add_scalar(
+                        f"train/sampling_ratio_{scenario}",
+                        ratio.item(),
+                        global_step
+                    )
+
+                    num_points = sample_dict['num_points']
+                    self.writer.add_scalar(
+                        f"train/num_points_{scenario}_rank{self.rank}",
+                        num_points,
+                        global_step
+                    )
 
     def compute_grid_alignment_loss(
         self,
@@ -2482,18 +2365,11 @@ class DensityInvariantTrainer(TrainerBase):
 
             # Print final summary
             summary = self.per_dim_monitor.get_summary()
-            print("\n" + "="*80)
-            print("PER-DIMENSION CORRELATION MONITORING SUMMARY")
-            print("="*80)
-            print(f"\nTotal iterations: {summary['total_iterations']}")
-            print(f"Final Dim 0 correlation: {summary['final_dim0_corr']:.4f}")
-            print(f"Final Minor correlation: {summary['final_minor_corr']:.4f}")
-            print(f"Best Dim 0 correlation: {summary['best_dim0_corr']:.4f}")
-            print(f"Best Minor correlation: {summary['best_minor_corr']:.4f}")
-            print(f"\nDim 0 converged (target {self.target_dim0_corr:.2f}): {summary['converged_dim0']}")
-            print(f"Minor converged (target {self.target_minor_corr:.2f}): {summary['converged_minor']}")
-            print(f"Trivial solution detected: {summary['is_trivial']}")
-            print("="*80 + "\n")
+            print(f"\n[PerDim Summary] Iters: {summary['total_iterations']} | "
+                  f"Dim0: {summary['final_dim0_corr']:.4f} (best: {summary['best_dim0_corr']:.4f}) | "
+                  f"Minor: {summary['final_minor_corr']:.4f} (best: {summary['best_minor_corr']:.4f}) | "
+                  f"Converged: Dim0={summary['converged_dim0']}, Minor={summary['converged_minor']} | "
+                  f"Trivial: {summary['is_trivial']}")
 
         for h in self.hooks:
             h.after_train()
