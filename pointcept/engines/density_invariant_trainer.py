@@ -1220,405 +1220,402 @@ class DensityInvariantTrainer(TrainerBase):
                     f"Scene: {scene_name}"
                 )
 
-        if self.batched_forward:
-            # =====================================================================
-            # MODE 1: BATCHED FORWARD (default, faster but may cross-contaminate)
-            # =====================================================================
-            # Concatenate all scenarios into a single batch
-            # OPTIMIZATION: Single forward pass leverages GPU parallelism
+        # =====================================================================
+        # BATCHED FORWARD: Concatenate all scenarios into a single batch
+        # OPTIMIZATION: Single forward pass leverages GPU parallelism
+        # =====================================================================
+        batched_coord = []
+        batched_feat = []
+        batch_indices = []  # To track which scenario each point belongs to
+        scenario_point_counts = []  # To split outputs back
 
-            batched_coord = []
-            batched_feat = []
-            batch_indices = []  # To track which scenario each point belongs to
-            scenario_point_counts = []  # To split outputs back
+        for i, sample_dict in enumerate(scenario_samples):
+            batched_coord.append(sample_dict['coord'])
+            batched_feat.append(sample_dict['feat'])
+            num_points = sample_dict['coord'].shape[0]
+            scenario_point_counts.append(num_points)
+            batch_indices.append(torch.full((num_points,), i, device=device))
 
-            for i, sample_dict in enumerate(scenario_samples):
-                batched_coord.append(sample_dict['coord'])
-                batched_feat.append(sample_dict['feat'])
-                num_points = sample_dict['coord'].shape[0]
-                scenario_point_counts.append(num_points)
-                batch_indices.append(torch.full((num_points,), i, device=device))
+        # Concatenate all data
+        batched_coord = torch.cat(batched_coord, dim=0)  # [Total_points, 3]
+        batched_feat = torch.cat(batched_feat, dim=0)    # [Total_points, C]
+        batch_indices = torch.cat(batch_indices, dim=0)  # [Total_points]
 
-            # Concatenate all data
-            batched_coord = torch.cat(batched_coord, dim=0)  # [Total_points, 3]
-            batched_feat = torch.cat(batched_feat, dim=0)    # [Total_points, C]
-            batch_indices = torch.cat(batch_indices, dim=0)  # [Total_points]
+        # Store total points before deleting tensors
+        total_points = batched_coord.shape[0]
 
-            # Store total points before deleting tensors
-            total_points = batched_coord.shape[0]
+        # Create batch input dict
+        batched_input = {
+            'coord': batched_coord,
+            'feat': batched_feat,
+            'batch': batch_indices,
+            'grid_size': grid_size,
+            'epoch_progress': epoch_progress,
+        }
 
-            # Create batch input dict
-            batched_input = {
-                'coord': batched_coord,
-                'feat': batched_feat,
-                'batch': batch_indices,
-                'grid_size': grid_size,
-                'epoch_progress': epoch_progress,
-            }
+        # Clear concatenated tensors to free memory (after creating batched_input)
+        del batched_coord, batched_feat, batch_indices
 
-            # Clear concatenated tensors to free memory (after creating batched_input)
-            del batched_coord, batched_feat, batch_indices
+        # Create valid_feat_mask for all points (all valid after filtering)
+        batched_input['valid_feat_mask'] = torch.ones(
+            total_points, dtype=torch.bool, device=device
+        )
 
-            # Create valid_feat_mask for all points (all valid after filtering)
-            batched_input['valid_feat_mask'] = torch.ones(
-                total_points, dtype=torch.bool, device=device
+        # Forward pass through backbone (batched for all scenarios)
+        # NAN CHECK: Check input data for anomalies
+        coord = batched_input['coord']
+        feat = batched_input['feat']
+        if torch.isnan(coord).any() or torch.isinf(coord).any():
+            raise ValueError(
+                f"🚨 NaN/Inf DETECTED IN INPUT COORD!\n"
+                f"  coord NaN: {torch.isnan(coord).any().item()}\n"
+                f"  coord Inf: {torch.isinf(coord).any().item()}\n"
+                f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}"
+            )
+        if torch.isnan(feat).any() or torch.isinf(feat).any():
+            raise ValueError(
+                f"🚨 NaN/Inf DETECTED IN INPUT FEAT!\n"
+                f"  feat NaN: {torch.isnan(feat).any().item()}\n"
+                f"  feat Inf: {torch.isinf(feat).any().item()}\n"
+                f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}"
             )
 
-            # Forward pass through backbone (batched for all scenarios)
-            # NAN CHECK: Check input data for anomalies
-            coord = batched_input['coord']
-            feat = batched_input['feat']
-            if torch.isnan(coord).any() or torch.isinf(coord).any():
-                raise ValueError(
-                    f"🚨 NaN/Inf DETECTED IN INPUT COORD!\n"
-                    f"  coord NaN: {torch.isnan(coord).any().item()}\n"
-                    f"  coord Inf: {torch.isinf(coord).any().item()}\n"
-                    f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}"
-                )
-            if torch.isnan(feat).any() or torch.isinf(feat).any():
-                raise ValueError(
-                    f"🚨 NaN/Inf DETECTED IN INPUT FEAT!\n"
-                    f"  feat NaN: {torch.isnan(feat).any().item()}\n"
-                    f"  feat Inf: {torch.isinf(feat).any().item()}\n"
-                    f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}"
+        with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
+            from pointcept.models.utils.structure import Point
+            point = Point(batched_input)
+            point_feat = backbone(point)
+
+            # NAN CHECK: Detect NaN in backbone output immediately
+            feat_before_scale = point_feat["feat"]
+            if torch.isnan(feat_before_scale).any():
+                scenario_names = [s.get('scenario', 'unknown') for s in scenario_samples]
+                nan_dims = [d for d in range(feat_before_scale.shape[1]) if torch.isnan(feat_before_scale[:, d]).any()]
+                raise AssertionError(
+                    f"🚨 NaN DETECTED IN BACKBONE OUTPUT!\n"
+                    f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}\n"
+                    f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}\n"
+                    f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}\n"
+                    f"  Scenarios: {scenario_names}\n"
+                    f"  Point counts: {scenario_point_counts}\n"
+                    f"  NaN dims: {nan_dims}\n"
+                    f"  AMP enabled: {self.cfg.enable_amp}"
                 )
 
+            # CRITICAL FIX: Do NOT normalize features
+            # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
+            # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
+
+            # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
+            # The LangPretrainer wrapper applies tanh, but trainer bypasses it
+            # We MUST apply tanh here for consistency!
+            batched_features = torch.tanh(feat_before_scale)
+
+            # NAN CHECK: Detect NaN after tanh
+            if torch.isnan(batched_features).any():
+                raise AssertionError("🚨 NaN AFTER TANH! Check feat_before_scale.")
+
+            # STABILITY CHECK: Detect extreme values that might cause numerical instability
+            feat_max = batched_features.abs().max().item()
+            feat_mean = batched_features.abs().mean().item()
+            if feat_max > 1000.0 or feat_mean > 100.0:
+                print(f"⚠️ WARNING: Extreme features (max={feat_max:.2f}, mean={feat_mean:.2f}) - may cause instability")
+
+        # Clean up large intermediate tensors to free memory before loss computation
+        del point, point_feat, batched_input
+
+        # Now compute loss for each scenario separately
+        # (Each scenario has its own lang_feat target)
+
+        # Get REAL 3D scene name from input_dict (e.g., "figurines", "kitchen", etc.)
+        # This is the actual scene name from the dataset, NOT the training scenario (dense/single)
+        real_scene_name = scene_name  # Already extracted above at line 1150-1155
+
+        # Track all unique real scene names discovered during training
+        self._all_real_scenes.add(real_scene_name)
+
+        # Aggregate losses from all scenarios for this real scene
+        # We'll average the losses across scenarios for the final loss value
+        scenario_losses_for_real_scene = {}  # {scenario: {'total': float, 'l1': float, 'cos': float}}
+
+        start_idx = 0
+        for i, sample_dict in enumerate(scenario_samples):
+            end_idx = start_idx + scenario_point_counts[i]
+            # Extract features for this scenario (creates new tensor, not a view)
+            scenario_feat = batched_features[start_idx:end_idx].clone()
+
+            # Check if sample_dict has valid_feat_mask, otherwise use all ones
+            if 'valid_feat_mask' in sample_dict:
+                valid_mask = sample_dict['valid_feat_mask']
+                valid_ratio = valid_mask.float().mean().item()
+                # Warn about low valid ratios
+                if valid_ratio < 0.5:
+                    print(f"⚠️ WARNING: Scenario {i} has low valid_feat_mask ratio: {valid_ratio:.2%} (may cause instability)")
+            else:
+                valid_mask = torch.ones(scenario_point_counts[i], dtype=torch.bool, device=device)
+
+            # Build scenario-specific input for loss computation
+            scenario_input = {
+                'coord': sample_dict['coord'],
+                'feat': sample_dict['feat'],
+                'grid_size': grid_size,
+                'epoch_progress': epoch_progress,
+                'valid_feat_mask': valid_mask,  # Use actual valid mask from dataset
+            }
+
+            # Add lang_feat if present (required for loss computation)
+            if 'lang_feat' in sample_dict:
+                scenario_input['lang_feat'] = sample_dict['lang_feat']
+                # Check if lang_feat contains NaN
+                if torch.isnan(scenario_input['lang_feat']).any():
+                    raise AssertionError(f"🚨 NaN in lang_feat for scenario {i}! Check data pipeline.")
+
+            # Add segment labels if present
+            if 'labels' in sample_dict:
+                scenario_input['segment'] = sample_dict['labels']
+
+            # Add Gaussian parameters for Rendered2DLoss
+            # Extract from feat tensor (11 channels: color(3) + opacity(1) + quat(4) + scale(3))
+            feat = sample_dict['feat']
+
+            # Always extract from feat if it has 11 channels
+            if feat.shape[-1] == 11:
+                # Extract opacity from feat channels [3:4]
+                scenario_input['opacity'] = feat[:, 3:4]
+                # Extract quat from feat channels [4:8]
+                scenario_input['quat'] = feat[:, 4:8]
+                # Extract scale from feat channels [8:11]
+                scenario_input['scale'] = feat[:, 8:11]
+            else:
+                # Fallback: try to get from sample_dict
+                if 'opacity' in sample_dict:
+                    scenario_input['opacity'] = sample_dict['opacity']
+                if 'quat' in sample_dict:
+                    scenario_input['quat'] = sample_dict['quat']
+                if 'scale' in sample_dict:
+                    scenario_input['scale'] = sample_dict['scale']
+
+            if 'scene_path' in sample_dict:
+                scenario_input['scene_path'] = sample_dict['scene_path']
+
+            # Get scenario name for debug/info
+            scenario_name = sample_dict.get('scenario', f'scenario_{i}')
+
+            # Compute loss using criteria
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-                from pointcept.models.utils.structure import Point
-                point = Point(batched_input)
-                point_feat = backbone(point)
-
-                # NAN CHECK: Detect NaN in backbone output immediately
-                feat_before_scale = point_feat["feat"]
-                if torch.isnan(feat_before_scale).any():
-                    scenario_names = [s.get('scenario', 'unknown') for s in scenario_samples]
-                    nan_dims = [d for d in range(feat_before_scale.shape[1]) if torch.isnan(feat_before_scale[:, d]).any()]
-                    raise AssertionError(
-                        f"🚨 NaN DETECTED IN BACKBONE OUTPUT!\n"
-                        f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}\n"
-                        f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}\n"
-                        f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}\n"
-                        f"  Scenarios: {scenario_names}\n"
-                        f"  Point counts: {scenario_point_counts}\n"
-                        f"  NaN dims: {nan_dims}\n"
-                        f"  AMP enabled: {self.cfg.enable_amp}"
-                    )
-
-                # CRITICAL FIX: Do NOT normalize features
-                # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
-                # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
-
-                # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
-                # The LangPretrainer wrapper applies tanh, but trainer bypasses it
-                # We MUST apply tanh here for consistency!
-                batched_features = torch.tanh(feat_before_scale)
-
-                # NAN CHECK: Detect NaN after tanh
-                if torch.isnan(batched_features).any():
-                    raise AssertionError("🚨 NaN AFTER TANH! Check feat_before_scale.")
-
-                # STABILITY CHECK: Detect extreme values that might cause numerical instability
-                feat_max = batched_features.abs().max().item()
-                feat_mean = batched_features.abs().mean().item()
-                if feat_max > 1000.0 or feat_mean > 100.0:
-                    print(f"⚠️ WARNING: Extreme features (max={feat_max:.2f}, mean={feat_mean:.2f}) - may cause instability")
-
-            # Clean up large intermediate tensors to free memory before loss computation
-            del point, point_feat, batched_input
-
-            # Now compute loss for each scenario separately
-            # (Each scenario has its own lang_feat target)
-
-            # Get REAL 3D scene name from input_dict (e.g., "figurines", "kitchen", etc.)
-            # This is the actual scene name from the dataset, NOT the training scenario (dense/single)
-            real_scene_name = scene_name  # Already extracted above at line 1150-1155
-
-            # Track all unique real scene names discovered during training
-            self._all_real_scenes.add(real_scene_name)
-
-            # Aggregate losses from all scenarios for this real scene
-            # We'll average the losses across scenarios for the final loss value
-            scenario_losses_for_real_scene = {}  # {scenario: {'total': float, 'l1': float, 'cos': float}}
-
-            start_idx = 0
-            for i, sample_dict in enumerate(scenario_samples):
-                end_idx = start_idx + scenario_point_counts[i]
-                # Extract features for this scenario (creates new tensor, not a view)
-                scenario_feat = batched_features[start_idx:end_idx].clone()
-
-                # Check if sample_dict has valid_feat_mask, otherwise use all ones
-                if 'valid_feat_mask' in sample_dict:
-                    valid_mask = sample_dict['valid_feat_mask']
-                    valid_ratio = valid_mask.float().mean().item()
-                    # Warn about low valid ratios
-                    if valid_ratio < 0.5:
-                        print(f"⚠️ WARNING: Scenario {i} has low valid_feat_mask ratio: {valid_ratio:.2%} (may cause instability)")
+                # Get criteria
+                if hasattr(self.model, 'module'):
+                    criteria = self.model.module.criteria
                 else:
-                    valid_mask = torch.ones(scenario_point_counts[i], dtype=torch.bool, device=device)
+                    criteria = self.model.criteria
 
-                # Build scenario-specific input for loss computation
-                scenario_input = {
-                    'coord': sample_dict['coord'],
-                    'feat': sample_dict['feat'],
-                    'grid_size': grid_size,
+                segment = scenario_input.get("segment")
+                lang_feat = scenario_input.get('lang_feat')
+
+                # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
+                if self.comm_info['iter'] == 0 and i == 0:
+                    if lang_feat is not None:
+                        import torch.nn.functional as F
+                        import numpy as np
+
+                        # Compute overall difference statistics
+                        pred_np = scenario_feat.detach().cpu().numpy()
+                        gt_np = lang_feat.detach().cpu().numpy()
+                        diff = np.abs(pred_np - gt_np)
+                        overall_max_diff = diff.max()
+                        overall_mean_diff = diff.mean()
+
+                        # Compute cosine similarity
+                        pred_norm = F.normalize(scenario_feat, p=2, dim=1)  # [N, 16]
+                        gt_norm = F.normalize(lang_feat, p=2, dim=1)  # [N, 16]
+                        cos_sim_per_row = (pred_norm * gt_norm).sum(dim=1)  # [N]
+
+                        cos_mean = cos_sim_per_row.mean().item()
+                        cos_min = cos_sim_per_row.min().item()
+
+                        # Compact output: one line for differences, one for similarity
+                        status = "✓" if cos_mean > 0.5 else ("⚠️" if cos_mean > 0.1 else "🚨")
+                        print(f"    Pred vs Target: {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
+                              f"CosSim: mean={cos_mean:.4f}, min={cos_min:.4f}", flush=True)
+
+                # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
+                criteria_kwargs = {
+                    'valid_feat_mask': scenario_input['valid_feat_mask'],
+                    'segment': segment,
                     'epoch_progress': epoch_progress,
-                    'valid_feat_mask': valid_mask,  # Use actual valid mask from dataset
+                    'scenario': scenario_name,  # Pass scenario for Rendered2DLoss (only dense computes loss)
                 }
+                # Add optional parameters for Rendered2DLoss
+                if 'coord' in scenario_input:
+                    criteria_kwargs['coord'] = scenario_input['coord']
+                if 'opacity' in scenario_input:
+                    criteria_kwargs['opacity'] = scenario_input['opacity']
+                if 'quat' in scenario_input:
+                    criteria_kwargs['quat'] = scenario_input['quat']
+                if 'scale' in scenario_input:
+                    criteria_kwargs['scale'] = scenario_input['scale']
+                if 'scene_path' in scenario_input:
+                    criteria_kwargs['scene_path'] = scenario_input['scene_path']
 
-                # Add lang_feat if present (required for loss computation)
-                if 'lang_feat' in sample_dict:
-                    scenario_input['lang_feat'] = sample_dict['lang_feat']
-                    # Check if lang_feat contains NaN
-                    if torch.isnan(scenario_input['lang_feat']).any():
-                        raise AssertionError(f"🚨 NaN in lang_feat for scenario {i}! Check data pipeline.")
+                # Compute loss (returns tuple when verbose_losses=True)
+                loss_result = criteria(
+                    scenario_feat,
+                    lang_feat,  # Use raw features, not normalized
+                    **criteria_kwargs,
+                )
 
-                # Add segment labels if present
-                if 'labels' in sample_dict:
-                    scenario_input['segment'] = sample_dict['labels']
-
-                # Add Gaussian parameters for Rendered2DLoss
-                # Extract from feat tensor (11 channels: color(3) + opacity(1) + quat(4) + scale(3))
-                feat = sample_dict['feat']
-
-                # Always extract from feat if it has 11 channels
-                if feat.shape[-1] == 11:
-                    # Extract opacity from feat channels [3:4]
-                    scenario_input['opacity'] = feat[:, 3:4]
-                    # Extract quat from feat channels [4:8]
-                    scenario_input['quat'] = feat[:, 4:8]
-                    # Extract scale from feat channels [8:11]
-                    scenario_input['scale'] = feat[:, 8:11]
-                else:
-                    # Fallback: try to get from sample_dict
-                    if 'opacity' in sample_dict:
-                        scenario_input['opacity'] = sample_dict['opacity']
-                    if 'quat' in sample_dict:
-                        scenario_input['quat'] = sample_dict['quat']
-                    if 'scale' in sample_dict:
-                        scenario_input['scale'] = sample_dict['scale']
-
-                if 'scene_path' in sample_dict:
-                    scenario_input['scene_path'] = sample_dict['scene_path']
-
-                # Get scenario name for debug/info
-                scenario_name = sample_dict.get('scenario', f'scenario_{i}')
-
-                # Compute loss using criteria
-                with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-                    # Get criteria
-                    if hasattr(self.model, 'module'):
-                        criteria = self.model.module.criteria
+                # Handle return formats:
+                # - (loss, loss_dict) or (loss, loss_dict, per_dim_losses, per_dim_weights) when verbose_losses=True
+                # - just loss when verbose_losses=False
+                if isinstance(loss_result, tuple):
+                    loss = loss_result[0]
+                    if len(loss_result) == 2:
+                        loss_dict = loss_result[1]
+                        per_dim_losses = None
+                        per_dim_weights = None
+                    elif len(loss_result) == 4:
+                        loss_dict = loss_result[1]
+                        per_dim_losses = loss_result[2]
+                        per_dim_weights = loss_result[3]
                     else:
-                        criteria = self.model.criteria
-
-                    segment = scenario_input.get("segment")
-                    lang_feat = scenario_input.get('lang_feat')
-
-                    # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
-                    if self.comm_info['iter'] == 0 and i == 0:
-                        if lang_feat is not None:
-                            import torch.nn.functional as F
-                            import numpy as np
-
-                            # Compute overall difference statistics
-                            pred_np = scenario_feat.detach().cpu().numpy()
-                            gt_np = lang_feat.detach().cpu().numpy()
-                            diff = np.abs(pred_np - gt_np)
-                            overall_max_diff = diff.max()
-                            overall_mean_diff = diff.mean()
-
-                            # Compute cosine similarity
-                            pred_norm = F.normalize(scenario_feat, p=2, dim=1)  # [N, 16]
-                            gt_norm = F.normalize(lang_feat, p=2, dim=1)  # [N, 16]
-                            cos_sim_per_row = (pred_norm * gt_norm).sum(dim=1)  # [N]
-
-                            cos_mean = cos_sim_per_row.mean().item()
-                            cos_min = cos_sim_per_row.min().item()
-
-                            # Compact output: one line for differences, one for similarity
-                            status = "✓" if cos_mean > 0.5 else ("⚠️" if cos_mean > 0.1 else "🚨")
-                            print(f"    Pred vs Target: {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
-                                  f"CosSim: mean={cos_mean:.4f}, min={cos_min:.4f}", flush=True)
-
-                    # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
-                    criteria_kwargs = {
-                        'valid_feat_mask': scenario_input['valid_feat_mask'],
-                        'segment': segment,
-                        'epoch_progress': epoch_progress,
-                        'scenario': scenario_name,  # Pass scenario for Rendered2DLoss (only dense computes loss)
-                    }
-                    # Add optional parameters for Rendered2DLoss
-                    if 'coord' in scenario_input:
-                        criteria_kwargs['coord'] = scenario_input['coord']
-                    if 'opacity' in scenario_input:
-                        criteria_kwargs['opacity'] = scenario_input['opacity']
-                    if 'quat' in scenario_input:
-                        criteria_kwargs['quat'] = scenario_input['quat']
-                    if 'scale' in scenario_input:
-                        criteria_kwargs['scale'] = scenario_input['scale']
-                    if 'scene_path' in scenario_input:
-                        criteria_kwargs['scene_path'] = scenario_input['scene_path']
-
-                    # Compute loss (returns tuple when verbose_losses=True)
-                    loss_result = criteria(
-                        scenario_feat,
-                        lang_feat,  # Use raw features, not normalized
-                        **criteria_kwargs,
-                    )
-
-                    # Handle return formats:
-                    # - (loss, loss_dict) or (loss, loss_dict, per_dim_losses, per_dim_weights) when verbose_losses=True
-                    # - just loss when verbose_losses=False
-                    if isinstance(loss_result, tuple):
-                        loss = loss_result[0]
-                        if len(loss_result) == 2:
-                            loss_dict = loss_result[1]
-                            per_dim_losses = None
-                            per_dim_weights = None
-                        elif len(loss_result) == 4:
-                            loss_dict = loss_result[1]
-                            per_dim_losses = loss_result[2]
-                            per_dim_weights = loss_result[3]
-                        else:
-                            loss_dict = None
-                            per_dim_losses = None
-                            per_dim_weights = None
-                    else:
-                        loss = loss_result
                         loss_dict = None
                         per_dim_losses = None
                         per_dim_weights = None
-
-                    # Store this scenario's loss for current iteration (will be averaged later)
-                    # NOTE: This is only this scenario's individual loss, NOT the total training loss
-                    # The actual total_loss used for backprop is computed later (sum of all scenarios + consistency)
-                    scenario_losses_for_real_scene[scenario_name] = {
-                        'total': loss.item(),  # Single scenario loss
-                        'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
-                        'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
-                        'contrast': loss_dict.get('contrast_loss', 0.0) if loss_dict else 0.0,
-                        'per_dim_l1': per_dim_losses.get('per_dim_l1') if per_dim_losses else None,
-                        'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
-                    }
-
-                # Build output dict with loss components for InformationWriter logging
-                output = dict(loss=loss, feat=scenario_feat)
-                # Add individual loss components for display in training logs
-                # loss_dict contains Python floats from Criteria, need to convert back to tensors
-                if loss_dict:
-                    device = loss.device if isinstance(loss, torch.Tensor) else torch.device('cpu')
-                    # Use scalar tensors (0-dim) with requires_grad=False for logging
-                    output['l1_loss'] = torch.tensor(float(loss_dict.get('l1_loss', 0.0)), device=device)
-                    output['cos_loss'] = torch.tensor(float(loss_dict.get('cos_loss', 0.0)), device=device)
-                    output['contrast_loss'] = torch.tensor(float(loss_dict.get('contrast_loss', 0.0)), device=device)
-                scenario_outputs.append(output)
-                scenario_losses.append(loss)
-
-                # Clean up scenario-specific tensors to free memory
-                del scenario_feat, scenario_input
-
-                start_idx = end_idx
-
-            # UNIFIED LOSS TRACKING: Record losses for ALL real scenes at each iteration
-            # For the scene trained this iteration: use the newly computed loss (averaged across scenarios)
-            # For other scenes: repeat the last recorded loss value
-            # This ensures all scenes have aligned loss curves for comparison and averaging
-            #
-            # CRITICAL FIX: Calculate TRUE global iteration that continues across epochs
-            # self.comm_info["iter"] resets to 0 at the start of each epoch
-            # We need: global_iter = epoch * iters_per_epoch + iter_within_epoch
-            local_iter = self.comm_info["iter"]
-            iters_per_epoch = len(self.train_loader)
-            true_global_iter = self.epoch * iters_per_epoch + local_iter
-
-            # Aggregate losses from all scenarios for the current real scene
-            # Average the losses across scenarios (dense, single) for a single value per real scene
-            if scenario_losses_for_real_scene:
-                avg_total = sum(v['total'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-                avg_l1 = sum(v['l1'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-                avg_cos = sum(v['cos'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-                avg_contrast = sum(v['contrast'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-
-                # Aggregate per-dimension L1 losses (average across scenarios)
-                per_dim_l1_list = [v['per_dim_l1'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1'] is not None]
-                if per_dim_l1_list:
-                    # Stack and average per-dimension losses
-                    avg_per_dim_l1 = torch.stack(per_dim_l1_list).mean(dim=0)  # [D]
                 else:
-                    avg_per_dim_l1 = None
+                    loss = loss_result
+                    loss_dict = None
+                    per_dim_losses = None
+                    per_dim_weights = None
 
-                # Aggregate per-dimension weights (take first scenario's weights, as they should be the same)
-                per_dim_weights_list = [v['per_dim_l1_weights'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1_weights'] is not None]
-                avg_per_dim_l1_weights = per_dim_weights_list[0] if per_dim_weights_list else None
+                # Store this scenario's loss for current iteration (will be averaged later)
+                # NOTE: This is only this scenario's individual loss, NOT the total training loss
+                # The actual total_loss used for backprop is computed later (sum of all scenarios + consistency)
+                scenario_losses_for_real_scene[scenario_name] = {
+                    'total': loss.item(),  # Single scenario loss
+                    'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
+                    'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
+                    'contrast': loss_dict.get('contrast_loss', 0.0) if loss_dict else 0.0,
+                    'per_dim_l1': per_dim_losses.get('per_dim_l1') if per_dim_losses else None,
+                    'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
+                }
+
+            # Build output dict with loss components for InformationWriter logging
+            output = dict(loss=loss, feat=scenario_feat)
+            # Add individual loss components for display in training logs
+            # loss_dict contains Python floats from Criteria, need to convert back to tensors
+            if loss_dict:
+                device = loss.device if isinstance(loss, torch.Tensor) else torch.device('cpu')
+                # Use scalar tensors (0-dim) with requires_grad=False for logging
+                output['l1_loss'] = torch.tensor(float(loss_dict.get('l1_loss', 0.0)), device=device)
+                output['cos_loss'] = torch.tensor(float(loss_dict.get('cos_loss', 0.0)), device=device)
+                output['contrast_loss'] = torch.tensor(float(loss_dict.get('contrast_loss', 0.0)), device=device)
+            scenario_outputs.append(output)
+            scenario_losses.append(loss)
+
+            # Clean up scenario-specific tensors to free memory
+            del scenario_feat, scenario_input
+
+            start_idx = end_idx
+
+        # UNIFIED LOSS TRACKING: Record losses for ALL real scenes at each iteration
+        # For the scene trained this iteration: use the newly computed loss (averaged across scenarios)
+        # For other scenes: repeat the last recorded loss value
+        # This ensures all scenes have aligned loss curves for comparison and averaging
+        #
+        # CRITICAL FIX: Calculate TRUE global iteration that continues across epochs
+        # self.comm_info["iter"] resets to 0 at the start of each epoch
+        # We need: global_iter = epoch * iters_per_epoch + iter_within_epoch
+        local_iter = self.comm_info["iter"]
+        iters_per_epoch = len(self.train_loader)
+        true_global_iter = self.epoch * iters_per_epoch + local_iter
+
+        # Aggregate losses from all scenarios for the current real scene
+        # Average the losses across scenarios (dense, single) for a single value per real scene
+        if scenario_losses_for_real_scene:
+            avg_total = sum(v['total'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+            avg_l1 = sum(v['l1'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+            avg_cos = sum(v['cos'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+            avg_contrast = sum(v['contrast'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
+
+            # Aggregate per-dimension L1 losses (average across scenarios)
+            per_dim_l1_list = [v['per_dim_l1'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1'] is not None]
+            if per_dim_l1_list:
+                # Stack and average per-dimension losses
+                avg_per_dim_l1 = torch.stack(per_dim_l1_list).mean(dim=0)  # [D]
             else:
-                avg_total = avg_l1 = avg_cos = avg_rendered2d = 0.0
                 avg_per_dim_l1 = None
-                avg_per_dim_l1_weights = None
 
-            # Update loss tracking for ALL known real scenes
-            # For the current scene being trained: append the averaged loss
-            # For other scenes: append their last loss value (repeat)
-            for scene_name in self._all_real_scenes:
-                # Initialize loss tracking dict for this scene if needed
-                if scene_name not in self.per_scene_losses:
-                    self.per_scene_losses[scene_name] = {
-                        'total_loss': [],
-                        'l1_loss': [],
-                        'cos_loss': [],
-                        'contrast_loss': [],
-                        'per_dim_l1': [],  # List of tensors, each [D]
-                        'per_dim_l1_weights': [],  # List of tensors, each [D]
-                        'iterations': [],
-                        'epochs': [],
-                    }
+            # Aggregate per-dimension weights (take first scenario's weights, as they should be the same)
+            per_dim_weights_list = [v['per_dim_l1_weights'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1_weights'] is not None]
+            avg_per_dim_l1_weights = per_dim_weights_list[0] if per_dim_weights_list else None
+        else:
+            avg_total = avg_l1 = avg_cos = avg_rendered2d = 0.0
+            avg_per_dim_l1 = None
+            avg_per_dim_l1_weights = None
 
-                # Migrate old format (if per_dim_l1 keys are missing, add them)
-                if 'per_dim_l1' not in self.per_scene_losses[scene_name]:
-                    self.per_scene_losses[scene_name]['per_dim_l1'] = []
-                if 'per_dim_l1_weights' not in self.per_scene_losses[scene_name]:
-                    self.per_scene_losses[scene_name]['per_dim_l1_weights'] = []
-                if 'contrast_loss' not in self.per_scene_losses[scene_name]:
-                    self.per_scene_losses[scene_name]['contrast_loss'] = []
+        # Update loss tracking for ALL known real scenes
+        # For the current scene being trained: append the averaged loss
+        # For other scenes: append their last loss value (repeat)
+        for scene_name in self._all_real_scenes:
+            # Initialize loss tracking dict for this scene if needed
+            if scene_name not in self.per_scene_losses:
+                self.per_scene_losses[scene_name] = {
+                    'total_loss': [],
+                    'l1_loss': [],
+                    'cos_loss': [],
+                    'contrast_loss': [],
+                    'per_dim_l1': [],  # List of tensors, each [D]
+                    'per_dim_l1_weights': [],  # List of tensors, each [D]
+                    'iterations': [],
+                    'epochs': [],
+                }
 
-                # Get the loss values for this iteration
-                if scene_name == real_scene_name:
-                    # This is the scene being trained this iteration - use new averaged values
-                    total_loss = avg_total
-                    l1_loss = avg_l1
-                    cos_loss = avg_cos
-                    contrast_loss = avg_contrast
-                    per_dim_l1 = avg_per_dim_l1
-                    per_dim_l1_weights = avg_per_dim_l1_weights
+            # Migrate old format (if per_dim_l1 keys are missing, add them)
+            if 'per_dim_l1' not in self.per_scene_losses[scene_name]:
+                self.per_scene_losses[scene_name]['per_dim_l1'] = []
+            if 'per_dim_l1_weights' not in self.per_scene_losses[scene_name]:
+                self.per_scene_losses[scene_name]['per_dim_l1_weights'] = []
+            if 'contrast_loss' not in self.per_scene_losses[scene_name]:
+                self.per_scene_losses[scene_name]['contrast_loss'] = []
+
+            # Get the loss values for this iteration
+            if scene_name == real_scene_name:
+                # This is the scene being trained this iteration - use new averaged values
+                total_loss = avg_total
+                l1_loss = avg_l1
+                cos_loss = avg_cos
+                contrast_loss = avg_contrast
+                per_dim_l1 = avg_per_dim_l1
+                per_dim_l1_weights = avg_per_dim_l1_weights
+            else:
+                # This scene was NOT trained this iteration - repeat last values
+                if self.per_scene_losses[scene_name]['total_loss']:
+                    total_loss = self.per_scene_losses[scene_name]['total_loss'][-1]
+                    l1_loss = self.per_scene_losses[scene_name]['l1_loss'][-1]
+                    cos_loss = self.per_scene_losses[scene_name]['cos_loss'][-1]
+                    contrast_loss = self.per_scene_losses[scene_name]['contrast_loss'][-1] if self.per_scene_losses[scene_name]['contrast_loss'] else 0.0
+                    per_dim_l1 = self.per_scene_losses[scene_name]['per_dim_l1'][-1] if self.per_scene_losses[scene_name]['per_dim_l1'] else None
+                    per_dim_l1_weights = self.per_scene_losses[scene_name]['per_dim_l1_weights'][-1] if self.per_scene_losses[scene_name]['per_dim_l1_weights'] else None
                 else:
-                    # This scene was NOT trained this iteration - repeat last values
-                    if self.per_scene_losses[scene_name]['total_loss']:
-                        total_loss = self.per_scene_losses[scene_name]['total_loss'][-1]
-                        l1_loss = self.per_scene_losses[scene_name]['l1_loss'][-1]
-                        cos_loss = self.per_scene_losses[scene_name]['cos_loss'][-1]
-                        contrast_loss = self.per_scene_losses[scene_name]['contrast_loss'][-1] if self.per_scene_losses[scene_name]['contrast_loss'] else 0.0
-                        per_dim_l1 = self.per_scene_losses[scene_name]['per_dim_l1'][-1] if self.per_scene_losses[scene_name]['per_dim_l1'] else None
-                        per_dim_l1_weights = self.per_scene_losses[scene_name]['per_dim_l1_weights'][-1] if self.per_scene_losses[scene_name]['per_dim_l1_weights'] else None
-                    else:
-                        # No previous loss - this shouldn't happen, but handle gracefully
-                        total_loss = 0.0
-                        l1_loss = 0.0
-                        cos_loss = 0.0
-                        contrast_loss = 0.0
-                        per_dim_l1 = None
-                        per_dim_l1_weights = None
+                    # No previous loss - this shouldn't happen, but handle gracefully
+                    total_loss = 0.0
+                    l1_loss = 0.0
+                    cos_loss = 0.0
+                    contrast_loss = 0.0
+                    per_dim_l1 = None
+                    per_dim_l1_weights = None
 
-                # Record the loss for this scene at this iteration
-                self.per_scene_losses[scene_name]['total_loss'].append(total_loss)
-                self.per_scene_losses[scene_name]['l1_loss'].append(l1_loss)
-                self.per_scene_losses[scene_name]['cos_loss'].append(cos_loss)
-                self.per_scene_losses[scene_name]['contrast_loss'].append(contrast_loss)
-                self.per_scene_losses[scene_name]['per_dim_l1'].append(per_dim_l1)
-                self.per_scene_losses[scene_name]['per_dim_l1_weights'].append(per_dim_l1_weights)
-                self.per_scene_losses[scene_name]['iterations'].append(true_global_iter)
-                self.per_scene_losses[scene_name]['epochs'].append(self.epoch)
+            # Record the loss for this scene at this iteration
+            self.per_scene_losses[scene_name]['total_loss'].append(total_loss)
+            self.per_scene_losses[scene_name]['l1_loss'].append(l1_loss)
+            self.per_scene_losses[scene_name]['cos_loss'].append(cos_loss)
+            self.per_scene_losses[scene_name]['contrast_loss'].append(contrast_loss)
+            self.per_scene_losses[scene_name]['per_dim_l1'].append(per_dim_l1)
+            self.per_scene_losses[scene_name]['per_dim_l1_weights'].append(per_dim_l1_weights)
+            self.per_scene_losses[scene_name]['iterations'].append(true_global_iter)
+            self.per_scene_losses[scene_name]['epochs'].append(self.epoch)
 
-            # Clean up batched_features after all scenarios processed
-            del batched_features
+        # Clean up batched_features after all scenarios processed
+        del batched_features
 
         forward_time = time.time() - forward_start
 
