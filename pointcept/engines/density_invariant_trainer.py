@@ -763,9 +763,7 @@ class DensityInvariantTrainer(TrainerBase):
         self.scenario_weights = self.density_config.get(
             'scenario_weights', {'dense': 1.0, 'half': 1.0, 'single': 1.0}
         )
-        self.use_compressed_features = self.density_config.get('use_compressed_features', True)
-        self.svd_rank = self.density_config.get('svd_rank', None)  # SVD compression rank to load
-        self.batched_forward = self.density_config.get('batched_forward', True)  # NEW: batched or separate forward
+        self.svd_rank = self.density_config.get('svd_rank', None)
 
         # Per-dimension correlation monitoring
         self.enable_per_dim_monitor = cfg.get('enable_per_dim_monitor', True)
@@ -793,9 +791,7 @@ class DensityInvariantTrainer(TrainerBase):
         self.logger.info(f"   Consistency type: {self.consistency_type}")
         self.logger.info(f"   Enabled scenarios: {self.enabled_scenarios}")
         self.logger.info(f"   Scenario weights: {self.scenario_weights}")
-        self.logger.info(f"   Use compressed features: {self.use_compressed_features}")
         self.logger.info(f"   SVD rank: {self.svd_rank if self.svd_rank else 'auto (highest available)'}")
-        self.logger.info(f"   Batched forward: {self.batched_forward}")
 
         # Build components
         self.logger.info("=> Building model ...")
@@ -870,12 +866,8 @@ class DensityInvariantTrainer(TrainerBase):
         return model
 
     def build_writer(self):
-        """Build tensorboard writer"""
-        # TEMPORARILY DISABLED: Prevent writing to events file to save disk space
-        writer = None  # SummaryWriter(self.cfg.save_path) if comm.is_main_process() else None
-        if comm.is_main_process():
-            self.logger.info(f"Tensorboard writer DISABLED (not logging to: {self.cfg.save_path})")
-        return writer
+        """Build tensorboard writer (disabled to save disk space)"""
+        return None
 
     def build_train_loader(self):
         """Build train dataloader"""
@@ -1201,7 +1193,6 @@ class DensityInvariantTrainer(TrainerBase):
             backbone = self.model.backbone
 
         # NAN CHECK: Check backbone weights before forward pass (EVERY iteration now)
-        # This was previously done every 10 iters, but NaN can happen at any time
         has_nan_in_backbone = False
         nan_params = []
         for name, param in backbone.named_parameters():
@@ -1211,14 +1202,12 @@ class DensityInvariantTrainer(TrainerBase):
                 nan_params.append(f"{name} ({nan_count} NaNs)")
 
         if has_nan_in_backbone:
-            print(f"\n🚨 NaN DETECTED IN BACKBONE WEIGHTS BEFORE FORWARD PASS!")
-            print(f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}")
-            print(f"  Corrupted parameters:")
-            for p in nan_params[:5]:  # Show first 5
-                print(f"    - {p}")
-            print(f"  Model is corrupted from previous iterations!")
-            print(f"  Need to restart from a clean checkpoint.")
-            raise RuntimeError("Backbone weights contain NaN! Cannot continue training.")
+            raise RuntimeError(
+                f"🚨 NaN DETECTED IN BACKBONE WEIGHTS BEFORE FORWARD PASS!\n"
+                f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}\n"
+                f"  Corrupted parameters: {nan_params[:5]}\n"
+                f"  Model is corrupted from previous iterations! Need to restart from a clean checkpoint."
+            )
 
         # Check minimum point count for all scenarios
         for sample_dict in scenario_samples:
@@ -1280,23 +1269,19 @@ class DensityInvariantTrainer(TrainerBase):
             coord = batched_input['coord']
             feat = batched_input['feat']
             if torch.isnan(coord).any() or torch.isinf(coord).any():
-                print(f"\n🚨 NaN/Inf DETECTED IN INPUT COORD!")
-                print(f"  coord NaN: {torch.isnan(coord).any().item()}")
-                print(f"  coord Inf: {torch.isinf(coord).any().item()}")
-                print(f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}")
-                assert False, "Input coord contains NaN/Inf! Check data loading."
+                raise ValueError(
+                    f"🚨 NaN/Inf DETECTED IN INPUT COORD!\n"
+                    f"  coord NaN: {torch.isnan(coord).any().item()}\n"
+                    f"  coord Inf: {torch.isinf(coord).any().item()}\n"
+                    f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}"
+                )
             if torch.isnan(feat).any() or torch.isinf(feat).any():
-                print(f"\n🚨 NaN/Inf DETECTED IN INPUT FEAT!")
-                print(f"  feat NaN: {torch.isnan(feat).any().item()}")
-                print(f"  feat Inf: {torch.isinf(feat).any().item()}")
-                print(f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}")
-                assert False, "Input feat contains NaN/Inf! Check data loading."
-
-            # ========================================
-            # Decoder Layer Monitoring Setup (register hooks BEFORE forward pass)
-            # ========================================
-            decoder_layer_outputs = {}
-            decoder_hooks = []
+                raise ValueError(
+                    f"🚨 NaN/Inf DETECTED IN INPUT FEAT!\n"
+                    f"  feat NaN: {torch.isnan(feat).any().item()}\n"
+                    f"  feat Inf: {torch.isinf(feat).any().item()}\n"
+                    f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}"
+                )
 
             with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
                 from pointcept.models.utils.structure import Point
@@ -1306,39 +1291,22 @@ class DensityInvariantTrainer(TrainerBase):
                 # NAN CHECK: Detect NaN in backbone output immediately
                 feat_before_scale = point_feat["feat"]
                 if torch.isnan(feat_before_scale).any():
-                    print(f"\n🚨 NaN DETECTED IN BACKBONE OUTPUT!")
-                    print(f"  feat_before_scale contains NaN!")
-                    print(f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}")
-                    print(f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}")
-                    print(f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}")
-
-                    # Print scenario names
                     scenario_names = [s.get('scenario', 'unknown') for s in scenario_samples]
-                    print(f"  Scenarios in this batch: {scenario_names}")
-                    print(f"  Point counts per scenario: {scenario_point_counts}")
-
-                    # Check which dimensions have NaN
-                    for dim in range(feat_before_scale.shape[1]):
-                        if torch.isnan(feat_before_scale[:, dim]).any():
-                            print(f"    dim[{dim}] has NaN!")
-
-                    # Check if AMP is enabled
-                    print(f"  AMP enabled: {self.cfg.enable_amp}")
-                    print(f"  If AMP is True, try setting enable_amp=False in config to test.")
-
-                    assert False, "Backbone output contains NaN! Training stopped to prevent corruption."
+                    nan_dims = [d for d in range(feat_before_scale.shape[1]) if torch.isnan(feat_before_scale[:, d]).any()]
+                    raise AssertionError(
+                        f"🚨 NaN DETECTED IN BACKBONE OUTPUT!\n"
+                        f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}\n"
+                        f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}\n"
+                        f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}\n"
+                        f"  Scenarios: {scenario_names}\n"
+                        f"  Point counts: {scenario_point_counts}\n"
+                        f"  NaN dims: {nan_dims}\n"
+                        f"  AMP enabled: {self.cfg.enable_amp}"
+                    )
 
                 # CRITICAL FIX: Do NOT normalize features
                 # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
                 # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
-
-                # Decoder hooks setup (disabled for cleaner output)
-                decoder_layer_outputs = {}
-                decoder_hooks = []
-
-                # Remove hooks if any
-                for hook in decoder_hooks:
-                    hook.remove()
 
                 # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
                 # The LangPretrainer wrapper applies tanh, but trainer bypasses it
@@ -1652,150 +1620,6 @@ class DensityInvariantTrainer(TrainerBase):
             # Clean up batched_features after all scenarios processed
             del batched_features
 
-        # else:
-        #     # =====================================================================
-        #     # MODE 2: SEPARATE FORWARD (slower but no cross-contamination)
-        #     # =====================================================================
-        #     # Forward each scenario independently to avoid interference
-        #     # This prevents sparse convolution from operating across scenario boundaries
-        #
-        #     for i, sample_dict in enumerate(scenario_samples):
-        #         num_points = sample_dict['coord'].shape[0]
-        #
-        #         # Build scenario-specific input dict
-        #         scenario_input = {
-        #             'coord': sample_dict['coord'],
-        #             'feat': sample_dict['feat'],
-        #             'batch': torch.zeros(num_points, dtype=torch.long, device=device),  # Always batch 0
-        #             'grid_size': grid_size,
-        #             'epoch_progress': epoch_progress,
-        #             'valid_feat_mask': torch.ones(num_points, dtype=torch.bool, device=device),
-        #         }
-        #
-        #         # Add lang_feat if present (required for loss computation)
-        #         if 'lang_feat' in sample_dict:
-        #             scenario_input['lang_feat'] = sample_dict['lang_feat']
-        #
-        #         # Add segment labels if present
-        #         if 'labels' in sample_dict:
-        #             scenario_input['segment'] = sample_dict['labels']
-        #
-        #         # Forward pass through backbone (separate for each scenario)
-        #         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-        #             from pointcept.models.utils.structure import Point
-        #             point = Point(scenario_input)
-        #             point_feat = backbone(point)
-        #
-        #             # CRITICAL FIX: Do NOT normalize features
-        #             # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
-        #             # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
-        #
-        #             scenario_feat = point_feat["feat"]  # [N_scenario, D]
-        #
-        #             # DEBUG: Verify model preserves point ordering (only print once at first iteration)
-        #             if self.comm_info["iter"] == 0 and i == 0:
-        #                 print(f"\n[DEBUG] Model Forward Verification:")
-        #                 print(f"  Input coord shape: {scenario_input['coord'].shape}")
-        #                 print(f"  Input feat shape: {scenario_input['feat'].shape}")
-        #                 print(f"  Output feat shape: {scenario_feat.shape}")
-        #                 # Check if point object has coord preserved
-        #                 if hasattr(point_feat, 'coord') or 'coord' in point_feat.keys():
-        #                     output_coord = point_feat.coord if hasattr(point_feat, 'coord') else point_feat['coord']
-        #                     print(f"  Output coord shape: {output_coord.shape}")
-        #                     # Verify coordinates match (should be identical if ordering preserved)
-        #                     coords_match = torch.allclose(scenario_input['coord'], output_coord, atol=1e-5)
-        #                     print(f"  Input/Output coords match: {coords_match}")
-        #                     if not coords_match:
-        #                         print(f"  WARNING: Coordinates don't match! This may indicate reordering.")
-        #                         # Check if it's just a permutation
-        #                         coord_diff = (scenario_input['coord'] - output_coord).abs().max()
-        #                         print(f"  Max coord difference: {coord_diff.item()}")
-        #
-        #         # Clean up intermediate tensors
-        #         del point, point_feat
-        #
-        #         # Compute loss using criteria
-        #         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-        #             # Get criteria
-        #             if hasattr(self.model, 'module'):
-        #                 criteria = self.model.module.criteria
-        #             else:
-        #                 criteria = self.model.criteria
-        #
-        #             segment = scenario_input.get("segment")
-        #             lang_feat = scenario_input.get('lang_feat')
-        #
-        #             # VALIDATION: Verify target (lang_feat) correctness before loss computation
-        #             if self.comm_info["iter"] == 0 and i == 0:
-        #                 print(f"\n[VALIDATION] Target Correctness Check - Scenario {i}:")
-        #                 print(f"  pred (scenario_feat) shape: {scenario_feat.shape}")
-        #                 print(f"  target (lang_feat) shape: {lang_feat.shape if lang_feat is not None else 'None'}")
-        #                 print(f"  valid_feat_mask shape: {scenario_input['valid_feat_mask'].shape}")
-        #
-        #                 if lang_feat is not None:
-        #                     # Check 1: NaN/Inf in target
-        #                     has_nan = torch.isnan(lang_feat).any().item()
-        #                     has_inf = torch.isinf(lang_feat).any().item()
-        #                     print(f"  Target has NaN: {has_nan}, has Inf: {has_inf}")
-        #
-        #                     # Check 2: Target scale statistics
-        #                     print(f"  Target statistics:")
-        #                     print(f"    mean: {lang_feat.mean().item():.6f}, std: {lang_feat.std().item():.6f}")
-        #                     print(f"    min: {lang_feat.min().item():.6f}, max: {lang_feat.max().item():.6f}")
-        #
-        #                     # Check 3: Pred statistics for comparison
-        #                     print(f"  Pred statistics:")
-        #                     print(f"    mean: {scenario_feat.mean().item():.6f}, std: {scenario_feat.std().item():.6f}")
-        #                     print(f"    min: {scenario_feat.min().item():.6f}, max: {scenario_feat.max().item():.6f}")
-        #
-        #                     # Check 4: Scale difference (important for convergence)
-        #                     target_scale = lang_feat.abs().mean().item()
-        #                     pred_scale = scenario_feat.abs().mean().item()
-        #                     scale_ratio = pred_scale / (target_scale + 1e-8)
-        #                     print(f"  Scale ratio (pred/target): {scale_ratio:.4f}")
-        #                     if scale_ratio > 100 or scale_ratio < 0.01:
-        #                         print(f"    WARNING: Large scale mismatch! This may prevent convergence.")
-        #
-        #                     # Check 5: point_to_grid validity
-        #                     point_to_grid = sample_dict.get('point_to_grid')
-        #                     if point_to_grid is not None:
-        #                         print(f"  point_to_grid range: [{point_to_grid.min()}, {point_to_grid.max()}]")
-        #                         # Check if indices match lang_feat length
-        #                         if point_to_grid.shape[0] != lang_feat.shape[0]:
-        #                             print(f"    ERROR: point_to_grid length {point_to_grid.shape[0]} != lang_feat length {lang_feat.shape[0]}")
-        #                         else:
-        #                             print(f"    ✓ point_to_grid length matches lang_feat")
-        #
-        #                     # Check 6: Valid mask coverage
-        #                     valid_mask = scenario_input['valid_feat_mask']
-        #                     valid_ratio = valid_mask.float().mean().item()
-        #                     print(f"  Valid feat mask coverage: {valid_ratio:.2%}")
-        #                     if valid_ratio < 0.5:
-        #                         print(f"    WARNING: Less than 50% of features are valid!")
-        #
-        #                     # Check 7: Per-dimension statistics (for 16-dim SVD)
-        #                     if lang_feat.shape[1] == 16:
-        #                         print(f"  Per-dimension target stats:")
-        #                         for dim in range(min(4, 16)):  # Show first 4 dims
-        #                             dim_mean = lang_feat[:, dim].mean().item()
-        #                             dim_std = lang_feat[:, dim].std().item()
-        #                             print(f"    dim[{dim}]: mean={dim_mean:.4f}, std={dim_std:.4f}")
-        #
-        #         loss = criteria(
-        #             scenario_feat,
-        #             lang_feat,  # Use raw features, not normalized
-        #             valid_feat_mask=scenario_input['valid_feat_mask'],
-        #             segment=segment,
-        #             epoch_progress=epoch_progress,
-        #         )
-        #
-        #         output = dict(loss=loss, feat=scenario_feat)
-        #         scenario_outputs.append(output)
-        #         scenario_losses.append(loss)
-        #
-        #         # Clean up scenario-specific tensors to free memory
-        #         del scenario_feat, scenario_input
-
         forward_time = time.time() - forward_start
 
         # TIMING: Consistency loss computation
@@ -1811,6 +1635,13 @@ class DensityInvariantTrainer(TrainerBase):
             consistency_loss = torch.tensor(0.0, device=self.device)
             consistency_loss_dict = {'total_consistency': 0.0, 'num_common_grids': 0}
         consistency_time = time.time() - consistency_start
+
+        # Print consistency loss (after all criteria losses are printed)
+        if comm.is_main_process() and consistency_loss_dict:
+            total_consistency = consistency_loss_dict.get('total_consistency', 0.0)
+            if isinstance(total_consistency, (int, float)):
+                consistency_val = total_consistency * self.consistency_weight
+                print(f"[DensityConsistency] weight={self.consistency_weight:.2f}, loss={consistency_val:.6f}", flush=True)
 
         # Optionally: add grid feature alignment loss
         # Disabled to save memory - this auxiliary loss doesn't contribute gradients
@@ -1893,14 +1724,10 @@ class DensityInvariantTrainer(TrainerBase):
                 return
 
         # NAN CHECK: Detect and handle NaN loss before backward pass
-        # This prevents cascading NaN failures that can corrupt the entire model
         if torch.isnan(total_loss).any() or torch.isinf(total_loss).any():
-            print(f"🚨 NaN/Inf loss (iter={self.iter}, epoch={self.epoch}): total={total_loss.item()}, scenarios={[f'{l.item():.2f}' for l in scenario_losses]}")
-            # Try to identify which scenario caused the NaN
             for i, (loss, scenario) in enumerate(zip(scenario_losses, scenarios_to_use)):
                 if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    print(f"  Scenario '{scenario}' has NaN/Inf loss!")
-            # Skip this iteration to prevent corruption
+                    self.logger.warning(f"  Scenario '{scenario}' has NaN/Inf loss!")
             return
 
         # TIMING: Backward pass

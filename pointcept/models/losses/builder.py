@@ -77,7 +77,7 @@ class Criteria(object):
             cos_val = loss_values.get('cos_loss', 0.0)
             contrast_val = loss_values.get('contrast_loss', 0.0)
             total_val = loss.detach().item()
-            print(f"L1={l1_val:.6f}, Cos={cos_val:.6f}, Contrast={contrast_val:.6f}, Total={total_val:.6f}")
+            print(f"L1={l1_val:.6f}, Cos={cos_val:.6f}, Contrast={contrast_val:.6f}, Total={total_val:.6f}", flush=True)
 
             # Return total loss, individual loss values, and per-dimension losses
             return loss, loss_values, per_dim_losses, per_dim_weights
