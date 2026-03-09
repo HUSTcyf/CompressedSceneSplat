@@ -1302,33 +1302,93 @@ class DensityInvariantTrainer(TrainerBase):
                 # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
                 # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
 
-                # CRITICAL FIX: Apply learnable dimension-wise scaling
-                # The LangPretrainer wrapper has dim_scale parameter, but we're calling
-                # backbone directly here, so we need to apply scaling manually
-                if hasattr(self.model, 'module'):
-                    dim_scale = self.model.module.dim_scale
-                else:
-                    dim_scale = self.model.dim_scale
+                # ====================================================================
+                # DEBUG: Comprehensive model collapse analysis (first iteration only)
+                # ====================================================================
+                if self.comm_info['iter'] == 0:
+                    print("\n" + "="*80, flush=True)
+                    print("==== [MODEL COLLAPSE ANALYSIS - ITER 0] ====", flush=True)
+                    print("="*80, flush=True)
 
-                # Check dim_scale validity
-                if torch.isnan(dim_scale).any() or torch.isinf(dim_scale).any():
-                    print(f"\n🚨 NaN/Inf DETECTED IN dim_scale!")
-                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
-                    print(f"  Resetting to safe values...")
-                    with torch.no_grad():
-                        dim_scale_dim = dim_scale.shape[0]  # Get actual dimension from dim_scale
-                        dim_scale.copy_(torch.ones(dim_scale_dim, device=dim_scale.device) * 0.3)
-                        dim_scale[0] = 1.0
+                    # Get decoder last layer bias
+                    if hasattr(self.model, 'module'):
+                        backbone = self.model.module.backbone
+                    else:
+                        backbone = self.model.backbone
 
-                # Apply scaling: [N, D] * [D] = [N, D]
-                batched_features = feat_before_scale * dim_scale  # [Total_points, D]
+                    # Try to find the decoder's final layer bias
+                    dec_bias = None
+                    if hasattr(backbone, 'dec'):
+                        decoder = backbone.dec
+                        # Look for the final output layer (usually named 'out', 'cls', or is the last layer)
+                        if hasattr(decoder, 'out'):
+                            dec_bias = decoder.out.bias
+                        elif hasattr(decoder, 'cls'):
+                            dec_bias = decoder.cls.bias
+                        elif hasattr(decoder, 'fc'):
+                            dec_bias = decoder.fc.bias
+                        else:
+                            # Try to find the last Linear layer
+                            for name, module in reversed(list(decoder.named_modules())):
+                                if isinstance(module, torch.nn.Linear):
+                                    dec_bias = module.bias
+                                    break
 
-                # NAN CHECK: Detect NaN after scaling
+                    if dec_bias is not None:
+                        print(f"\n[0] Decoder last layer bias:", flush=True)
+                        dec_bias_np = dec_bias.detach().cpu().numpy()
+                        for d in range(min(16, len(dec_bias_np))):
+                            print(f"    dim[{d}]: {dec_bias_np[d]:.6f}", flush=True)
+
+                if self.comm_info['iter'] == 0:
+                    print(f"\n[1] Backbone output (feat_before_scale):", flush=True)
+                    print(f"    shape: {feat_before_scale.shape}", flush=True)
+                    means = feat_before_scale.mean(dim=0).detach().cpu().numpy()
+                    stds = feat_before_scale.std(dim=0).detach().cpu().numpy()
+                    mins = feat_before_scale.min(dim=0)[0].detach().cpu().numpy()
+                    maxs = feat_before_scale.max(dim=0)[0].detach().cpu().numpy()
+                    for d in range(min(8, feat_before_scale.shape[1])):
+                        print(f"    dim[{d}]: mean={means[d]:.6f}, std={stds[d]:.6f}, min={mins[d]:.6f}, max={maxs[d]:.6f}", flush=True)
+
+                # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
+                # The LangPretrainer wrapper applies tanh, but trainer bypasses it
+                # We MUST apply tanh here for consistency!
+                batched_features = torch.tanh(feat_before_scale)
+
+                if self.comm_info['iter'] == 0:
+                    print(f"\n[2] After tanh (final pred features):", flush=True)
+                    means = batched_features.mean(dim=0).detach().cpu().numpy()
+                    stds = batched_features.std(dim=0).detach().cpu().numpy()
+                    mins = batched_features.min(dim=0)[0].detach().cpu().numpy()
+                    maxs = batched_features.max(dim=0)[0].detach().cpu().numpy()
+                    for d in range(min(8, batched_features.shape[1])):
+                        print(f"    dim[{d}]: mean={means[d]:.6f}, std={stds[d]:.6f}, min={mins[d]:.6f}, max={maxs[d]:.6f}", flush=True)
+
+                    # Check sample-to-sample correlation (detect mode collapse)
+                    N = batched_features.shape[0]
+                    if N > 1000:
+                        half = N // 2
+                        # Make sure both halves have same size
+                        first_half = batched_features[:half, 0].detach().cpu().numpy()
+                        second_half = batched_features[half:2*half, 0].detach().cpu().numpy()
+                        first_half_mean = first_half.mean()
+                        second_half_mean = second_half.mean()
+                        import numpy as np
+                        corr = np.corrcoef(first_half, second_half)[0, 1]
+                        print(f"\n[3] Sample correlation check (mode collapse detection):", flush=True)
+                        print(f"    First half mean: {first_half_mean:.6f} (n={len(first_half)})", flush=True)
+                        print(f"    Second half mean: {second_half_mean:.6f} (n={len(second_half)})", flush=True)
+                        print(f"    Correlation between halves: {corr:.6f}", flush=True)
+                        if corr > 0.99:
+                            print(f"    WARNING: Correlation > 0.99 indicates MODE COLLAPSE!", flush=True)
+
+                    print("="*80 + "\n", flush=True)
+
+                # NAN CHECK: Detect NaN after tanh
                 if torch.isnan(batched_features).any():
-                    print(f"\n🚨 NaN DETECTED AFTER SCALING!")
-                    print(f"  dim_scale: {dim_scale.detach().cpu().numpy()}")
+                    print(f"\n🚨 NaN DETECTED AFTER TANH!")
                     print(f"  feat_before_scale NaN: {torch.isnan(feat_before_scale).any().item()}")
-                    assert False, "Features contain NaN after scaling! Training stopped."
+                    assert False, "Features contain NaN after tanh! Training stopped."
 
                 # STABILITY CHECK: Detect extreme values that might cause numerical instability
                 feat_max = batched_features.abs().max().item()
@@ -1431,6 +1491,154 @@ class DensityInvariantTrainer(TrainerBase):
 
                     segment = scenario_input.get("segment")
                     lang_feat = scenario_input.get('lang_feat')
+
+                    # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
+                    if self.comm_info['iter'] == 0 and i == 0:
+                        print(f"\n[6] Pred vs Target at loss computation (scenario {i}):", flush=True)
+                        print(f"    scenario_feat shape: {scenario_feat.shape}", flush=True)
+                        print(f"    lang_feat shape: {lang_feat.shape if lang_feat is not None else 'None'}", flush=True)
+
+                        # Get decoder bias for comparison
+                        dec_bias = None
+                        if hasattr(self.model, 'module'):
+                            backbone = self.model.module.backbone
+                        else:
+                            backbone = self.model.backbone
+
+                        if hasattr(backbone, 'dec'):
+                            decoder = backbone.dec
+                            if hasattr(decoder, 'out'):
+                                dec_bias = decoder.out.bias
+                            elif hasattr(decoder, 'cls'):
+                                dec_bias = decoder.cls.bias
+                            elif hasattr(decoder, 'fc'):
+                                dec_bias = decoder.fc.bias
+                            else:
+                                for name, module in reversed(list(decoder.named_modules())):
+                                    if isinstance(module, torch.nn.Linear):
+                                        dec_bias = module.bias
+                                        break
+
+                        if lang_feat is not None:
+                            print(f"\n    Pred statistics:", flush=True)
+                            for d in range(min(8, scenario_feat.shape[1])):
+                                mean_d = scenario_feat[:, d].mean().item()
+                                std_d = scenario_feat[:, d].std().item()
+                                print(f"      dim[{d}]: mean={mean_d:.6f}, std={std_d:.6f}", flush=True)
+                            print(f"\n    Target (lang_feat) statistics:", flush=True)
+                            gt_means = []
+                            for d in range(min(8, lang_feat.shape[1])):
+                                mean_d = lang_feat[:, d].mean().item()
+                                std_d = lang_feat[:, d].std().item()
+                                gt_means.append(mean_d)
+                                print(f"      dim[{d}]: mean={mean_d:.6f}, std={std_d:.6f}", flush=True)
+
+                            # Compare decoder bias with GT means
+                            if dec_bias is not None and len(gt_means) > 0:
+                                print(f"\n    Decoder bias vs GT mean comparison:", flush=True)
+                                dec_bias_np = dec_bias.detach().cpu().numpy()
+                                for d in range(min(8, len(gt_means))):
+                                    bias_val = dec_bias_np[d] if d < len(dec_bias_np) else 0.0
+                                    gt_mean = gt_means[d]
+                                    diff = gt_mean - bias_val
+                                    print(f"      dim[{d}]: bias={bias_val:.6f}, GT_mean={gt_mean:.6f}, diff={diff:.6f}", flush=True)
+
+                            # CRITICAL: Check coord-lang_feat correspondence
+                            # Verify that spatial neighbors have similar lang_feat values
+                            coord = scenario_input.get('coord')
+                            print(f"\n    [COORD-LANG_FEAT CORRESPONDENCE CHECK - DEBUG]:", flush=True)
+                            print(f"      coord available: {coord is not None}", flush=True)
+                            print(f"      lang_feat available: {lang_feat is not None}", flush=True)
+                            if coord is not None:
+                                print(f"      coord shape: {coord.shape}", flush=True)
+                            if lang_feat is not None:
+                                print(f"      lang_feat shape: {lang_feat.shape}", flush=True)
+
+                            if coord is not None and lang_feat is not None:
+                                try:
+                                    print(f"\n    [COORD-LANG_FEAT CORRESPONDENCE CHECK]:", flush=True)
+                                    coord_np = coord.detach().cpu().numpy()
+                                    lang_np = lang_feat.detach().cpu().numpy()
+
+                                    # Simplified check: Use first 1000 points for efficiency
+                                    check_size = min(1000, len(coord_np))
+                                    coord_check = coord_np[:check_size]
+                                    lang_check = lang_np[:check_size]
+
+                                    # Find spatial neighbors by checking distances in a small window
+                                    # For each point, look at nearby points in the array (assuming some spatial locality)
+                                    window_size = 10
+                                    lang_dim1_diffs = []
+                                    random_diffs = []
+
+                                    import numpy as np
+                                    np.random.seed(42)
+                                    for i in range(min(100, check_size - window_size)):
+                                        # Check next few points in array as proxy for spatial neighbors
+                                        # (assuming data loading preserves some spatial locality)
+                                        sample_lang_dim1 = lang_check[i, 1]
+                                        neighbor_lang_dim1 = lang_check[i+1:i+1+window_size, 1]
+                                        avg_diff = np.abs(neighbor_lang_dim1 - sample_lang_dim1).mean()
+                                        lang_dim1_diffs.append(avg_diff)
+
+                                        # Random pair for comparison
+                                        rand_idx = np.random.randint(0, check_size)
+                                        rand_diff = abs(lang_check[rand_idx, 1] - sample_lang_dim1)
+                                        random_diffs.append(rand_diff)
+
+                                    avg_neighbor_diff = np.mean(lang_dim1_diffs)
+                                    avg_random_diff = np.mean(random_diffs)
+                                    print(f"      Average lang_feat[1] difference for adjacent points: {avg_neighbor_diff:.6f}", flush=True)
+                                    print(f"      Average lang_feat[1] difference for random pairs: {avg_random_diff:.6f}", flush=True)
+
+                                    # Analyze dim[1] distribution (check for bimodal pattern)
+                                    lang_dim1 = lang_np[:, 1]
+                                    neg_ratio = (lang_dim1 < 0).sum() / len(lang_dim1)
+                                    print(f"\n    [LANG_FEAT DIM[1] DISTRIBUTION]:", flush=True)
+                                    print(f"      Negative ratio: {neg_ratio:.2%} ({(lang_dim1 < 0).sum()}/{len(lang_dim1)})", flush=True)
+                                    print(f"      Mean: {lang_dim1.mean():.6f}, Std: {lang_dim1.std():.6f}", flush=True)
+                                    print(f"      Min: {lang_dim1.min():.6f}, Max: {lang_dim1.max():.6f}", flush=True)
+
+                                    # Check if there's a spatial pattern to the dim[1] values
+                                    # Split coord into 3D spatial bins and check dim[1] in each bin
+                                    print(f"\n    [SPATIAL DISTRIBUTION OF LANG_FEAT DIM[1]]:", flush=True)
+                                    coord_range = coord_np.max(axis=0) - coord_np.min(axis=0)
+
+                                    # Sample points from different spatial regions
+                                    for region in ['corner1', 'corner2', 'center']:
+                                        if region == 'corner1':
+                                            # Points near min corner
+                                            mask = (
+                                                (coord_np[:, 0] < coord_np[:, 0].mean()) &
+                                                (coord_np[:, 1] < coord_np[:, 1].mean()) &
+                                                (coord_np[:, 2] < coord_np[:, 2].mean())
+                                            )
+                                        elif region == 'corner2':
+                                            # Points near max corner
+                                            mask = (
+                                                (coord_np[:, 0] >= coord_np[:, 0].mean()) &
+                                                (coord_np[:, 1] >= coord_np[:, 1].mean()) &
+                                                (coord_np[:, 2] >= coord_np[:, 2].mean())
+                                            )
+                                        else:
+                                            # Points near center
+                                            mask = (
+                                                (coord_np[:, 0] >= coord_np[:, 0].min() + coord_range[0] * 0.4) &
+                                                (coord_np[:, 0] < coord_np[:, 0].min() + coord_range[0] * 0.6) &
+                                                (coord_np[:, 1] >= coord_np[:, 1].min() + coord_range[1] * 0.4) &
+                                                (coord_np[:, 1] < coord_np[:, 1].min() + coord_range[1] * 0.6) &
+                                                (coord_np[:, 2] >= coord_np[:, 2].min() + coord_range[2] * 0.4) &
+                                                (coord_np[:, 2] < coord_np[:, 2].min() + coord_range[2] * 0.6)
+                                            )
+
+                                        region_lang = lang_np[mask, 1]
+                                        if len(region_lang) > 0:
+                                            neg_ratio_region = (region_lang < 0).sum() / len(region_lang)
+                                            print(f"      {region}: n={len(region_lang)}, dim[1]={region_lang.mean():.4f}, neg_ratio={neg_ratio_region:.2%}", flush=True)
+                                except Exception as e:
+                                    print(f"      ERROR during correspondence check: {e}", flush=True)
+                                    import traceback
+                                    traceback.print_exc()
 
                     # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
                     criteria_kwargs = {

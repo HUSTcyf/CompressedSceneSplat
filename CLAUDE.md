@@ -27,6 +27,10 @@ The environment requires:
 - PyTorch 2.5.1 with CUDA 12.1/12.4
 - Custom compiled libraries in `libs/` (pointops, pointgroup_ops)
 
+**Conda Environment Path**: `/new_data/cyf/.conda/envs/scene_splat`
+- Python executable: `/new_data/cyf/.conda/envs/scene_splat/bin/python`
+- Use this path for running scripts: `/new_data/cyf/.conda/envs/scene_splat/bin/python script.py`
+
 ## Common Development Commands
 
 ### Training Commands
@@ -184,3 +188,64 @@ class MyModel(nn.Module):
 - Use `enable_amp=True` for mixed-precision training
 - Evaluation uses neighbor voting (k=25) to improve segmentation quality
 - Structural classes (wall, floor, ceiling) are excluded from foreground mIoU calculations
+
+## Critical Configuration Issues
+
+### Transform Pipeline Order for SVD-Compressed Features
+
+When using SVD-compressed language features (`load_compressed_lang_feat=True`), the transform pipeline **must** apply `FilterValidPoints` **before** `FilterCoordOutliers`.
+
+**Why This Order Matters:**
+
+1. **SVD Loading Creates Size Mismatch**: When SVD compression is enabled:
+   - `coord.npy` contains all points (e.g., 1,000,000 points)
+   - `lang_feat_grid_svd_r{rank}.npz` contains features only for valid points (e.g., 856,838 points)
+   - The SVD indices map valid points to compressed grid features
+
+2. **Wrong Order Causes Misalignment**:
+   ```
+   FilterCoordOutliers FIRST → coord: 1M → 970K
+   FilterValidPoints SECOND → coord: 970K, lang_feat: 856K (MISMATCH!)
+   Result: No correspondence between coord and lang_feat
+   ```
+
+3. **Correct Order Ensures Alignment**:
+   ```
+   FilterValidPoints FIRST → coord: 1M → 856K (matches lang_feat)
+   FilterCoordOutliers SECOND → coord: 856K → 836K, lang_feat: 856K → 836K
+   Result: coord and lang_feat stay aligned throughout
+   ```
+
+**How FilterValidPoints Works:**
+
+The `FilterValidPoints` transform in `pointcept/datasets/transform.py` (lines 2188-2248) only filters arrays where `len(value) == len(valid_mask)`. Since SVD-loaded `lang_feat` has fewer elements than `valid_feat_mask`, it gets automatically skipped, preserving the alignment with `coord` after filtering.
+
+**Correct Transform Pipeline Configuration:**
+
+```python
+transform=[
+    dict(type="CenterShift", apply_z=True),
+    # Step 1: Filter valid points FIRST to align coord with lang_feat (CRITICAL for SVD)
+    dict(type="FilterValidPoints", key="valid_feat_mask"),
+    # Step 2: Filter outliers on the aligned data
+    dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
+    dict(type="CenterShift", apply_z=True),
+    # ... rest of pipeline
+]
+```
+
+**Files with Correct Order:**
+- `configs/custom/lang-pretrain-litept-ovs-gridsvd.py` (lines 389-391)
+- `configs/custom/lang-pretrain-litept-scannet.py` (only uses FilterValidPoints)
+- `configs/custom/lang-pretrain-litept-matt.py` (only uses FilterValidPoints)
+
+**Verification:**
+
+To verify coord-lang_feat alignment during training:
+```bash
+python tools/train.py --config-file configs/custom/lang-pretrain-litept-ovs-gridsvd.py
+```
+
+Expected output should show:
+- `coord shape: (N, 3)` and `lang_feat shape: (N, 16)` with matching N
+- Adjacent points have smaller feature differences than random points (spatial coherence preserved)

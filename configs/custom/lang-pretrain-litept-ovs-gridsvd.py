@@ -65,7 +65,6 @@ save_path = f"exp/lite-{svd_rank}-gridsvd"
 model = dict(
     type="LangPretrainer",  # Language Pretrainer for VL learning
     verbose_losses=True,  # Enable verbose loss printing (L2 and Cos per iteration)
-    dim_scale_dim=FD,  # Dimension for dim_scale parameter (should match svd_rank)
     backbone=dict(
         type="LitePT",
         in_channels=11,  # 3DGS features: color(3) + opacity(1) + quat(4) + scale(3) [coord removed]
@@ -163,11 +162,13 @@ model = dict(
         #     max_num_views=10,  # Use up to 10 views per scene to save memory
         # ),
 
-        # AggregatedContrastiveLoss: DISABLED for 16-dim training
-        # Re-enable only when using SVD rank 32 or higher
+        # AggregatedContrastiveLoss: ENABLED with tanh activation
+        # Using lower temperature (0.05) for more discriminative contrastive learning
+        # With tanh features, prototypes are L2-normalized to unit sphere
+        # Lower temperature amplifies differences between classes
         dict(
             type="AggregatedContrastiveLoss",
-            temperature=0.2,
+            temperature=0.05,  # Lowered from 0.2 for better discrimination with tanh
             reduction="mean",
             loss_weight=0.2,
             schedule="all",
@@ -384,10 +385,10 @@ data = dict(
                 transform=[
                     # Initial preprocessing
                     dict(type="CenterShift", apply_z=True),
-                    # Step 1: Filter outliers (same as train pipeline)
-                    dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
-                    # Step 2: Filter valid points
+                    # Step 1: Filter valid points FIRST to align coord with lang_feat (CRITICAL for SVD)
                     dict(type="FilterValidPoints", key="valid_feat_mask"),
+                    # Step 2: Filter outliers on the aligned data
+                    dict(type="FilterCoordOutliers", percentile_low=0.5, percentile_high=99.5),
                     # Step 3: Re-center coordinates to the filtered dense region
                     dict(type="CenterShift", apply_z=True),
                     # Step 4: GridSampleAveraged for representative sampling (with feature averaging)

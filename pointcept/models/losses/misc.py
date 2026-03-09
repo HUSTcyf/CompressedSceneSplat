@@ -645,12 +645,19 @@ class AggregatedContrastiveLoss(nn.Module):
         aggregated_a = torch.stack(aggregated_a, dim=0)
         aggregated_b = torch.stack(aggregated_b, dim=0)
 
-        # Normalize the aggregated features
+        # Normalize the aggregated prototypes to unit sphere
+        # NOTE: With tanh activation, individual features are in [-1, 1]
+        # We normalize only the AGGREGATED prototypes, not individual features
+        # This preserves the model's learned feature magnitudes while providing
+        # stable logit ranges for contrastive learning
         aggregated_a = F.normalize(aggregated_a, p=2, dim=1)
         aggregated_b = F.normalize(aggregated_b, p=2, dim=1)
 
         # Compute cosine similarity matrix between the two sets and scale by temperature.
         # logits[i, j] = cosine_similarity(aggregated_a[i], aggregated_b[j]) / temperature
+        # With normalized prototypes, similarity ∈ [-1, 1]
+        # For temperature=0.2: logits ∈ [-5, 5]
+        # For temperature=0.05: logits ∈ [-20, 20] (more discriminative)
         logits = torch.matmul(aggregated_a, aggregated_b.T) / self.temperature
 
         # The diagonal elements are the positive pairs.
@@ -675,13 +682,17 @@ class AggregatedContrastiveLoss(nn.Module):
 @LOSSES.register_module()
 class SVDWeightedL1Loss(nn.Module):
     """
-    SVD-Weighted L1 Loss: Weights dimensions based on variance or SVD ordering.
+    SVD-Weighted L1 Loss: Weights dimensions based on std/variance or SVD ordering.
 
-    Two modes supported:
+    Three modes supported:
     1. "static": Exponential decay weights based on dimension index (d[0] > d[1] > ... > d[15])
     2. "variance": Data-driven weights based on actual variance of each dimension
        - Higher variance = more information = higher weight
        - Uses EMA (exponential moving average) for stable variance estimation
+    3. "std": Data-driven weights based on actual standard deviation of each dimension
+       - Higher std = more information = higher weight
+       - Uses EMA for stable std estimation
+       - More linear gradient than variance-based weighting
 
     Args:
         base_weight: Base weight for the highest-variance dimension
@@ -689,8 +700,8 @@ class SVDWeightedL1Loss(nn.Module):
         min_weight: Minimum weight for any dimension (prevents zero gradients)
         loss_weight: Overall loss weight multiplier
         reduction: "mean" or "sum"
-        weight_strategy: "static" (exponential decay) or "variance" (data-driven)
-        variance_momentum: EMA momentum for variance estimation (default: 0.99)
+        weight_strategy: "static" (exponential decay), "variance" (data-driven), or "std" (data-driven)
+        variance_momentum: EMA momentum for variance/std estimation (default: 0.99)
     """
     def __init__(
         self,
@@ -699,7 +710,7 @@ class SVDWeightedL1Loss(nn.Module):
         min_weight=0.05,
         loss_weight=1.0,
         reduction="mean",
-        weight_strategy="variance",  # "static" or "variance"
+        weight_strategy="std",  # "static", "variance", or "std"
         variance_momentum=0.99,
     ):
         super(SVDWeightedL1Loss, self).__init__()
@@ -712,15 +723,15 @@ class SVDWeightedL1Loss(nn.Module):
         self.variance_momentum = variance_momentum
 
         # Running statistics for variance-based weighting
-        self.register_buffer("dim_variance", None)  # EMA of per-dimension variance
+        self.register_buffer("dim_variance", None)  # EMA of per-dimension variance or std
         self.register_buffer("num_updates", torch.tensor(0.0))
         self.register_buffer("weights", None)  # Cached weights
 
     def _compute_variance_weights(self, target: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
         """
-        Compute importance weights based on feature variance.
+        Compute importance weights based on feature std or variance.
 
-        Dimensions with higher variance are considered more important
+        Dimensions with higher std/variance are considered more important
         (they carry more information about the data).
 
         Args:
@@ -737,31 +748,34 @@ class SVDWeightedL1Loss(nn.Module):
             D = target.shape[1]
             return torch.ones(D, device=target.device, dtype=target.dtype)
 
-        # Compute variance per dimension
-        dim_variance = valid_target.var(dim=0)  # [D]
+        # Compute std or variance per dimension
+        if self.weight_strategy == "std":
+            dim_stat = valid_target.std(dim=0)  # [D] - Use std directly
+        else:  # "variance" mode
+            dim_stat = valid_target.var(dim=0)  # [D] - Use variance
 
-        # Update EMA of variance
+        # Update EMA of statistics
         if self.dim_variance is None:
-            self.dim_variance = dim_variance
+            self.dim_variance = dim_stat
         else:
             self.dim_variance = (
                 self.variance_momentum * self.dim_variance +
-                (1 - self.variance_momentum) * dim_variance
+                (1 - self.variance_momentum) * dim_stat
             )
 
         self.num_updates += 1
 
-        # Compute weights based on variance
-        # Higher variance -> higher weight
-        variance_min = self.dim_variance.min()
-        variance_max = self.dim_variance.max()
+        # Compute weights based on statistics (std or variance)
+        # Higher std/variance -> higher weight
+        stat_min = self.dim_variance.min()
+        stat_max = self.dim_variance.max()
 
-        if variance_max > variance_min:
-            # Normalize variance to [min_weight, base_weight]
-            normalized = (self.dim_variance - variance_min) / (variance_max - variance_min)
+        if stat_max > stat_min:
+            # Normalize to [min_weight, base_weight]
+            normalized = (self.dim_variance - stat_min) / (stat_max - stat_min)
             weights = self.min_weight + normalized * (self.base_weight - self.min_weight)
         else:
-            # All dimensions have the same variance
+            # All dimensions have the same statistic
             weights = torch.full_like(self.dim_variance, self.base_weight)
 
         # Cache the weights
@@ -799,6 +813,52 @@ class SVDWeightedL1Loss(nn.Module):
         Returns:
             SVD-weighted L1 loss (or tuple with loss dict if return_per_dim=True)
         """
+        # DEBUG: Verify pred-target correspondence (only print once)
+        if not hasattr(self, '_debug_printed'):
+            import numpy as np
+            print(f"\n[SVDWeightedL1Loss DEBUG] Verifying pred-target correspondence:")
+            print(f"  pred shape: {pred.shape}, target shape: {target.shape}")
+            print(f"  valid_feat_mask shape: {valid_feat_mask.shape}, valid count: {valid_feat_mask.sum().item()}")
+
+            # CRITICAL TEST: Check if pred is collapsed to constant values
+            print(f"  **PRED COLLAPSE CHECK:**")
+            for d in range(min(4, pred.shape[1])):
+                p_d = pred[:, d].detach().cpu().numpy()
+                unique_vals = len(np.unique(np.round(p_d, 4)))
+                print(f"    pred dim[{d}]: mean={p_d.mean():.6f}, std={p_d.std():.6f}, unique_vals={unique_vals}")
+
+            print(f"  **TARGET VARIANCE CHECK:**")
+            for d in range(min(4, target.shape[1])):
+                t_d = target[:, d].detach().cpu().numpy()
+                unique_vals = len(np.unique(np.round(t_d, 4)))
+                print(f"    target dim[{d}]: mean={t_d.mean():.6f}, std={t_d.std():.6f}, unique_vals={unique_vals}")
+
+            # Test: Check correlation between adjacent pred values (should be low if pred is diverse)
+            pred_cpu = pred.detach().cpu()
+            if pred.shape[0] > 100:
+                pred_first_half = pred_cpu[:pred.shape[0]//2, 0]
+                pred_second_half = pred_cpu[pred.shape[0]//2:, 0]
+                correlation_halves = np.corrcoef(pred_first_half.numpy(), pred_second_half.numpy())[0, 1]
+                print(f"  **SPLIT SAMPLE TEST:**")
+                print(f"    First half pred[0] mean: {pred_first_half.mean():.6f}")
+                print(f"    Second half pred[0] mean: {pred_second_half.mean():.6f}")
+                print(f"    Correlation between halves: {correlation_halves:.6f}")
+                if correlation_halves > 0.99:
+                    print(f"    -> WARNING: pred values are nearly identical across samples (MODE COLLAPSE!)")
+
+            # Test: Check if target has meaningful structure
+            target_cpu = target.detach().cpu()
+            if target.shape[0] > 100:
+                # Sample different indices and check if target varies
+                sample_indices = [0, 100, 1000, 10000, 50000, 100000, 150000, 200000]
+                sample_indices = [i for i in sample_indices if i < target.shape[0]]
+                print(f"  **TARGET VALUE DIVERSITY CHECK:**")
+                for idx in sample_indices:
+                    t_val = target_cpu[idx].numpy()
+                    print(f"    target[{idx}]: first4=[{t_val[0]:.4f}, {t_val[1]:.4f}, {t_val[2]:.4f}, {t_val[3]:.4f}], norm={np.linalg.norm(t_val):.4f}")
+
+            self._debug_printed = True
+
         # Extract valid features
         valid_pred = pred[valid_feat_mask > 0]  # [M, D]
         valid_target = target[valid_feat_mask > 0]  # [M, D]
@@ -812,9 +872,10 @@ class SVDWeightedL1Loss(nn.Module):
         D = valid_pred.shape[1]  # Feature dimension (typically 16)
 
         # Compute dimension weights based on strategy
-        if self.weight_strategy == "variance":
+        if self.weight_strategy in ("variance", "std"):
             weights = self._compute_variance_weights(target, valid_feat_mask)
-            strategy_str = f"variance (updates={self.num_updates.item():.0f})"
+            stat_name = "std" if self.weight_strategy == "std" else "variance"
+            strategy_str = f"{stat_name} (updates={self.num_updates.item():.0f})"
         else:  # "static"
             weights = self._compute_static_weights(D, valid_pred.device)
             strategy_str = f"static (decay={self.decay_rate})"
@@ -841,6 +902,15 @@ class SVDWeightedL1Loss(nn.Module):
             loss = loss.sum()
 
         weighted_loss = self.loss_weight * loss
+
+        # Debug: Print weights for first few iterations
+        if self.num_updates <= 5 and self.weight_strategy in ("variance", "std"):
+            stat_name = "std" if self.weight_strategy == "std" else "variance"
+            stat_values = self.dim_variance.detach().cpu().numpy()
+            weight_values = weights.detach().cpu().numpy()
+            print(f"\n[SVDWeightedL1Loss] {stat_name}-based weights (update {int(self.num_updates)}):")
+            for d in range(len(weights)):
+                print(f"  dim[{d}]: {stat_name}={stat_values[d]:.6f}, weight={weight_values[d]:.4f}")
 
         # Print disabled - now handled by Criteria builder for consolidated output
         # # Print with strategy info and variance statistics
@@ -1761,16 +1831,12 @@ class Rendered2DLoss(nn.Module):
                 # Get GT render as tensor
                 gt_tensor = torch.from_numpy(gt_data).to(device)  # [H, W, D]
 
-                # Normalize GT features to [-1, 1] range (per-pixel normalization)
+                # L2 normalize GT features to unit sphere (per-pixel normalization)
                 # Each pixel's D-dimensional feature vector is normalized independently
-                gt_min = gt_tensor.min(dim=-1, keepdim=True).values  # [H, W, 1]
-                gt_max = gt_tensor.max(dim=-1, keepdim=True).values  # [H, W, 1]
-                gt_range = gt_max - gt_min
-                # Raise error if range is zero for any pixel
-                if (gt_range <= 0).any():
-                    raise ValueError(f"GT feature range is zero or negative for some pixels. Min range: {gt_range.min().item()}")
-                # Normalize to [0, 1] then scale to [-1, 1]
-                gt_tensor = 2 * (gt_tensor - gt_min) / gt_range - 1
+                # This matches the model's output: tanh activation + L2 norm in contrastive loss
+                gt_norms = gt_tensor.norm(dim=-1, keepdim=True)  # [H, W, 1]
+                gt_norms = torch.clamp(gt_norms, min=1e-8)  # Avoid division by zero
+                gt_tensor = gt_tensor / gt_norms  # Now each pixel has unit norm
 
                 # Create mask for valid pixels (where alpha > 0)
                 valid_pixel_mask = render_alphas[0, ..., 0] > 0.01  # [H, W]

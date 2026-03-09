@@ -12,6 +12,7 @@ weights
 log
 logs/
 *.log
+figs/
 outputs/
 .vscode
 .github
@@ -39,7 +40,7 @@ svd_comparison/
 flash-attention/
 OccamLGS/
 LitePT/ckpts
-.claude/
+# .claude/
 # CLAUDE.md
 *.pt
 *.whl

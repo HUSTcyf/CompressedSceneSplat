@@ -36,19 +36,17 @@ def chunking_scene(
 
     if "lang_feat" in data_dict.keys():
         valid_feat_mask = data_dict["valid_feat_mask"]
-        # Normalize the valid part in lang_feat to [-1, 1] range
+        # L2 normalize the valid part in lang_feat to unit sphere
+        # This matches the model's output which uses tanh + implicit L2 norm in contrastive loss
         valid_indices = (valid_feat_mask == 1)
         if valid_indices.any():
             valid_lang_feat = data_dict["lang_feat"][valid_indices]
-            # Per-feature-vector normalization to [-1, 1]
-            feat_min = valid_lang_feat.min(axis=1, keepdims=True)
-            feat_max = valid_lang_feat.max(axis=1, keepdims=True)
-            feat_range = feat_max - feat_min
-            # Raise error if range is zero for any feature vector
-            if (feat_range <= 0).any():
-                raise ValueError(f"GT lang_feat range is zero or negative for some samples. Min range: {feat_range.min()}")
-            # Normalize to [0, 1] then scale to [-1, 1]
-            data_dict["lang_feat"][valid_indices] = 2 * (valid_lang_feat - feat_min) / feat_range - 1
+            # L2 normalization: divide each feature vector by its L2 norm
+            # Result: each feature vector has unit norm (||x||_2 = 1)
+            norms = np.linalg.norm(valid_lang_feat, axis=1, keepdims=True)
+            # Avoid division by zero
+            norms = np.maximum(norms, 1e-8)
+            data_dict["lang_feat"][valid_indices] = valid_lang_feat / norms
     if debug:
         coord_length = len(coord)
     if grid_size is not None:

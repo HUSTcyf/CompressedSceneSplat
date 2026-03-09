@@ -863,7 +863,7 @@ class PerSceneLossVisualizer(HookBase):
             return
 
         # DEBUG: Verify loss data consistency before plotting
-        self._verify_loss_data_consistency()
+        # self._verify_loss_data_consistency()
 
         try:
             import matplotlib
@@ -947,33 +947,6 @@ class PerSceneLossVisualizer(HookBase):
         iterations = np.array(loss_data['iterations'])
         epochs = np.array(loss_data['epochs'])
         total_loss = np.array(loss_data['total_loss'])
-
-        # DEBUG: Check data consistency before plotting
-        if 'l1_loss' in loss_data and len(loss_data['l1_loss']) > 0:
-            l1_loss = np.array(loss_data['l1_loss'])
-            cos_loss = np.array(loss_data.get('cos_loss', []))
-
-            # Check if lengths match
-            if len(total_loss) != len(l1_loss) or len(total_loss) != len(cos_loss):
-                self.trainer.logger.warning(
-                    f"[PerSceneLossVisualizer] Scene '{scene_name}': "
-                    f"Data length mismatch! total={len(total_loss)}, l1={len(l1_loss)}, cos={len(cos_loss)}"
-                )
-
-            # Check first 10 points for consistency
-            mismatch_count = 0
-            for i in range(min(10, len(total_loss), len(l1_loss), len(cos_loss))):
-                expected = l1_loss[i] + cos_loss[i]
-                actual = total_loss[i]
-                if abs(expected - actual) > 0.01 and actual > 0:
-                    mismatch_count += 1
-
-            if mismatch_count > 5:
-                self.trainer.logger.warning(
-                    f"[PerSceneLossVisualizer] Scene '{scene_name}': "
-                    f"{mismatch_count}/10 points have Total != L1 + Cos. "
-                    f"This indicates a data recording bug!"
-                )
 
         # Add initial point (0, 0) so all curves start from origin
         iterations = np.concatenate([[0], iterations])
