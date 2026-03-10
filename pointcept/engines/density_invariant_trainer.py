@@ -952,7 +952,7 @@ class DensityInvariantTrainer(TrainerBase):
 
         assert hasattr(self, "optimizer")
         assert hasattr(self, "train_loader")
-        self.cfg.scheduler.total_steps = len(self.train_loader) * self.cfg.eval_epoch
+        self.cfg.scheduler.total_steps = len(self.train_loader) * self.max_epoch
         return build_scheduler(self.cfg.scheduler, self.optimizer)
 
     def build_scaler(self):
