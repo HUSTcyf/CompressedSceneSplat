@@ -2198,9 +2198,8 @@ class FilterValidPoints(object):
     Args:
         key: The name of the valid mask field. Default is "valid_feat_mask".
     """
-    def __init__(self, key="valid_feat_mask", verbose=False):
+    def __init__(self, key="valid_feat_mask"):
         self.key = key
-        self.verbose = verbose
 
     def __call__(self, data_dict):
         if self.key not in data_dict.keys():
@@ -2221,7 +2220,6 @@ class FilterValidPoints(object):
 
         # Store point_to_grid before filtering for validation
         point_to_grid_before = data_dict.get("point_to_grid")
-        point_to_grid_len_before = len(point_to_grid_before) if point_to_grid_before is not None else None
 
         # Filter all array-like keys in data_dict
         for key in data_dict.keys():
@@ -2236,14 +2234,12 @@ class FilterValidPoints(object):
             point_to_grid_after = data_dict.get("point_to_grid")
             if point_to_grid_after is None:
                 raise ValueError("point_to_grid was removed during FilterValidPoints!")
-            if self.verbose:
-                print(f"[FilterValidPoints] point_to_grid: {point_to_grid_len_before} -> {len(point_to_grid_after)}")
-                # Check that indices are still valid (non-negative)
-                if (point_to_grid_after < 0).any():
-                    raise ValueError(
-                        f"point_to_grid contains negative indices after filtering! "
-                        f"min={point_to_grid_after.min()}"
-                    )
+            # Check that indices are still valid (non-negative)
+            if (point_to_grid_after < 0).any():
+                raise ValueError(
+                    f"point_to_grid contains negative indices after filtering! "
+                    f"min={point_to_grid_after.min()}"
+                )
 
         return data_dict
 

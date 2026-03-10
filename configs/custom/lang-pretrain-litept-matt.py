@@ -294,7 +294,7 @@ data = dict(
             # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
             dict(type="FilterValidPoints", key="valid_feat_mask"),
             # Filter outliers on coordinate distribution
-            dict(type="FilterCoordOutliers", percentile_low=0.1, percentile_high=99.9),
+            # dict(type="FilterCoordOutliers", percentile_low=0.1, percentile_high=99.9),
             dict(type="CenterShift", apply_z=True),
             dict(
                 type="RandomDropout", dropout_ratio=0.2, dropout_application_ratio=0.2
@@ -361,7 +361,7 @@ data = dict(
             # CRITICAL: Filter to valid points BEFORE GridSample to match SVD lang_feat size
             dict(type="FilterValidPoints", key="valid_feat_mask"),
             # Filter outliers on coordinate distribution
-            dict(type="FilterCoordOutliers", percentile_low=0.1, percentile_high=99.9),
+            # dict(type="FilterCoordOutliers", percentile_low=0.1, percentile_high=99.9),
             dict(type="CenterShift", apply_z=True),
             dict(
                 type="GridSample",

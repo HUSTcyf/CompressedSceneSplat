@@ -10,9 +10,10 @@ Features:
 - Load LitePT model (smaller, faster)
 - Output 768-dimensional language features
 - Save Gaussian checkpoint with embedded language features
+- Optional coordinate outlier filtering with customizable percentiles
 
 Usage:
-    # Basic inference with LitePT model
+    # Basic inference with LitePT model (no filtering)
     python tools/batch_predict_inference.py \\
         --config configs/inference/lang-pretrain-litept-3dgs.py \\
         --checkpoint /path/to/model.pth \\
@@ -51,6 +52,22 @@ Usage:
         --input-root /path/to/npy/folder \\
         --output-dir /path/to/output \\
         --feature-dim 512
+
+    # With coordinate outlier filtering (0.1%-99.9%)
+    python tools/batch_predict_inference.py \\
+        --config configs/inference/lang-pretrain-litept-3dgs.py \\
+        --checkpoint /path/to/model.pth \\
+        --input-root /path/to/npy/folder \\
+        --output-dir /path/to/output \\
+        --filter-percentile 0.1
+
+    # With stricter outlier filtering (0.5%-99.5%)
+    python tools/batch_predict_inference.py \\
+        --config configs/inference/lang-pretrain-litept-3dgs.py \\
+        --checkpoint /path/to/model.pth \\
+        --input-root /path/to/npy/folder \\
+        --output-dir /path/to/output \\
+        --filter-percentile 0.5
 """
 
 import argparse
@@ -353,6 +370,7 @@ class BatchPredictorWithInference:
         iterations: int = 30000,
         prune_invalid: bool = False,
         save_checkpoint: bool = False,
+        filter_percentile: Optional[float] = None,
     ):
         """
         Initialize batch predictor.
@@ -366,6 +384,8 @@ class BatchPredictorWithInference:
             iterations: Checkpoint iteration number
             prune_invalid: Whether to prune invalid Gaussians (default: False, keeps all Gaussians)
             save_checkpoint: Whether to save Gaussian checkpoint (when original checkpoint is found)
+            filter_percentile: Filter percentile for coord outliers (e.g., 0.1 means 0.1%-99.9%).
+                           If None, no filtering is applied (default: None).
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -374,6 +394,7 @@ class BatchPredictorWithInference:
         self.iterations = iterations
         self.prune_invalid = prune_invalid
         self.save_checkpoint = save_checkpoint
+        self.filter_percentile = filter_percentile
 
         # Load config
         self.cfg = Config.fromfile(config_path)
@@ -493,13 +514,15 @@ class BatchPredictorWithInference:
         # Filter coordinate outliers to prevent PointOctree depth overflow
         # This filtering happens BEFORE the transform pipeline
         # The transform pipeline does NOT include FilterCoordOutliers to avoid duplicate filtering
-        if "coord" in data_dict:
+        # Only apply filtering if filter_percentile is specified
+        if "coord" in data_dict and self.filter_percentile is not None:
             coord = data_dict["coord"]
             n_points = coord.shape[0]
 
             # Calculate percentiles to identify outliers
-            percentile_low = 0.5
-            percentile_high = 99.5
+            # filter_percentile is the margin from both ends (e.g., 0.1 means 0.1%-99.9%)
+            percentile_low = self.filter_percentile
+            percentile_high = 100 - self.filter_percentile
             pct_low = np.percentile(coord, percentile_low, axis=0)
             pct_high = np.percentile(coord, percentile_high, axis=0)
 
@@ -511,6 +534,7 @@ class BatchPredictorWithInference:
             n_filtered_out = (~mask).sum()
             if n_filtered_out > 0:
                 print(f"[FilterCoordOutliers] Filtered {n_filtered_out}/{n_points} points ({n_filtered_out/n_points*100:.1f}%)")
+                print(f"  Filter range: {percentile_low}%-{percentile_high}%")
                 print(f"  Original range: x=[{coord[:, 0].min():.2f}, {coord[:, 0].max():.2f}], "
                       f"y=[{coord[:, 1].min():.2f}, {coord[:, 1].max():.2f}], "
                       f"z=[{coord[:, 2].min():.2f}, {coord[:, 2].max():.2f}]")
@@ -536,6 +560,9 @@ class BatchPredictorWithInference:
                           f"y=[{coord_filtered[:, 1].min():.2f}, {coord_filtered[:, 1].max():.2f}], "
                           f"z=[{coord_filtered[:, 2].min():.2f}, {coord_filtered[:, 2].max():.2f}]")
                     print(f"  grid_coord range: [{grid_coord.min(axis=0)}, {grid_coord.max(axis=0)}]")
+        elif "coord" in data_dict and self.filter_percentile is None:
+            n_points = data_dict["coord"].shape[0]
+            print(f"[FilterCoordOutliers] Disabled (filter_percentile=None), keeping all {n_points} points")
 
         return data_dict
 
@@ -864,6 +891,13 @@ def parse_args():
         default=None,
         help="Process a single scene by name (relative to input_root)",
     )
+    parser.add_argument(
+        "--filter-percentile",
+        type=float,
+        default=None,
+        help="Filter percentile for coord outliers (e.g., 0.1 means 0.1%%-99.9%%). "
+             "If not specified, no filtering is applied (default: None)",
+    )
     return parser.parse_args()
 
 
@@ -917,6 +951,7 @@ def main():
     print(f"Iterations: {args.iterations}")
     print(f"Prune invalid: {args.prune_invalid}")
     print(f"Save checkpoint: {args.save_checkpoint}")
+    print(f"Filter percentile: {args.filter_percentile if args.filter_percentile is not None else 'Disabled (no filtering)'}")
     if args.scene is None:
         print(f"Recursive: {args.recursive}")
     print("=" * 60)
@@ -930,6 +965,7 @@ def main():
         iterations=args.iterations,
         prune_invalid=args.prune_invalid,
         save_checkpoint=args.save_checkpoint,
+        filter_percentile=args.filter_percentile,
     )
 
     predictor.run(

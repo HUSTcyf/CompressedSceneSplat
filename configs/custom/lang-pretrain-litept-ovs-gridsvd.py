@@ -221,13 +221,13 @@ density_invariant = dict(
 # Scheduler settings
 # ============================================================================
 eval_epoch = 10  # total eval & checkpoint epoch
-epoch = eval_epoch * 10  # total data loops (200 epochs for pretraining)
+epoch = eval_epoch * 1  # total data loops (200 epochs for pretraining)
 
 # ============================================================================
 # Optimizer settings with mode-collapse prevention
 # ============================================================================
 # Base optimizer configuration
-optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.05)
+optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.01)  # REDUCED from 0.05 for better convergence
 
 # Scheduler configuration
 scheduler = dict(
@@ -263,23 +263,23 @@ scheduler = dict(
 # ============================================================================
 param_dicts = [
     # Group 1: Encoder transformer blocks
-    dict(keyword="enc.block", lr=0.001, weight_decay=0.05),
+    dict(keyword="enc.block", lr=0.001, weight_decay=0.01),  # REDUCED from 0.05
 
     # Group 2: Decoder transformer blocks (all stages: dec3, dec2, dec1, dec0)
-    dict(keyword="dec.block", lr=0.0001, weight_decay=0.05),
+    dict(keyword="dec.block", lr=0.0001, weight_decay=0.01),  # REDUCED from 0.05
 
     # Group 3: dec0.block1 MLP (specific problematic layer)
     dict(
         keyword="dec0.block1.mlp",
         lr=0.00005,  # Lower than dec.block for stability
-        weight_decay=0.2,  # 4× higher weight decay
+        weight_decay=0.02,  # REDUCED from 0.2 (10× reduction)
     ),
 
     # Group 4: Specifically target fc1/fc2 linear layers in dec0.block1.mlp
     dict(
         keyword="dec0.block1.mlp.0.fc",
         lr=0.00005,
-        weight_decay=0.3,  # 6× higher weight decay for strongest regularization
+        weight_decay=0.03,  # REDUCED from 0.3 (10× reduction)
     ),
 ]
 
