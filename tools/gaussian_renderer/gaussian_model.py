@@ -62,6 +62,8 @@ class GaussianModel:
         self.setup_functions()
 
     def capture_rgb(self):
+        # Handle case where optimizer is not initialized (e.g., when loading from .ply)
+        opt_dict = self.optimizer.state_dict() if self.optimizer is not None else None
         return (
             self.active_sh_degree,
             self._xyz,
@@ -73,7 +75,7 @@ class GaussianModel:
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
-            self.optimizer.state_dict(),
+            opt_dict,
             self.spatial_lr_scale,
         )
     
@@ -81,6 +83,9 @@ class GaussianModel:
         """Capture language features for a specific level"""
         if not hasattr(self, "_language_features_dict"):
             return None
+
+        # Handle case where optimizer is not initialized (e.g., when loading from .ply)
+        opt_dict = self.optimizer.state_dict() if self.optimizer is not None else None
 
         return (
             self.active_sh_degree,
@@ -94,7 +99,7 @@ class GaussianModel:
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
-            self.optimizer.state_dict(),
+            opt_dict,
             self.spatial_lr_scale,
         )
     
@@ -430,6 +435,13 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
+
+        # Initialize attributes needed for capture_language_feature
+        # These are typically initialized in training_setup, but we need default values for inference
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.optimizer = None  # No optimizer needed for inference-only loading
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}

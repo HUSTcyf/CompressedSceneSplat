@@ -454,7 +454,8 @@ def main():
     fail_count = 0
 
     for scene in scenes:
-        feat_path = os.path.join(args.output_dir, scene, f"language_features_768d.npy")
+        # Use Path objects instead of os.path.join to maintain Path type
+        feat_path = Path(args.gaussian_train) / scene / "lang_feat.npy"
         print(feat_path)
         if process_scene(
             scene,

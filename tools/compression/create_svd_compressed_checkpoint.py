@@ -52,7 +52,7 @@ from typing import Tuple, Dict, List, Optional, Union
 
 # Default paths
 dataset = "lerf_ovs"
-# dataset = "3DOVS"
+dataset = "3DOVS"
 DATA_ROOT = "/new_data/cyf/projects/SceneSplat"
 TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/{dataset}/train"
 CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"

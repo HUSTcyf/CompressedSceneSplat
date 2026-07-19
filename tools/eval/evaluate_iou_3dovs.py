@@ -20,6 +20,7 @@ import sys
 sys.path.append("..")
 import colormaps
 from openclip_encoder import OpenCLIPNetwork
+from siglip2_encoder import SigLIP2Network, EncoderFactory
 from utils import smooth, vis_mask_save, stack_mask
 
 from eval_utils import plot_relevancy_and_threshold, compute_dynamic_threshold
@@ -63,7 +64,7 @@ def eval_gt_3dovsdata(dataset_folder: Union[str, Path] = None, ouput_path: Path 
         - img_paths: List of paths to the original images
     """
     gt_folder = os.path.join(dataset_folder, 'segmentations')
-    image_folder = os.path.join(dataset_folder, 'images')
+    image_folder = os.path.join(dataset_folder, 'images_4')
     
     gt_paths = [os.path.join(gt_folder, name) for name in os.listdir(gt_folder) if os.path.isdir(os.path.join(gt_folder, name))]
     gt_paths = sorted(gt_paths, key=lambda x: int(x.split('/')[-1]))
@@ -80,7 +81,6 @@ def eval_gt_3dovsdata(dataset_folder: Union[str, Path] = None, ouput_path: Path 
         img_paths[idx] = img_path
         with Image.open(img_path) as img:
             w, h = img.size
-            w, h = 1008, 753
 
         for prompt_data in class_names:
             label = prompt_data
@@ -148,7 +148,7 @@ def activate_stream(sem_map,
     return chosen_iou_list, chosen_lvl_list
 
 
-def evaluate(feat_dir, output_path, gt_path, logger, eval_params):
+def evaluate(feat_dir, output_path, gt_path, logger, eval_params, encoder_type="openclip"):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # colormap_options = colormaps.ColormapOptions(
@@ -159,44 +159,52 @@ def evaluate(feat_dir, output_path, gt_path, logger, eval_params):
     # )
 
     gt_ann, image_shape, image_paths = eval_gt_3dovsdata(Path(gt_path), Path(output_path))
-     
+
     eval_index_list = [int(idx) for idx in list(gt_ann.keys())]
-    feat_paths_lvl = []   
+    feat_paths_lvl = []
     for i in range(len(feat_dir)):
         # Create a mapping of index to file path
         index_to_file = {}
         for file_path in glob.glob(os.path.join(feat_dir[i], '*.npy')):
             file_idx = int(os.path.basename(file_path).split(".npy")[0])
             index_to_file[file_idx] = file_path
-        
+
         feat_paths_lvl.append(index_to_file)
-    
-    assert len(feat_paths_lvl) == len(feat_dir)   
-    
-    # instantiate openclip
-    clip_model = OpenCLIPNetwork(device)
+
+    assert len(feat_paths_lvl) == len(feat_dir)
+
+    # Instantiate encoder based on encoder_type
+    # OpenCLIPNetwork outputs 512-dim features, SigLIP2Network outputs 768-dim features
+    if encoder_type == "siglip2":
+        clip_model = SigLIP2Network(device)
+        feature_dim = 768
+        logger.info(f"Using SigLIP2Network for {feature_dim}-dimensional features")
+    else:  # default to openclip
+        clip_model = OpenCLIPNetwork(device)
+        feature_dim = 512
+        logger.info(f"Using OpenCLIPNetwork for {feature_dim}-dimensional features")
 
     chosen_iou_all, chosen_lvl_list = [], []
     for j, idx in enumerate(tqdm(eval_index_list)):
         image_name = Path(output_path) / f'{idx:0>2}'
         image_name.mkdir(exist_ok=True, parents=True)
-        
-        compressed_sem_feats = np.zeros((len(feat_dir), *image_shape, 512), dtype=np.float32) # compressed_sem_feats: (3, 7, 731, 988, 3) -> (granuity, num_frames, h, w, c)
+
+        compressed_sem_feats = np.zeros((len(feat_dir), *image_shape, feature_dim), dtype=np.float32)
         for i in range(len(feat_dir)):
             if idx not in feat_paths_lvl[i]:
                 raise ValueError(f"Missing feature file for index {idx} in directory {feat_dir[i]}")
             compressed_sem_feats[i] = np.load(feat_paths_lvl[i][idx], mmap_mode='r')
-        
+
         sem_feat = torch.from_numpy(compressed_sem_feats).float().to(device)
         # rgb_img = cv2.imread(image_paths[idx])[..., ::-1]
         # rgb_img = (rgb_img / 255.0).astype(np.float32)
         # rgb_img = torch.from_numpy(rgb_img).to(device)
-        print(f"j: {j}, idx: {idx}, image_name: {image_name}, image_path: {image_paths[idx]}") 
-        
+        print(f"j: {j}, idx: {idx}, image_name: {image_name}, image_path: {image_paths[idx]}")
+
         img_ann = gt_ann[f'{idx}'] # -> a dictionary of labels, with key as path to mask
         clip_model.set_positives(list(img_ann.keys()))
-        
-        c_iou_list, c_lvl = activate_stream(sem_feat, clip_model, 
+
+        c_iou_list, c_lvl = activate_stream(sem_feat, clip_model,
                                             image_name, img_ann,
                                             eval_params=eval_params)
 
@@ -229,7 +237,7 @@ def seed_everything(seed_value):
 if __name__ == "__main__":
     seed_num = 42
     seed_everything(seed_num)
-    
+
     parser = ArgumentParser(description="prompt any label")
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--gt_folder", type=str, default=None)
@@ -237,6 +245,8 @@ if __name__ == "__main__":
     parser.add_argument("--stability_thresh", type=float, default=0.3)
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
+    parser.add_argument("--encoder", type=str, default="openclip", choices=["openclip", "siglip2"],
+                        help="Encoder type: 'openclip' for OpenCLIPNetwork (512-dim), 'siglip2' for SigLIP2Network (768-dim)")
     args = parser.parse_args()
 
     eval_params = {
@@ -248,6 +258,8 @@ if __name__ == "__main__":
     feat_dir = [f"./output/3DOVS/{args.dataset_name}/test/{args.feat_folder}_1/renders_npy",
                 f"./output/3DOVS/{args.dataset_name}/test/{args.feat_folder}_2/renders_npy",
                 f"./output/3DOVS/{args.dataset_name}/test/{args.feat_folder}_3/renders_npy"]
+    if args.encoder == "siglip2":
+        feat_dir = [f"./gaussian_results/3DOVS/{args.dataset_name}/test/{args.feat_folder}_0/renders_npy"]
     output_path = f"./eval_results/3DOVS/{args.dataset_name}"
     gt_path = args.gt_folder
 
@@ -256,4 +268,4 @@ if __name__ == "__main__":
     log_file = os.path.join(output_path, f'{dataset_name}.log')
     logger = get_logger(f'{dataset_name}', log_file=log_file, log_level=logging.INFO)
 
-    evaluate(feat_dir, output_path, gt_path, logger, eval_params)
+    evaluate(feat_dir, output_path, gt_path, logger, eval_params, encoder_type=args.encoder)

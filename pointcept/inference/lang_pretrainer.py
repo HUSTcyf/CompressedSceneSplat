@@ -172,8 +172,6 @@ class LangPretrainerInference:
         if torch.any(valid):
             feature_acc[valid] = feature_acc[valid] / feature_count[valid].unsqueeze(1)
 
-        # No need for additional normalization - model output is already in [-1, 1] due to tanh activation
-
         inverse_map = prepared.get("inverse")
         if inverse_map is not None:
             inverse_tensor = torch.as_tensor(
@@ -181,11 +179,7 @@ class LangPretrainerInference:
             )
             feature_acc = feature_acc[inverse_tensor]
 
-        # L2 normalize features to match GT (SceneSplat original inference outputs normalized features)
-        # DISABLED: Commented out to fix train-inference mismatch
-        # During training, features are NOT normalized before computing loss
-        # To maintain consistency, we also skip normalization during inference
-        # feature_acc = F.normalize(feature_acc, p=2, dim=1)
+        feature_acc = F.normalize(feature_acc, p=2, dim=1)
         backbone_cpu = feature_acc.detach().cpu()
 
         outputs = {

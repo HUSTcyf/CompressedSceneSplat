@@ -29,12 +29,16 @@ except ImportError:
         sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import Procrustes functions using absolute import
-from tools.compute_procrustes_alignment_simple import (
+from tools.projection.compute_procrustes_alignment_simple import (
     perform_svd_reduction,
     compute_procrustes_Q,
 )
 
-# Local modules in same directory
+# Local modules in same directory - add eval directory to path for both script and module execution
+EVAL_DIR = Path(__file__).resolve().parent
+if str(EVAL_DIR) not in sys.path:
+    sys.path.insert(0, str(EVAL_DIR))
+
 import colormaps
 from openclip_encoder import OpenCLIPNetwork
 from siglip2_encoder import SigLIP2Network

@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 from os import makedirs
+from argparse import ArgumentParser
 
 # Import PROJECT_ROOT - handle both script and module execution
 try:
@@ -459,6 +460,7 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
                 # Compute valid_feat_mask (1 if feature is not all zeros, 0 otherwise)
                 # Use int64 to match SceneSplat7k dataset format
                 valid_feat_mask = np.any(features_np != 0.0, axis=1).astype(int)
+                features_np = features_np[valid_feat_mask == 1]  # Keep only valid features
 
                 # Create output directory if it doesn't exist
                 output_dir = os.path.dirname(save_npy)
@@ -497,16 +499,27 @@ def extract_gaussian_features(model_path, iteration, source_path, views, gaussia
             logging.error(f"Failed to save NPY file: {e}")
 
 
-def process_scene_language_features(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, restore_featdim=True, src_dim=512, save_npy=None):
+def process_scene_language_features(dataset : ModelParams, opt : OptimizationParams, iteration : int, pipeline : PipelineParams, feature_level : int, restore_featdim=True, src_dim=512, save_npy=None, use_ply=False):
 
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, include_feature=True)
 
-        checkpoint = os.path.join(args.model_path, f'ckpts/chkpnt{iteration}.pth')
-        gaussians.restore_from_gsplat_checkpoint(checkpoint, opt)
-        # (model_params, _) = torch.load(checkpoint)
-        # gaussians.restore_rgb(model_params, opt)
+        # Try to load from checkpoint or ply file
+        if use_ply:
+            ply_path = os.path.join(args.model_path, f'ckpts/point_cloud_{iteration}.ply')
+            if os.path.exists(ply_path):
+                print(f"Loading Gaussians from PLY file: {ply_path}")
+                gaussians.load_ply(ply_path)
+            else:
+                raise FileNotFoundError(f"PLY file not found: {ply_path}")
+        else:
+            checkpoint = os.path.join(args.model_path, f'ckpts/chkpnt{iteration}.pth')
+            if os.path.exists(checkpoint):
+                gaussians.restore_from_gsplat_checkpoint(checkpoint, opt)
+            else:
+                raise FileNotFoundError(f"Checkpoint file not found: {checkpoint}. Try using --use_ply to load from .ply file.")
+
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
@@ -524,6 +537,7 @@ if __name__ == "__main__":
     parser.add_argument("--src_dim", type=int, default=512, help="Source dimension of language features to load (e.g., 512, 256, 128, 64, 32)")
     parser.add_argument("--skip_restoration", action="store_true", help="Skip feature restoration to 512 dimensions using autoencoder")
     parser.add_argument("--save_npy", type=str, default=None, help="Save language features as NPY file to specified path (e.g., gaussian_train/scene_name/lang_feat.npy)")
+    parser.add_argument("--use_ply", action="store_true", help="Load Gaussian parameters from .ply file instead of .pth checkpoint")
     args = get_combined_args_from_yaml(parser, param_groups=[model, pipeline, opt])
 
     # Initialize system state (RNG)
@@ -533,4 +547,4 @@ if __name__ == "__main__":
     restore_featdim = not args.skip_restoration
     src_dim = args.src_dim
 
-    process_scene_language_features(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, restore_featdim, src_dim, args.save_npy)
+    process_scene_language_features(model.extract(args), opt.extract(args), args.iteration, pipeline.extract(args), args.feature_level, restore_featdim, src_dim, args.save_npy, args.use_ply)

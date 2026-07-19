@@ -20,6 +20,7 @@ import os
 import sys
 import argparse
 import math
+import cv2
 import torch
 import numpy as np
 from pathlib import Path
@@ -45,6 +46,12 @@ DATASET_ROOT = "/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs"
 EVAL_RESULTS_ROOT = "/new_data/cyf/projects/SceneSplat/eval_results/LERF-SceneSplat"
 OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_with_mask"
 EVAL_RESULTS_ROOT = "/new_data/cyf/projects/OccamLGS/eval_results/LERF-origin"
+
+CHECKPOINT_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_results/3DOVS"
+DATASET_ROOT = "/new_data/cyf/projects/SceneSplat/datasets/3DOVS"
+EVAL_RESULTS_ROOT = "/new_data/cyf/projects/SceneSplat/eval_results/3DOVS-SceneSplat"
+OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_with_mask"
+EVAL_RESULTS_ROOT = "/new_data/cyf/projects/OccamLGS/eval_results/3DOVS-origin"
 
 
 class MiniCamera:
@@ -262,7 +269,7 @@ def find_camera_by_view_id(
 
     # Try direct ID match (fallback)
     if view_id in images:
-        image = images[view_id]
+        image = images[view_id+1]
         camera_id = image.camera_id
         if camera_id in cameras:
             print(f"  Matched view_id={view_id} to COLMAP image_id={view_id} (direct match)")
@@ -270,29 +277,66 @@ def find_camera_by_view_id(
 
     return None
 
+def fov2focal(fov, pixels):
+    return pixels / (2 * math.tan(fov / 2))
 
-def build_camera(camera: dict, image: dict) -> MiniCamera:
+def focal2fov(focal, pixels):
+    return 2*math.atan(pixels/(2*focal))
+
+def build_camera(camera: dict, image: dict, downscale: int = 1) -> MiniCamera:
     """Build MiniCamera from COLMAP camera and image.
 
     Args:
         camera: COLMAP camera dict
         image: COLMAP image dict
+        downscale: Resolution downscale factor (1=full, 4=1/4 resolution)
 
     Returns:
         MiniCamera instance
     """
-    # Extract camera parameters
-    width = camera.width
-    height = camera.height
+    # Extract camera parameters and apply downscale
+    width = camera.width // downscale
+    height = camera.height // downscale
 
-    # Extract focal lengths
+    # Extract focal lengths and scale by downscale factor
     if camera.model == "PINHOLE":
-        fx, fy = camera.params[0], camera.params[1]
-        cx, cy = camera.params[2], camera.params[3]
+        fx, fy = camera.params[0] / downscale, camera.params[1] / downscale
+        cx, cy = camera.params[2] / downscale, camera.params[3] / downscale
     elif camera.model == "SIMPLE_PINHOLE":
-        f = camera.params[0]
+        f = camera.params[0] / downscale
         fx = fy = f
         cx, cy = width / 2.0, height / 2.0
+    elif camera.model == "SIMPLE_RADIAL":
+        # SIMPLE_RADIAL: params = [f, cx, cy, k1]
+        # Follow OccamLGS implementation for undistortion
+        f = camera.params[0] / downscale
+        cx = camera.params[1] / downscale
+        cy = camera.params[2] / downscale
+        k1 = camera.params[3]
+        # print(f, cx, cy, k1)
+
+        # Build camera matrix K: [[f, 0, cx], [0, f, cy], [0, 0, 1]]
+        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=np.float32)
+
+        # Distortion coefficients for cv2: [k1, k2, p1, p2]
+        # For SIMPLE_RADIAL, only k1 is non-zero
+        dist_coeffs = np.array([k1, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        # Get optimal new camera matrix for undistortion
+        # Following OccamLGS colmap.py:273-280
+        K_undist, roi_undist = cv2.getOptimalNewCameraMatrix(
+            K, dist_coeffs, (width, height), alpha=0
+        )
+
+        # Extract undistorted focal lengths
+        fx_undist = K_undist[0, 0]
+        fy_undist = K_undist[1, 1]
+        fx = fx_undist
+        fy = fy_undist
+
+        # Calculate FOV from undistorted focal lengths
+        # FovY = focal2fov(fy_undist, height)
+        # FovX = focal2fov(fx_undist, width)
     else:
         raise ValueError(f"Unsupported camera model: {camera.model}")
 
@@ -474,7 +518,8 @@ def process_single_mask(
     view_id: int,
     mask_name: str,
     checkpoint_name: str = "chkpnt30000_langfeat_0.pth",
-    darkening_factor: float = 0.3
+    darkening_factor: float = 0.3,
+    downscale: int = 1
 ):
     """Process a single mask: render, apply mask, save.
 
@@ -484,6 +529,7 @@ def process_single_mask(
         mask_name: Mask filename
         checkpoint_name: Checkpoint file name
         darkening_factor: Darkening factor for non-mask regions
+        downscale: Resolution downscale factor (1=full, 4=1/4 resolution)
     """
     print(f"\n{'='*70}")
     print(f"Processing: scene={scene}, view={view_id}, mask={mask_name}")
@@ -510,7 +556,9 @@ def process_single_mask(
     print(f"  Found camera: id={image_colmap.id}, name={image_colmap.name}")
 
     # Build camera
-    camera = build_camera(camera_colmap, image_colmap)
+    camera = build_camera(camera_colmap, image_colmap, downscale)
+    if downscale > 1:
+        print(f"  Rendering at {downscale}x downscale ({camera.image_width}x{camera.image_height})")
 
     # Load mask
     mask = load_mask(scene, view_id, mask_name)
@@ -536,7 +584,8 @@ def process_all_masks(
     scene: str,
     view_id: int,
     checkpoint_name: str = "chkpnt30000_langfeat_0.pth",
-    darkening_factor: float = 0.3
+    darkening_factor: float = 0.3,
+    downscale: int = 1
 ):
     """Process all masks in a view directory.
 
@@ -545,6 +594,7 @@ def process_all_masks(
         view_id: View ID
         checkpoint_name: Checkpoint file name
         darkening_factor: Darkening factor for non-mask regions
+        downscale: Resolution downscale factor (1=full, 4=1/4 resolution)
     """
     # Get all mask files
     mask_files = list_masks_in_view(scene, view_id)
@@ -572,7 +622,9 @@ def process_all_masks(
     print(f"Using camera: id={image_colmap.id}, name={image_colmap.name}")
 
     # Build camera
-    camera = build_camera(camera_colmap, image_colmap)
+    camera = build_camera(camera_colmap, image_colmap, downscale)
+    if downscale > 1:
+        print(f"Rendering at {downscale}x downscale ({camera.image_width}x{camera.image_height})")
 
     # Render once
     print(f"\nRendering view...")
@@ -630,6 +682,8 @@ Examples:
                         help="Darkening factor for non-mask regions (0-1, default 0.3)")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Checkpoint file name or path (default: auto-detect)")
+    parser.add_argument("--downscale", type=int, default=1,
+                        help="Resolution downscale factor (1=full resolution, 4=1/4 resolution, default 1)")
 
     args = parser.parse_args()
 
@@ -650,9 +704,9 @@ Examples:
 
     # Process
     if args.all_masks:
-        process_all_masks(args.scene, args.view_id, args.checkpoint, args.darken)
+        process_all_masks(args.scene, args.view_id, args.checkpoint, args.darken, args.downscale)
     else:
-        process_single_mask(args.scene, args.view_id, args.mask_name, args.checkpoint, args.darken)
+        process_single_mask(args.scene, args.view_id, args.mask_name, args.checkpoint, args.darken, args.downscale)
 
 
 if __name__ == "__main__":

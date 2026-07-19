@@ -77,8 +77,10 @@ collect_keys_test = (
 
 inference = dict(
     transform=[
-        # FilterValidPoints and FilterCoordOutliers are applied in load_scene_data() before transforms
-        # This allows proper expansion of features back to original size
+        # Filter order (applied in load_scene_data BEFORE transforms):
+        # 1. FilterValidPoints: Removes points with invalid language features (MUST be first)
+        # 2. FilterCoordOutliers: Removes coordinate outliers (if filter_percentile specified)
+        # This ensures inference matches training distribution
         dict(type="CenterShift", apply_z=True),
         dict(type="NormalizeColor"),
         dict(
@@ -131,7 +133,9 @@ inference = dict(
             ]
         ],
     ),
-    chunk_size=600000,  # Large chunk size for full scene
+    chunk_size=250000,  # Reduced from 600k to prevent CUDA OOM on large scenes (~1M points)
+                       # 250k points per chunk requires ~2.5-3 GB GPU memory during decoder MLP
+                       # Smaller chunks trade some speed for memory safety
     save_features=dict(
         output_dir=None,  # Will be overridden
         backbone=dict(enabled=False),  # We handle saving ourselves

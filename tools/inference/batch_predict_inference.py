@@ -128,13 +128,18 @@ class GaussianCheckpointHandler:
     @staticmethod
     def create_checkpoint_with_features(
         features: np.ndarray,
-        index: np.ndarray,
         original_checkpoint: Dict,
         valid_feat_mask: Optional[np.ndarray] = None,
         prune_invalid: bool = False,
     ) -> Tuple:
         """
         Create GaussianModel checkpoint with language features.
+
+        Args:
+            features: Language features (should already be mapped to the target space)
+            original_checkpoint: Original Gaussian checkpoint
+            valid_feat_mask: Boolean mask indicating valid features (same size as features)
+            prune_invalid: If True, prune invalid Gaussians; if False, fill invalid with zeros
 
         Returns a 13-element tuple compatible with capture_language_feature() format:
         (active_sh_degree, xyz, features_dc, features_rest,
@@ -150,8 +155,114 @@ class GaussianCheckpointHandler:
         else:
             state_dict = original_checkpoint
 
+        # Handle SceneSplat/OccamLGS tuple format checkpoint
+        if isinstance(state_dict, tuple):
+            print("Detected SceneSplat/OccamLGS tuple format checkpoint")
+            # state_dict is a flat tuple: (N, means, sh0, shN, scales, quats, opacities, lang_feat, ...)
+            print(f"  Checkpoint tuple length: {len(state_dict)}")
+
+            # state_dict contains:
+            # 0: N (number of Gaussians or flags)
+            # 1: means [N, 3]
+            # 2: sh0 [N, 1, 3] or [N, 3] - DC (spherical harmonics degree 0, i.e., color)
+            # 3: shN [N, 15, 3] - higher degree spherical harmonics
+            # 4: scales [N, 3]
+            # 5: quats [N, 4] - rotation quaternions
+            # 6: opacities [N]
+            # 7: lang_feat [N, 768] - optional language features (to be replaced)
+            xyz = state_dict[1].cpu()  # [N, 3]
+            sh0 = state_dict[2].cpu()  # [N, 1, 3] or [N, 3]
+            shN = state_dict[3].cpu()  # [N, 15, 3]
+            scaling = state_dict[4].cpu()  # [N, 3]
+            rotation = state_dict[5].cpu()  # [N, 4]
+            opacity = state_dict[6].cpu()  # [N]
+
+            # Extract colors from sh0
+            if sh0.dim() == 3:
+                features_dc = sh0.squeeze(1)  # [N, 3]
+            else:
+                features_dc = sh0  # [N, 3]
+
+            # Reshape shN to [N, 45] for features_rest
+            N = xyz.shape[0]
+            features_rest = shN.reshape(N, -1)  # [N, 45]
+
+            # Ensure opacity has correct shape
+            if opacity.dim() == 1:
+                opacity = opacity.unsqueeze(-1)  # [N, 1]
+
+            # Create placeholders for GaussianModel state
+            active_sh_degree = 3
+            max_radii2D = torch.zeros(N, dtype=torch.int32, device=xyz.device)
+            xyz_gradient_accum = torch.zeros(N, 1, dtype=torch.float32, device=xyz.device)
+            denom = torch.zeros(N, 1, dtype=torch.float32, device=xyz.device)
+            opt_dict = {}  # Empty optimizer state dict
+            spatial_lr_scale = 1.0
+
+            # Apply valid_feat_mask pruning or fill with zeros
+            valid_feat_mask_torch = None
+            if valid_feat_mask is not None and prune_invalid:
+                valid_feat_mask_array = np.asarray(valid_feat_mask, dtype=bool)
+                if valid_feat_mask_array.shape[0] != N:
+                    print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask_array.shape[0]} vs {N}), skipping pruning")
+                    print(f"  This may indicate the checkpoint was preprocessed differently than the language features.")
+                    print(f"  Creating a full-valid mask to match xyz size...")
+                    valid_feat_mask_array = np.ones(N, dtype=bool)
+                else:
+                    invalid_count = np.sum(~valid_feat_mask_array)
+                    valid_count = np.sum(valid_feat_mask_array)
+                    print(f"Pruning {invalid_count} invalid Gaussians (keeping {valid_count}/{N})")
+
+                    valid_feat_mask_torch = torch.from_numpy(valid_feat_mask_array)
+
+                    xyz = xyz[valid_feat_mask_torch]
+                    features_dc = features_dc[valid_feat_mask_torch]
+                    features_rest = features_rest[valid_feat_mask_torch]
+                    scaling = scaling[valid_feat_mask_torch]
+                    rotation = rotation[valid_feat_mask_torch]
+                    opacity = opacity[valid_feat_mask_torch]
+                    max_radii2D = max_radii2D[valid_feat_mask_torch]
+                    xyz_gradient_accum = xyz_gradient_accum[valid_feat_mask_torch]
+                    denom = denom[valid_feat_mask_torch]
+
+                    # Also filter language features to match pruned xyz
+                    features = features[valid_feat_mask_array]
+                    N = valid_count
+            elif valid_feat_mask is not None and not prune_invalid:
+                print(f"Note: valid_feat_mask provided but prune_invalid=False (filling invalid with zeros)")
+                if valid_feat_mask.shape[0] != N:
+                    print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask.shape[0]} vs {N})")
+                    print(f"  Assuming all {N} Gaussians are valid (mask mismatch indicates checkpoint was preprocessed differently)")
+                    # Don't use the mismatched mask, keep all features as-is
+                else:
+                    # Fill invalid features with zeros to keep all Gaussians
+                    bool_mask = valid_feat_mask.astype(bool)
+                    features = features.copy()
+                    features[~bool_mask] = 0.0
+                    n_invalid = (~bool_mask).sum()
+                    print(f"  Filled {n_invalid} invalid features with zeros")
+
+            # Convert language features to tensor
+            language_features_tensor = torch.from_numpy(features.astype(np.float32))
+
+            # Return in capture_language_feature() format (13 elements)
+            return (
+                active_sh_degree,
+                xyz,              # [N, 3] - Gaussian positions
+                features_dc,      # [N, 3] - SH DC coefficients for COLOR (NOT language features!)
+                features_rest,    # [N, 45] - SH rest coefficients for COLOR
+                scaling,          # [N, 3] - Scaling
+                rotation,         # [N, 4] - Rotation quaternions
+                opacity,          # [N, 1] - Opacity
+                language_features_tensor,  # [N, feat_dim] - LANGUAGE FEATURES (separate field!)
+                max_radii2D,      # [N] - Max 2D radii
+                xyz_gradient_accum,  # [N, 1] - XYZ gradient accumulator
+                denom,            # [N, 1] - Denominator
+                opt_dict,         # dict - Optimizer state dict
+                spatial_lr_scale, # float - Spatial learning rate scale
+            )
         # Handle gsplat format checkpoint
-        if isinstance(state_dict, dict) and "splats" in state_dict:
+        elif isinstance(state_dict, dict) and "splats" in state_dict:
             print("Detected gsplat format checkpoint")
             splats = state_dict["splats"]
 
@@ -175,12 +286,16 @@ class GaussianCheckpointHandler:
             opt_dict = {}  # Empty optimizer state dict
             spatial_lr_scale = 1.0
 
-            # Apply valid_feat_mask pruning
+            # Apply valid_feat_mask pruning or fill with zeros
+            # Features should already be in the same space as xyz (after expansion in process_scene)
             valid_feat_mask_torch = None
             if valid_feat_mask is not None and prune_invalid:
                 valid_feat_mask_array = np.asarray(valid_feat_mask, dtype=bool)
                 if valid_feat_mask_array.shape[0] != N:
                     print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask_array.shape[0]} vs {N}), skipping pruning")
+                    print(f"  This may indicate the checkpoint was preprocessed differently than the language features.")
+                    print(f"  Creating a full-valid mask to match xyz size...")
+                    valid_feat_mask_array = np.ones(N, dtype=bool)
                 else:
                     invalid_count = np.sum(~valid_feat_mask_array)
                     valid_count = np.sum(valid_feat_mask_array)
@@ -198,25 +313,25 @@ class GaussianCheckpointHandler:
                     xyz_gradient_accum = xyz_gradient_accum[valid_feat_mask_torch]
                     denom = denom[valid_feat_mask_torch]
 
+                    # Also filter language features to match pruned xyz
+                    features = features[valid_feat_mask_array]
                     N = valid_count
             elif valid_feat_mask is not None and not prune_invalid:
-                print(f"Note: valid_feat_mask provided but prune_invalid=False")
-
-            # Map language features back to original points
-            if valid_feat_mask is not None and prune_invalid and valid_feat_mask_torch is not None:
-                features_orig = features[index]  # [N_orig, feat_dim]
-                language_features = features_orig[valid_feat_mask].astype(np.float32)  # [N_pruned, feat_dim]
-            else:
-                features_orig = features[index]  # [N, feat_dim]
-                if valid_feat_mask is not None:
-                    # Convert to boolean mask to avoid bitwise NOT issues with integer arrays
+                print(f"Note: valid_feat_mask provided but prune_invalid=False (filling invalid with zeros)")
+                if valid_feat_mask.shape[0] != N:
+                    print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask.shape[0]} vs {N})")
+                    print(f"  Assuming all {N} Gaussians are valid (mask mismatch indicates checkpoint was preprocessed differently)")
+                    # Don't use the mismatched mask, keep all features as-is
+                else:
+                    # Fill invalid features with zeros to keep all Gaussians
                     bool_mask = valid_feat_mask.astype(bool)
-                    features_orig = features_orig.copy()
-                    features_orig[~bool_mask] = 0.0
-                language_features = features_orig.astype(np.float32)
+                    features = features.copy()
+                    features[~bool_mask] = 0.0
+                    n_invalid = (~bool_mask).sum()
+                    print(f"  Filled {n_invalid} invalid features with zeros")
 
             # Convert language features to tensor
-            language_features_tensor = torch.from_numpy(language_features)
+            language_features_tensor = torch.from_numpy(features.astype(np.float32))
 
             # Return in capture_language_feature() format (13 elements)
             # NOTE: features_dc and features_rest are NOT modified - they store SH coefficients for color
@@ -264,12 +379,16 @@ class GaussianCheckpointHandler:
             if opacity is not None and opacity.dim() == 1:
                 opacity = opacity.unsqueeze(-1)
 
-            # Handle pruning
+            # Handle pruning or fill with zeros
+            # Features should already be in the same space as xyz (after expansion in process_scene)
             valid_feat_mask_torch = None
             if valid_feat_mask is not None and prune_invalid:
                 valid_feat_mask_array = np.asarray(valid_feat_mask, dtype=bool)
                 if valid_feat_mask_array.shape[0] != N:
-                    print(f"Warning: valid_feat_mask length mismatch, skipping pruning")
+                    print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask_array.shape[0]} vs {N}), skipping pruning")
+                    print(f"  This may indicate the checkpoint was preprocessed differently than the language features.")
+                    print(f"  Creating a full-valid mask to match xyz size...")
+                    valid_feat_mask_array = np.ones(N, dtype=bool)
                 else:
                     invalid_count = np.sum(~valid_feat_mask_array)
                     valid_count = np.sum(valid_feat_mask_array)
@@ -292,22 +411,25 @@ class GaussianCheckpointHandler:
                     xyz_gradient_accum = xyz_gradient_accum[valid_feat_mask_torch]
                     denom = denom[valid_feat_mask_torch]
 
+                    # Also filter language features to match pruned xyz
+                    features = features[valid_feat_mask_array]
                     N = valid_count
-
-            # Map language features back to original points
-            if valid_feat_mask is not None and prune_invalid and valid_feat_mask_torch is not None:
-                features_orig = features[index]
-                language_features = features_orig[valid_feat_mask].astype(np.float32)
-            else:
-                features_orig = features[index]
-                if valid_feat_mask is not None:
-                    # Convert to boolean mask to avoid bitwise NOT issues with integer arrays
+            elif valid_feat_mask is not None and not prune_invalid:
+                print(f"Note: valid_feat_mask provided but prune_invalid=False (filling invalid with zeros)")
+                if valid_feat_mask.shape[0] != N:
+                    print(f"Warning: valid_feat_mask length mismatch ({valid_feat_mask.shape[0]} vs {N})")
+                    print(f"  Assuming all {N} Gaussians are valid (mask mismatch indicates checkpoint was preprocessed differently)")
+                    # Don't use the mismatched mask, keep all features as-is
+                else:
+                    # Fill invalid features with zeros to keep all Gaussians
                     bool_mask = valid_feat_mask.astype(bool)
-                    features_orig = features_orig.copy()
-                    features_orig[~bool_mask] = 0.0
-                language_features = features_orig.astype(np.float32)
+                    features = features.copy()
+                    features[~bool_mask] = 0.0
+                    n_invalid = (~bool_mask).sum()
+                    print(f"  Filled {n_invalid} invalid features with zeros")
 
-            language_features_tensor = torch.from_numpy(language_features)
+            # Convert language features to tensor
+            language_features_tensor = torch.from_numpy(features.astype(np.float32))
 
             # Provide defaults for missing components
             if features_dc is None:
@@ -371,6 +493,7 @@ class BatchPredictorWithInference:
         prune_invalid: bool = False,
         save_checkpoint: bool = False,
         filter_percentile: Optional[float] = None,
+        use_original_model: bool = False,
     ):
         """
         Initialize batch predictor.
@@ -386,6 +509,7 @@ class BatchPredictorWithInference:
             save_checkpoint: Whether to save Gaussian checkpoint (when original checkpoint is found)
             filter_percentile: Filter percentile for coord outliers (e.g., 0.1 means 0.1%-99.9%).
                            If None, no filtering is applied (default: None).
+            use_original_model: Whether using original PT-v3m1 model (affects checkpoint naming)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -395,6 +519,7 @@ class BatchPredictorWithInference:
         self.prune_invalid = prune_invalid
         self.save_checkpoint = save_checkpoint
         self.filter_percentile = filter_percentile
+        self.use_original_model = use_original_model
 
         # Load config
         self.cfg = Config.fromfile(config_path)
@@ -455,8 +580,12 @@ class BatchPredictorWithInference:
 
         base_dir = Path(self.original_checkpoint_base)
 
-        # Try different patterns
+        # Try different patterns - SceneSplat7K uses _langfeat_0 suffix
         patterns = [
+            # Pattern with _langfeat_N suffix (SceneSplat7K naming)
+            base_dir / scene_name / f"chkpnt{self.iterations}_langfeat_0.pth",
+            base_dir / scene_name / "ckpts" / f"chkpnt{self.iterations}_langfeat_0.pth",
+            # Pattern without suffix (original naming)
             base_dir / scene_name / "ckpts" / f"chkpnt{self.iterations}.pth",
             base_dir / scene_name / f"chkpnt{self.iterations}.pth",
             base_dir / f"chkpnt{self.iterations}.pth",
@@ -471,7 +600,21 @@ class BatchPredictorWithInference:
         """Load .npy files from a scene directory.
 
         Handles SVD-compressed language features if configured.
+        Filters valid points (with valid language features) to match training distribution.
         Filters coordinate outliers to prevent PointOctree depth overflow.
+
+        Filter order (CRITICAL - must match training):
+        1. FilterValidPoints: Removes points with invalid language features (for SVD data)
+        2. FilterCoordOutliers: Removes coordinate outliers (if filter_percentile specified)
+
+        Index tracking for expansion:
+        - _n_original_points_before_filter: Total original point count (e.g., 1M)
+        - _valid_kept_indices: Indices in original space that are valid (for Stage 2 expansion)
+        - _outlier_removed_indices_in_valid_space: Indices in valid space removed by outliers (for Stage 1 expansion)
+
+        Two-stage expansion (in process_scene):
+        - Stage 1: Expand from outlier-filtered to valid-space (fill outliers with zeros)
+        - Stage 2: Expand from valid-space to original-space (fill invalid points with zeros)
         """
         data_dict = {}
         for file_path in scene_path.glob("*.npy"):
@@ -493,23 +636,116 @@ class BatchPredictorWithInference:
                 print(f"Loading SVD-{svd_rank} compressed lang_feat from {svd_file}")
                 try:
                     svd_data = np.load(svd_file)
-                    compressed = svd_data['compressed']  # [M, rank]
-                    indices = svd_data['indices']  # [N] - point to grid mapping
+                    compressed = svd_data['compressed']  # [M, rank] - grid cells only
+                    indices = svd_data['indices']  # [N_valid] - valid points only (after FilterValidPoints)
 
-                    # Add point_to_grid mapping to data_dict
+                    # CRITICAL: SVD file contains features for valid points only
+                    # The indices length (N_valid) is the number of valid points after FilterValidPoints
+                    # We need to filter coord and other arrays to match this
+                    n_valid_points = len(indices)
+                    n_grid_cells = len(compressed)
+                    print(f"  SVD contains {n_valid_points} valid points, {n_grid_cells} grid cells")
+
+                    # Check if valid_feat_mask exists and needs to be used for filtering
+                    if "valid_feat_mask" in data_dict:
+                        # Convert valid_feat_mask to boolean (it's stored as int64)
+                        valid_mask = data_dict["valid_feat_mask"].astype(bool)
+                        data_dict["valid_feat_mask"] = valid_mask  # Update to boolean
+                        n_total = len(valid_mask)
+                        n_valid_in_mask = valid_mask.sum()
+
+                        print(f"  valid_feat_mask: {n_valid_in_mask}/{n_total} valid points")
+
+                        # Verify consistency between mask and SVD size
+                        if n_valid_in_mask != n_valid_points:
+                            print(f"  Warning: Mask count ({n_valid_in_mask}) != SVD count ({n_valid_points})")
+                            print(f"  Using SVD count as ground truth (assuming mask was created before SVD)")
+
+                        # Now filter all arrays to match training distribution
+                        # Training: FilterValidPoints filters coord from 1M → n_valid_points
+                        # Then SVD lang_feat is loaded with n_valid_points
+                        # So we need to do the same: filter coord first, then use SVD features
+                        print(f"  Filtering coord from {n_total} to {n_valid_points} points to match training")
+
+                        # Store original indices for later expansion
+                        # _valid_kept_indices: which points in original 1M space are kept (valid)
+                        # _n_original_points_before_filter: original point count (1M)
+                        valid_indices = np.where(valid_mask)[0]
+                        data_dict["_valid_kept_indices"] = valid_indices  # Indices in original space
+                        data_dict["_n_original_points_before_filter"] = n_total
+
+                        # Filter coord and other arrays to match SVD size
+                        keys_to_filter = ["coord", "color", "opacity", "quat", "scale", "segment"]
+                        for key in keys_to_filter:
+                            if key in data_dict and isinstance(data_dict[key], np.ndarray):
+                                if data_dict[key].shape[0] == n_total:
+                                    data_dict[key] = data_dict[key][valid_mask]
+
+                        # Update valid_feat_mask to the filtered size (all points are now valid)
+                        data_dict["valid_feat_mask"] = np.ones(n_valid_points, dtype=bool)
+                        print(f"  Filtered: coord now has {data_dict['coord'].shape[0]} points")
+
+                    # Add point_to_grid mapping (already has correct size n_valid_points)
                     data_dict["point_to_grid"] = indices.astype(np.int64)
 
-                    # Expand grid-level features to point-level: [N, rank]
+                    # Expand grid-level features to point-level: [N_valid, rank]
                     point_lang_feat = compressed[indices]
                     data_dict["lang_feat"] = point_lang_feat.astype(np.float32)
-                    print(f"  Loaded compressed features: {point_lang_feat.shape}")
+                    print(f"  Loaded SVD lang_feat: {point_lang_feat.shape}")
                 except Exception as e:
                     print(f"  Warning: Failed to load SVD file: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
                 print(f"Warning: SVD rank {svd_rank} configured but file not found: {svd_file}")
                 print(f"  Using original lang_feat.npy instead")
         elif svd_rank is not None and 'lang_feat' in data_dict and not is_litept:
             print(f"Note: Using original PT-v3m1 model, ignoring SVD config (using full 768-dim features)")
+
+        # Filter valid points to match training distribution (CRITICAL: must be BEFORE FilterCoordOutliers)
+        # For SVD: Filtering already done above (coord filtered to match SVD lang_feat size)
+        # For non-SVD: Use valid_feat_mask to filter
+        if "valid_feat_mask" in data_dict and svd_rank is None:
+            valid_mask = data_dict["valid_feat_mask"]
+            n_before = len(valid_mask)
+
+            # CRITICAL: Convert to bool first to handle int64/uint8 masks correctly
+            # For int64/uint8 arrays, ~ does bitwise NOT, not logical NOT
+            bool_mask = valid_mask.astype(bool)
+            n_invalid = (~bool_mask).sum()
+
+            if n_invalid > 0:
+                print(f"[FilterValidPoints] Removing {n_invalid}/{n_before} invalid points "
+                      f"({n_invalid/n_before*100:.1f}%) - matching training distribution")
+
+                # Store original point count before filtering
+                if "_n_original_points_before_filter" not in data_dict:
+                    data_dict["_n_original_points_before_filter"] = n_before
+
+                # Store indices of invalid points for later expansion
+                invalid_indices = np.where(~bool_mask)[0]
+                if "_filtered_out_indices" in data_dict:
+                    # Merge with existing filtered indices
+                    data_dict["_filtered_out_indices"] = np.concatenate([
+                        data_dict["_filtered_out_indices"], invalid_indices
+                    ])
+                else:
+                    data_dict["_filtered_out_indices"] = invalid_indices
+
+                # Store indices of valid points for Stage 2 expansion (expand back to original space)
+                valid_kept_indices = np.where(bool_mask)[0]
+                data_dict["_valid_kept_indices"] = valid_kept_indices
+                print(f"  Stored {len(valid_kept_indices)} valid point indices for expansion")
+
+                # Filter all arrays to match training distribution
+                keys_to_filter = ["coord", "color", "opacity", "quat", "scale", "lang_feat",
+                                  "point_to_grid", "segment", "valid_feat_mask"]
+                for key in keys_to_filter:
+                    if key in data_dict and isinstance(data_dict[key], np.ndarray):
+                        if data_dict[key].shape[0] == n_before:
+                            data_dict[key] = data_dict[key][bool_mask]
+            else:
+                print(f"[FilterValidPoints] All {n_before} points have valid features - no filtering needed")
 
         # Filter coordinate outliers to prevent PointOctree depth overflow
         # This filtering happens BEFORE the transform pipeline
@@ -539,9 +775,11 @@ class BatchPredictorWithInference:
                       f"y=[{coord[:, 1].min():.2f}, {coord[:, 1].max():.2f}], "
                       f"z=[{coord[:, 2].min():.2f}, {coord[:, 2].max():.2f}]")
 
-                # Store original point count and filtered indices for expansion
-                data_dict["_n_original_points_before_filter"] = n_points
-                data_dict["_filtered_out_indices"] = np.where(~mask)[0]
+                # Store filtered indices in the CURRENT (post-valid-filter) space
+                # These are indices 0 to n_points-1 (in the already-filtered space)
+                outlier_removed_indices_in_valid_space = np.where(~mask)[0]
+                data_dict["_outlier_removed_indices_in_valid_space"] = outlier_removed_indices_in_valid_space
+                data_dict["_outlier_removed_count"] = n_filtered_out
 
                 # Filter all arrays with matching first dimension
                 keys_to_filter = ["coord", "color", "opacity", "quat", "scale", "lang_feat", "valid_feat_mask",
@@ -587,9 +825,11 @@ class BatchPredictorWithInference:
         if valid_feat_mask is not None:
             print(f"Found valid_feat_mask: {valid_feat_mask.sum()}/{len(valid_feat_mask)} points have valid features")
 
-        # Store original point count before filtering
-        n_original_points = data_dict.get("_n_original_points_before_filter")
-        filtered_out_indices = data_dict.get("_filtered_out_indices")
+        # Store index tracking info for expansion
+        n_original_points = data_dict.get("_n_original_points_before_filter")  # Total original points (1M)
+        valid_kept_indices = data_dict.get("_valid_kept_indices")  # Indices in original space that are valid
+        outlier_removed_indices = data_dict.get("_outlier_removed_indices_in_valid_space")  # Indices in valid space removed by outliers
+        outlier_removed_count = data_dict.get("_outlier_removed_count", 0)
 
         # Find original checkpoint
         original_ckpt_path = None
@@ -606,7 +846,7 @@ class BatchPredictorWithInference:
         inference_time = time.time() - inference_start
 
         # Extract results
-        features = outputs["backbone_features"]  # [N_filtered, feat_dim]
+        features = outputs["backbone_features"]  # [N_final, feat_dim]
         metadata = outputs["metadata"]
 
         # Post-processing: handle inverse mapping and expansion
@@ -618,31 +858,52 @@ class BatchPredictorWithInference:
             # Map features back to pre-filter points
             features = features[inverse]
 
-        # Handle filtered outliers: expand features back to original size
-        if n_original_points is not None and filtered_out_indices is not None:
-            # Create full feature array with zeros for filtered points
+        # Two-stage expansion back to original size
+        # Stage 1: Expand from outlier-filtered to valid-space (fill outliers with zeros)
+        # Stage 2: Expand from valid-space to original-space (fill invalid points with zeros)
+
+        if n_original_points is not None and valid_kept_indices is not None:
             feat_dim = features.shape[1]
-            full_features = np.zeros((n_original_points, feat_dim), dtype=features.dtype)
 
-            # Get indices of kept points
-            kept_indices = np.setdiff1d(np.arange(n_original_points), filtered_out_indices)
+            # Stage 1: Expand outlier-removed points back to valid space
+            if outlier_removed_indices is not None and len(outlier_removed_indices) > 0:
+                n_valid_space = len(valid_kept_indices)
+                features_in_valid_space = np.zeros((n_valid_space, feat_dim), dtype=features.dtype)
 
-            # Assign features to kept points
-            full_features[kept_indices] = features
+                # Indices in valid space that were kept (not removed by outlier filtering)
+                kept_in_valid_space = np.setdiff1d(np.arange(n_valid_space), outlier_removed_indices)
 
-            print(f"[FilterCoordOutliers] Expanded features from {features.shape[0]} to {full_features.shape[0]} "
-                  f"({len(filtered_out_indices)} filtered points have zero features)")
+                # Assign features to kept positions in valid space
+                features_in_valid_space[kept_in_valid_space] = features
 
-            # Expand valid_feat_mask back to original size if it exists
+                print(f"[Expansion Stage 1] Expanded from {features.shape[0]} to {features_in_valid_space.shape[0]} "
+                      f"(filled {len(outlier_removed_indices)} outlier-removed points with zeros)")
+            else:
+                # No outlier filtering, features already in valid space
+                features_in_valid_space = features
+                print(f"[Expansion Stage 1] No outlier filtering, features already in valid space: {features_in_valid_space.shape[0]}")
+
+            # Stage 2: Expand from valid space to original space (fill invalid points with zeros)
+            full_features = np.zeros((n_original_points, feat_dim), dtype=features_in_valid_space.dtype)
+            full_features[valid_kept_indices] = features_in_valid_space
+
+            n_invalid_filled = n_original_points - len(valid_kept_indices)
+            print(f"[Expansion Stage 2] Expanded from {features_in_valid_space.shape[0]} to {full_features.shape[0]} "
+                  f"(filled {n_invalid_filled} invalid points with zeros)")
+
+            # Expand valid_feat_mask back to original size
             if valid_feat_mask is not None:
-                # Create full-size mask initialized to False (all points invalid)
+                # Create full-size mask with all points marked invalid
                 full_valid_mask = np.zeros(n_original_points, dtype=bool)
-                # Mark kept_indices with their validity from the filtered mask
-                full_valid_mask[kept_indices] = valid_feat_mask
+                # Mark valid points as True
+                full_valid_mask[valid_kept_indices] = True
                 valid_feat_mask = full_valid_mask
-                print(f"[FilterCoordOutliers] Expanded valid_feat_mask: {valid_feat_mask.sum()}/{len(valid_feat_mask)} valid points")
+                print(f"[Expansion] valid_feat_mask: {valid_feat_mask.sum()}/{len(valid_feat_mask)} valid points")
 
             features = full_features
+        else:
+            # No expansion needed
+            print(f"[Expansion] No expansion needed, features shape: {features.shape}")
 
         postprocess_time = time.time() - postprocess_start
 
@@ -661,23 +922,25 @@ class BatchPredictorWithInference:
             try:
                 original_ckpt = self.checkpoint_handler.load_original_checkpoint(original_ckpt_path)
 
-                # Build index mapping
-                index = np.arange(len(features))
-
                 # Create checkpoint with features
+                # Note: features should already be in the correct space after expansion
                 new_ckpt = self.checkpoint_handler.create_checkpoint_with_features(
                     features=features,
-                    index=index,
                     original_checkpoint=original_ckpt,
                     valid_feat_mask=valid_feat_mask,
                     prune_invalid=self.prune_invalid,
                 )
 
-                # Save checkpoint
-                ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_p.pth"
-                use_original_model = True
-                if use_original_model:
+                # Save checkpoint with appropriate filename based on model type
+                # "checkpoint_with_features_s.pth" for original PT-v3m1 model (768-dim features)
+                # "checkpoint_with_features_p.pth" for LitePT or other models
+                if self.use_original_model:
                     ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_s.pth"
+                    model_desc = "PT-v3m1 (original)"
+                else:
+                    ckpt_path = self.output_dir / scene_name / "checkpoint_with_features_p.pth"
+                    model_desc = "LitePT/other"
+                print(f"Saving checkpoint for {model_desc} model to: {ckpt_path}")
                 self.checkpoint_handler.save_checkpoint(new_ckpt, str(ckpt_path))
 
             except Exception as e:
@@ -966,6 +1229,7 @@ def main():
         prune_invalid=args.prune_invalid,
         save_checkpoint=args.save_checkpoint,
         filter_percentile=args.filter_percentile,
+        use_original_model=args.use_original_model,
     )
 
     predictor.run(

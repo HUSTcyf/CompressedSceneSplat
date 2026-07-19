@@ -84,6 +84,9 @@ class LangPretrainer(nn.Module):
         norm_range_min=-1.0,  # Min value for output normalization range
         norm_range_max=1.0,  # Max value for output normalization range
         enable_normalize=True,  # Whether to normalize output to [norm_range_min, norm_range_max]
+        enable_output_bias=False,  # Enable learnable bias after tanh to handle biased GT distributions
+        output_bias_init=None,  # Initial bias values (e.g., [0.92, 0, 0, ...] for SVD Dim 0)
+        feat_dim=16,  # Feature dimension for bias layer
     ):
         super().__init__()
         self.backbone = build_model(backbone)
@@ -95,6 +98,20 @@ class LangPretrainer(nn.Module):
         self.norm_range_max = norm_range_max
         self.enable_normalize = enable_normalize
 
+        # Output bias layer to handle biased GT distributions
+        # FIX for mode collapse: SVD GT has Dim 0 with mean=0.92 (highly biased positive)
+        # tanh output is centered at 0, so we need a learnable bias to shift the distribution
+        self.enable_output_bias = enable_output_bias
+        self.output_bias = None
+        if enable_output_bias:
+            # Initialize bias to 0.0 (no shift) or use provided initial values
+            # If output_bias_init is provided, use it for initial bias values
+            if output_bias_init is not None:
+                bias_init = torch.tensor(output_bias_init, dtype=torch.float32)
+                self.output_bias = nn.Parameter(bias_init)
+            else:
+                self.output_bias = nn.Parameter(torch.zeros(feat_dim))
+
     def forward(self, input_dict, chunk_size=None):
         if (
             chunk_size is not None
@@ -105,11 +122,8 @@ class LangPretrainer(nn.Module):
         point = Point(input_dict)
         point_feat = self.backbone(point)
 
-        # Apply tanh activation to constrain output to [-1, 1] range
-        feat = point_feat["feat"]
-        feat = torch.tanh(feat)
-
-        point_feat["feat"] = feat
+        # normalize the feature
+        point_feat["feat"] = nn.functional.normalize(point_feat["feat"], p=2, dim=1)
 
         # train
         if self.training:
@@ -160,8 +174,9 @@ class LangPretrainer(nn.Module):
             chunk_point = Point(chunk_input_dict)
             chunk_point_feat = self.backbone(chunk_point)
 
-            # Apply tanh activation to constrain output to [-1, 1] range
-            chunk_point_feat["feat"] = torch.tanh(chunk_point_feat["feat"])
+            chunk_point_feat["feat"] = nn.functional.normalize(
+                chunk_point_feat["feat"], p=2, dim=1
+            )
 
             if is_training:
                 # Pass coord, Gaussian parameters, and scene_path for Rendered2DLoss

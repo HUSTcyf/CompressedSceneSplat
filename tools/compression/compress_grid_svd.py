@@ -940,7 +940,7 @@ Examples:
         "--dataset",
         type=str,
         default="3DOVS",
-        choices=["3DOVS", "lerf_ovs"],
+        choices=["3DOVS", "lerf_ovs", "replica"],
         help="Dataset name (for batch mode)",
     )
     parser.add_argument(

@@ -597,6 +597,7 @@ class LitePT(PointModule):
         enc_mode=False,
         pdnorm_ln=False,  # Use LayerNorm for decoder upsampling layers (fixes BatchNorm explosion)
         pdnorm_bn=True,   # Use BatchNorm for decoder upsampling layers (default, may explode)
+        norm_encoder_ln=False,  # Use LayerNorm for encoder embedding/pooling (fixes BatchNorm explosion)
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -631,10 +632,18 @@ class LitePT(PointModule):
         else:
             dec_norm_layer = bn_layer
 
+        # Choose norm layer for encoder embedding and pooling based on norm_encoder_ln
+        # norm_encoder_ln=True: Use LayerNorm (prevents BatchNorm explosion in encoder)
+        # norm_encoder_ln=False: Use BatchNorm (default)
+        if norm_encoder_ln:
+            enc_norm_layer = ln_layer
+        else:
+            enc_norm_layer = bn_layer
+
         self.embedding = Embedding(
             in_channels=in_channels,
             embed_channels=enc_channels[0],
-            norm_layer=bn_layer,
+            norm_layer=enc_norm_layer,
             act_layer=act_layer,
         )
 
@@ -654,7 +663,7 @@ class LitePT(PointModule):
                         in_channels=enc_channels[s - 1],
                         out_channels=enc_channels[s],
                         stride=stride[s - 1],
-                        norm_layer=bn_layer,
+                        norm_layer=enc_norm_layer,
                         act_layer=act_layer,
                         re_serialization=enc_attn[s],
                         serialization_order=self.order

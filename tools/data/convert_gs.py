@@ -249,7 +249,7 @@ def process_ply_file(ply_path, output_dir, relative_path):
             # For directory input: preserve structure
             # e.g., gaussian_results/lerf_ovs/figurines/point_cloud.ply
             # -> gaussian_train/lerf_ovs/figurines/
-            output_subdir = output_dir / relative_path.parent
+            output_subdir = output_dir / relative_path.parent.parent
         else:
             # For single file input
             output_subdir = output_dir / ply_path.stem

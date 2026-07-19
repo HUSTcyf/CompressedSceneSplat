@@ -65,6 +65,12 @@ save_path = f"exp/lite-{svd_rank}-gridsvd"
 model = dict(
     type="LangPretrainer",  # Language Pretrainer for VL learning
     verbose_losses=True,  # Enable verbose loss printing (L2 and Cos per iteration)
+    # OUTPUT BIAS LAYER - FIX for mode collapse with biased GT distributions
+    # SVD GT has Dim 0 with mean=0.92 (highly biased positive), while tanh outputs are centered at 0
+    # This learnable bias shifts the tanh output to match GT distribution
+    enable_output_bias=True,  # Enable learnable bias after tanh
+    output_bias_init=[0.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Initial bias: Dim 0=0.9 (frozen, not trained)
+    feat_dim=16,  # Feature dimension for bias layer
     backbone=dict(
         type="LitePT",
         in_channels=11,  # 3DGS features: color(3) + opacity(1) + quat(4) + scale(3) [coord removed]
@@ -106,6 +112,7 @@ model = dict(
         # LayerNorm normalizes across feature dimension (not batch), preventing explosion
         pdnorm_ln=True,   # Enable LayerNorm for decoder upsampling layers
         pdnorm_bn=False,  # Disable BatchNorm (prevents explosion)
+        norm_encoder_ln=True,  # Enable LayerNorm for encoder embedding/pooling (prevents Enc4 explosion)
     ),
     # Language pretraining losses for compressed features
     #
@@ -145,12 +152,13 @@ model = dict(
             variance_momentum=0.99,  # EMA momentum for stable variance estimation
         ),
 
-        # CosineSimilarity: Focus on directional alignment (not weighted)
-        dict(
-            type="CosineSimilarity",
-            loss_weight=1.0,
-            reduction="mean",
-        ),
+        # # CosineSimilarity: Focus on directional alignment (not weighted)
+        # # TEMPORARILY DISABLED - testing L1-only training
+        # dict(
+        #     type="CosineSimilarity",
+        #     loss_weight=1.0,
+        #     reduction="mean",
+        # ),
 
         # Rendered2DLoss: Spatial consistency via Gaussian splatting rendering
         # Enforces spatially consistent predictions by comparing rendered 2D features
@@ -167,17 +175,18 @@ model = dict(
         #     max_num_views=10,  # Use up to 10 views per scene to save memory
         # ),
 
-        # AggregatedContrastiveLoss: ENABLED with tanh activation
-        # Using lower temperature (0.05) for more discriminative contrastive learning
-        # With tanh features, prototypes are L2-normalized to unit sphere
-        # Lower temperature amplifies differences between classes
-        dict(
-            type="AggregatedContrastiveLoss",
-            temperature=0.05,  # Lowered from 0.2 for better discrimination with tanh
-            reduction="mean",
-            loss_weight=0.02,  # Reduced from 0.2 based on loss analysis
-            schedule="all",
-        ),
+        # # AggregatedContrastiveLoss: ENABLED with tanh activation
+        # # Using lower temperature (0.05) for more discriminative contrastive learning
+        # # With tanh features, prototypes are L2-normalized to unit sphere
+        # # Lower temperature amplifies differences between classes
+        # # TEMPORARILY DISABLED - testing L1-only training
+        # dict(
+        #     type="AggregatedContrastiveLoss",
+        #     temperature=0.05,  # Lowered from 0.2 for better discrimination with tanh
+        #     reduction="mean",
+        #     loss_weight=0.02,  # Reduced from 0.2 based on loss analysis
+        #     schedule="all",
+        # ),
     ],
 )
 
@@ -200,12 +209,13 @@ density_invariant = dict(
 
     # Training scenarios to use
     # Temporarily removed "half" scenario to reduce memory pressure and improve speed
-    scenarios=["dense", "single"],  # Two scenarios (half removed for optimization)
+    # TEMPORARILY: Only use "dense" scenario to debug dimension collapse issue
+    scenarios=["dense"],  # Only dense scenario (single disabled for debugging)
     # Weight for each scenario's loss
     scenario_weights=dict(
         dense=1.0,    # Dense input (all valid points)
         # half=1.0,   # Half density (30-70% sampling) - TEMPORARILY DISABLED
-        single=1.0,  # Single point per grid
+        # single=1.0,  # Single point per grid - DISABLED for debugging dimension collapse
     ),
 
     # Whether to use compressed features for grid alignment loss
@@ -221,23 +231,26 @@ density_invariant = dict(
 # Scheduler settings
 # ============================================================================
 eval_epoch = 10  # total eval & checkpoint epoch
-epoch = eval_epoch * 1  # total data loops (200 epochs for pretraining)
+epoch = eval_epoch * 5  # total data loops (200 epochs for pretraining)
 
 # ============================================================================
 # Optimizer settings with mode-collapse prevention
 # ============================================================================
 # Base optimizer configuration
-optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.01)  # REDUCED from 0.05 for better convergence
+optimizer = dict(type="AdamW", lr=0.001, weight_decay=0.01)  # 10x increase from 0.0001 to 0.001
 
 # Scheduler configuration
 scheduler = dict(
     type="OneCycleLR",
-    # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dec0.mlp, dec0.fc]
-    max_lr=[0.001, 0.001, 0.0001, 0.00005, 0.00005],
+    # max_lr 对应所有参数组: [默认组, enc.block, dec.block, dec0.mlp, dec0.fc, output_bias]
+    max_lr=[0.001, 0.001, 0.0001, 0.00005, 0.00005, 0.0002],  # 更新 output_bias: 0.00005 → 0.0002
     pct_start=0.1,
     anneal_strategy="cos",
     div_factor=10.0,
-    final_div_factor=1000.0,
+    # FIX: Reduced final_div_factor from 1000.0 to 10.0 to prevent aggressive LR decay
+    # Old: final_lr = max_lr / 1000 (e.g., 5e-09) - too small for meaningful updates
+    # New: final_lr = max_lr / 10 (e.g., 5e-07) - allows continued learning
+    final_div_factor=1.0,
 )
 
 # ============================================================================
@@ -255,6 +268,7 @@ scheduler = dict(
 # - "dec.block": Decoder transformer blocks (all stages including dec0)
 # - "dec0.block1.mlp": The problematic decoder stage 0, block 1 MLP layers
 # - "dec0.block1.mlp.0.fc": Specifically targets fc1/fc2 in the MLP
+# - "output_bias": Learnable bias parameter for handling biased GT distributions
 #
 # Layer naming in LitePT:
 #   backbone.dec.dec{s}.block{i}.mlp.{j}.fc{k}.{weight|bias}
@@ -263,23 +277,37 @@ scheduler = dict(
 # ============================================================================
 param_dicts = [
     # Group 1: Encoder transformer blocks
-    dict(keyword="enc.block", lr=0.001, weight_decay=0.01),  # REDUCED from 0.05
+    dict(keyword="enc.block", lr=0.001, weight_decay=0.01),  # 10x increase from 0.0001 to 0.001
 
     # Group 2: Decoder transformer blocks (all stages: dec3, dec2, dec1, dec0)
-    dict(keyword="dec.block", lr=0.0001, weight_decay=0.01),  # REDUCED from 0.05
+    dict(keyword="dec.block", lr=0.0001, weight_decay=0.01),  # 10x increase from 0.00001 to 0.0001
 
     # Group 3: dec0.block1 MLP (specific problematic layer)
     dict(
         keyword="dec0.block1.mlp",
-        lr=0.00005,  # Lower than dec.block for stability
+        lr=0.00005,  # 10x increase from 0.000005 to 0.00005
         weight_decay=0.02,  # REDUCED from 0.2 (10× reduction)
     ),
 
     # Group 4: Specifically target fc1/fc2 linear layers in dec0.block1.mlp
     dict(
         keyword="dec0.block1.mlp.0.fc",
-        lr=0.00005,
+        lr=0.00005,  # 10x increase from 0.000005 to 0.00005
         weight_decay=0.03,  # REDUCED from 0.3 (10× reduction)
+    ),
+
+    # Group 5: Output bias parameter (NEW - for handling biased GT distributions)
+    # FIX: Removed weight_decay to prevent dimension collapse
+    # FIX #2: Increased learning rate from 0.00005 to 0.0002 (4x)
+    # - Weight decay (0.01) was pushing zero-initialized dims toward 0
+    # - With weak gradients + low lr, dims 1-15 got stuck at exactly 0
+    # - Bias parameters don't need L2 regularization (they're offsets, not weights)
+    # - Parameter allocation issue: decoder (lr=0.0001) was "stealing" the mean-offset task
+    # - Higher lr allows output_bias to learn feature means faster than decoder
+    dict(
+        keyword="output_bias",
+        lr=0.0002,  # 4x increase: faster learning to prevent decoder from "stealing" the task
+        weight_decay=0.0,  # DISABLED: causes dimension collapse for zero-initialized dims
     ),
 ]
 

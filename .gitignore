@@ -32,11 +32,12 @@ grid_sim/
 grid_svd_output/
 langfeat_visualizations
 layer_visualizations
-datasets/
+datasets
 checkpoints/
 output_features/
 svd_analysis/
 svd_comparison/
+svd_render_results/
 flash-attention/
 OccamLGS/
 LitePT/ckpts

@@ -735,10 +735,11 @@ class DensityInvariantTrainer(TrainerBase):
         # Base configuration
         self.epoch = 0
         self.start_epoch = 0
-        # CRITICAL FIX: Use cfg.epoch for max_epoch, NOT cfg.eval_epoch
-        # eval_epoch is for evaluation frequency (e.g., every 20 epochs)
-        # epoch is the total number of training epochs (e.g., 200)
-        self.max_epoch = cfg.epoch
+        # CRITICAL FIX: Use cfg.eval_epoch for max_epoch (NOT cfg.epoch)
+        # cfg.eval_epoch defines checkpoint frequency (e.g., every 10 epochs)
+        # cfg.epoch defines total training loops (e.g., 200 epochs)
+        # max_epoch should use cfg.epoch for total training duration
+        self.max_epoch = cfg.get('epoch', cfg.get('eval_epoch', 200))
         self.best_metric_value = -torch.inf
 
         # Logger
@@ -1924,6 +1925,59 @@ class DensityInvariantTrainer(TrainerBase):
                 )
             self.optimizer.step()
             self.scheduler.step()
+
+        # MONITORING: Check for abnormal output_bias values (mode collapse prevention)
+        # The output_bias parameter should stay within reasonable range [-1, 1]
+        # Abnormal values indicate the model is trying to compensate for other issues
+        if comm.is_main_process():
+            for name, param in self.model.named_parameters():
+                if 'output_bias' in name:
+                    param_data = param.data
+
+                    # Check for abnormal values
+                    has_nan = torch.isnan(param_data).any()
+                    has_inf = torch.isinf(param_data).any()
+                    has_large_values = (param_data.abs() > 2.0).any()
+
+                    if has_nan or has_inf or has_large_values:
+                        import warnings
+                        msg = f"\n{'='*80}\n"
+                        msg += f"⚠️ ABNORMAL OUTPUT_BIAS DETECTED! [Epoch {self.epoch}, Iter {self.comm_info.get('iter', 0)}]\n"
+                        msg += f"Parameter: {name}\n"
+                        msg += f"Shape: {param_data.shape}\n"
+                        msg += f"Stats: min={param_data.min():.6f}, max={param_data.max():.6f}, mean={param_data.mean():.6f}, std={param_data.std():.6f}\n"
+
+                        if has_nan:
+                            nan_count = torch.isnan(param_data).sum().item()
+                            msg += f"❌ NaN values: {nan_count}/{param_data.numel()}\n"
+
+                        if has_inf:
+                            inf_count = torch.isinf(param_data).sum().item()
+                            msg += f"❌ Inf values: {inf_count}/{param_data.numel()}\n"
+
+                        if has_large_values:
+                            large_count = (param_data.abs() > 2.0).sum().item()
+                            large_dims = [(i, param_data[i].item()) for i in range(len(param_data)) if abs(param_data[i].item()) > 2.0]
+                            msg += f"⚠️ Values > 2.0: {large_count}/{param_data.numel()}\n"
+                            msg += f"   Abnormal dimensions: {large_dims}\n"
+
+                        msg += f"This may indicate mode collapse or training instability!\n"
+                        msg += f"{'='*80}\n"
+                        warnings.warn(msg, stacklevel=2)
+                        print(msg, flush=True)
+
+                    # Log bias statistics every 100 iterations
+                    step = self.comm_info.get('iter', 0)
+                    if step % 100 == 0 and self.writer is not None:
+                        global_step = self.epoch * len(self.train_loader) + step
+                        self.writer.add_scalar('monitor/output_bias_min', param_data.min().item(), global_step)
+                        self.writer.add_scalar('monitor/output_bias_max', param_data.max().item(), global_step)
+                        self.writer.add_scalar('monitor/output_bias_mean', param_data.mean().item(), global_step)
+                        self.writer.add_scalar('monitor/output_bias_std', param_data.std().item(), global_step)
+
+                        # Log per-dimension bias values
+                        for i in range(min(16, len(param_data))):  # Log first 16 dims
+                            self.writer.add_scalar(f'monitor/output_bias_dim{i}', param_data[i].item(), global_step)
 
         backward_time = time.time() - backward_start
 
