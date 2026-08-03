@@ -710,7 +710,7 @@ class SVDWeightedL1Loss(nn.Module):
         min_weight=0.05,
         loss_weight=1.0,
         reduction="mean",
-        weight_strategy="std",  # "static", "variance", or "std"
+        weight_strategy="std",  # "static", "variance", "std", "inverse_variance", "inverse_std"
         variance_momentum=0.99,
     ):
         super(SVDWeightedL1Loss, self).__init__()
@@ -766,13 +766,19 @@ class SVDWeightedL1Loss(nn.Module):
         self.num_updates += 1
 
         # Compute weights based on statistics (std or variance)
-        # Higher std/variance -> higher weight
+        # Higher std/variance -> higher weight (default)
+        # inverse_variance/inverse_std: lower std/variance -> higher weight
         stat_min = self.dim_variance.min()
         stat_max = self.dim_variance.max()
 
         if stat_max > stat_min:
             # Normalize to [min_weight, base_weight]
             normalized = (self.dim_variance - stat_min) / (stat_max - stat_min)
+            if self.weight_strategy in ("inverse_variance", "inverse_std"):
+                # 反方差（2026-08-03）: 目标 96% 能量在公共方向(dim0)，判别信息全在低方差波动维。
+                # 原方差加权给公共方向权重 1.0、波动维仅 0.1 → 模型只学公共方向（波动维 corr ≈ 0）。
+                # 反转后波动维获得高权重，L1 损失聚焦判别分量（方向仍由 CosineSimilarity 负责）。
+                normalized = 1 - normalized
             weights = self.min_weight + normalized * (self.base_weight - self.min_weight)
         else:
             # All dimensions have the same statistic
@@ -826,7 +832,10 @@ class SVDWeightedL1Loss(nn.Module):
         D = valid_pred.shape[1]  # Feature dimension (typically 16)
 
         # Compute dimension weights based on strategy
-        if self.weight_strategy in ("variance", "std"):
+        # 2026-08-03 修复：inverse_variance/inverse_std 之前不在分支条件里，
+        # 配置了也永远走 static 分支（dim0 权重 1.0 最高）——与设计意图
+        # （波动维高权重、公共方向 0.1）完全相反，是"波动学不到"的直接代码原因
+        if self.weight_strategy in ("variance", "std", "inverse_variance", "inverse_std"):
             weights = self._compute_variance_weights(target, valid_feat_mask)
             stat_name = "std" if self.weight_strategy == "std" else "variance"
             strategy_str = f"{stat_name} (updates={self.num_updates.item():.0f})"
@@ -1067,7 +1076,7 @@ class Rendered2DLoss(nn.Module):
             scene_path = scene_path[0]  # Use first scene path
 
         # Extract dataset and scene name from scene_path
-        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        # scene_path can be absolute: /home/isom/cyf/SceneSplat/gaussian_train/3DOVS/train/sofa
         # or relative: gaussian_train/3DOVS/train/sofa
         # Find 'gaussian_train' in the path and extract dataset and scene after it
         if 'gaussian_train' in scene_path:
@@ -1140,7 +1149,7 @@ class Rendered2DLoss(nn.Module):
             scene_path = scene_path[0]  # Use first scene path
 
         # Extract dataset and scene name from scene_path
-        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        # scene_path can be absolute: /home/isom/cyf/SceneSplat/gaussian_train/3DOVS/train/sofa
         if 'gaussian_train' in scene_path:
             parts = scene_path.split('gaussian_train')
             if len(parts) < 2:
@@ -1217,7 +1226,7 @@ class Rendered2DLoss(nn.Module):
             scene_path = scene_path[0]  # Use first scene path
 
         # Extract dataset and scene name from scene_path
-        # scene_path can be absolute: /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train/sofa
+        # scene_path can be absolute: /home/isom/cyf/SceneSplat/gaussian_train/3DOVS/train/sofa
         if 'gaussian_train' in scene_path:
             parts = scene_path.split('gaussian_train')
             if len(parts) < 2:

@@ -26,6 +26,7 @@ from pointcept.engines.train import TrainerBase, TRAINERS
 from pointcept.engines.defaults import create_ddp_model
 import pointcept.utils.comm as comm
 from pointcept.utils.logger import get_root_logger
+from pointcept.utils.svd_sign import canonicalize_svd_sign, remove_scene_mean
 
 
 class GridAwareSampler:
@@ -110,6 +111,9 @@ class GridAwareSampler:
         # Load data
         data = np.load(svd_file)
         compressed = data['compressed']  # [M, rank]
+        compressed = canonicalize_svd_sign(compressed)
+        if self.density_config.get('svd_center', False):
+            compressed = remove_scene_mean(compressed)  # 每列最大绝对值取正，消除逐场景基符号歧义
         indices = data['indices']  # [N] - point to grid mapping
 
         # Partition data by rank if world_size > 1
@@ -1174,7 +1178,10 @@ class DensityInvariantTrainer(TrainerBase):
 
         # OPTIMIZED: Pre-compute common values outside the loop to avoid repeated access
         grid_size = input_dict.get('grid_size', 0.01)
-        epoch_progress = self.epoch / self.max_epoch
+        # 修复（2026-08-03）：原计算 self.epoch/max_epoch 在第一个 epoch 时 = 0，
+        # 导致 schedule="last_75" 的 AggregatedContrastiveLoss 永远跳过（contrast_loss 全程 0）。
+        # 改为迭代级进度：epoch 从 0 开始，进度 = (epoch + iter/total) / max_epoch
+        epoch_progress = (self.epoch + self.comm_info["iter"] / max(len(self.train_loader), 1)) / self.max_epoch
         device = coord.device
         # Get scene name (may be list due to collate_fn, so handle that)
         scene_name_raw = input_dict.get('name', 'unknown')
@@ -1306,20 +1313,22 @@ class DensityInvariantTrainer(TrainerBase):
             # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
             # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
 
-            # CRITICAL: Apply tanh activation to match LangPretrainer.forward()
-            # The LangPretrainer wrapper applies tanh, but trainer bypasses it
-            # We MUST apply tanh here for consistency!
-            batched_features = torch.tanh(feat_before_scale)
+            # 2026-08-03 code review: 删除手动 tanh。
+            # 原注释声称 "The LangPretrainer wrapper applies tanh, but trainer bypasses it"——
+            # 但 LangPretrainer.forward（default.py）里根本没有 tanh（只有 normalize）。
+            # 8.6 已实测 backbone 输出在 tanh 线性区（补 tanh 无效果），tanh 是无意义的
+            # 几何污染，且让训练输出（tanh 幅度）与评测输出（normalize）多一层不一致。
+            batched_features = feat_before_scale
 
-            # NAN CHECK: Detect NaN after tanh
-            if torch.isnan(batched_features).any():
-                raise AssertionError("🚨 NaN AFTER TANH! Check feat_before_scale.")
-
-            # STABILITY CHECK: Detect extreme values that might cause numerical instability
-            feat_max = batched_features.abs().max().item()
-            feat_mean = batched_features.abs().mean().item()
-            if feat_max > 1000.0 or feat_mean > 100.0:
-                print(f"⚠️ WARNING: Extreme features (max={feat_max:.2f}, mean={feat_mean:.2f}) - may cause instability")
+            # 分布统计（2026-08-03 code review）：确认 backbone 输出幅度（tanh 是否
+            # 真在线性区、是否极端），每 100 iter 打印一次
+            if self.comm_info['iter'] % 100 == 0:
+                feat_abs = feat_before_scale.abs()
+                feat_max = feat_abs.max().item()
+                feat_mean = feat_abs.mean().item()
+                feat_frac_gt2 = (feat_abs > 2.0).float().mean().item()
+                print(f"[BackboneOut] |feat| max={feat_max:.4f} mean={feat_mean:.4f} "
+                      f"frac>2={feat_frac_gt2:.4f} (tanh 饱和判定: frac>2 应≈0)", flush=True)
 
         # Clean up large intermediate tensors to free memory before loss computation
         del point, point_feat, batched_input
@@ -1411,6 +1420,27 @@ class DensityInvariantTrainer(TrainerBase):
 
                 segment = scenario_input.get("segment")
                 lang_feat = scenario_input.get('lang_feat')
+
+                # 方案 X（2026-08-03 修复）：目标在线对齐到 text16。
+                # trainer 直接调 backbone + criteria（绕过 LangPretrainer.forward），
+                # 模型 forward 里的 _align_target_to_text16 在训练路径不会执行——
+                # 必须在这里显式调用（第一版只改了模型 forward，训练从未生效）。
+                if lang_feat is not None and segment is not None and hasattr(self.model, 'module') \
+                        and getattr(self.model.module, 'align_text16', False):
+                    offset = torch.tensor([0, lang_feat.shape[0]], device=lang_feat.device)
+                    lang_feat = self.model.module._align_target_to_text16(
+                        lang_feat, segment,
+                        scenario_input.get('valid_feat_mask'),
+                        offset,
+                    )
+                elif lang_feat is not None and segment is not None \
+                        and getattr(self.model, 'align_text16', False):
+                    offset = torch.tensor([0, lang_feat.shape[0]], device=lang_feat.device)
+                    lang_feat = self.model._align_target_to_text16(
+                        lang_feat, segment,
+                        scenario_input.get('valid_feat_mask'),
+                        offset,
+                    )
 
                 # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
                 if self.comm_info['iter'] == 0 and i == 0:
