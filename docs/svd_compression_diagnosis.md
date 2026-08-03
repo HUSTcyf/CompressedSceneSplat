@@ -1,6 +1,6 @@
 # 16 维 SVD 压缩特征评测诊断报告（最终版）
 
-日期：2026-08-03（第四版，训练代码审查后）
+日期：2026-08-03（第五版，增强扰动定位后）
 背景：Reviewer Q1 实验（PT-v3m1 vs LitePT，16 维 SVD 压缩目标）中 zero-shot 语义分割 mIoU ≈ 0.6%，远低于预期。本报告系统性定位根因。
 
 ## 0. 重要勘误
@@ -11,13 +11,21 @@
 
 **第三版**：**评测链 bug 修复（§4 #9、§8.12）后：GT 特征走完整链 34.9%（≈上界），真实模型 0.6% → 5.4%（9 倍）。** mIoU≈0 的第一大原因是评测链 Q 拟合错位；模型波动维没学到（§2 数据仍然成立）是第二大原因。
 
-**第四版（本版，训练侧结论重大修正）**：
+**第四版（训练侧结论重大修正）**：
 1. **"基歧义"叙事被判别实验推翻**：跨场景 chunk 的判别结构（类均值去质心方向）**绝对一致性 0.91**（无需任何对齐）——SVD 基在类均值层面跨场景相当稳定，模型输入含场景信息、基可从输入推断——**基歧义不是波动学不到的主因**
 2. **方案 X（训练目标在线对齐 text16）第一版未生效**：`DensityInvariantTrainer` 绕过 `LangPretrainer.forward` 直接 backbone + criteria（**双源真理**）——只改模型 forward 的训练修改静默失效，损失曲线照常无报错
 3. **方案 X 生效后引入更严重的 Q 列符号歧义**：Q 拟合（torch.linalg.svd 的 Procrustes 解）列符号跨 chunk 随机（实测 16 列平均一致率 0.456，15/16 列翻转）→ 对齐后目标 T' 波动列符号随机 → 模型学平均符号 → **模式坍缩**（PerDimMonitor 报警 Trivial solution，Dim0 corr -0.23）——逐点对齐是**负收益**，方案 X 放弃
 4. **canonicalize（max-abs 锚）修复无效**：波动列幅度小，max-abs 锚定在噪声点上（M2 反而 0.96→0.87 < 原始目标 0.90）
 5. **收敛结论**：原始目标（canonicalize 后列符号一致、判别结构 0.90 一致）**可学**——真正的瓶颈 = **损失设计与评测目标的错配**（逐点 L1/cos 被 83% 逐点噪声和 96% 公共方向主导；评测只用类均值结构）→ **方向：类级监督**（contrast 强化/类均值结构损失——符号/基无关，直接对齐评测）
 6. **训练代码正确性未完整验证**（本版进行中）——见 §9 code review 清单
+
+**第五版（本版，增强扰动定位——波动学不到的第一直接原因）**：
+1. **单 chunk 目标结构澄清**：单 chunk 内 dim0（公共方向）是**常数**（|mean|=0.92、std=0.04，能量占比仅 1.4%）——dim0 corr 低是常数序列的 corr 无意义，不是没学好；**判别信息全在 dim1-15 波动**（std 0.04-0.21）
+2. **单 chunk 目标波动空间平滑**（KNN-16 残差 = 幅度的 19.9%，随机邻居 103%；每维不可预测仅 12-29%）——**"83% 噪声地板"叙事对单 chunk 不成立**——目标可学、邻域聚合架构可表达（decoder 为逐点 Block + 线性 unpool，非纯插值）
+3. **增强扰动 = 波动学习的主要压制因素（决定性实验）**：RandomRotate/Scale 等几何增强改变 GridSample 的 cell 哈希 → **同一物理点的目标特征随 iter 变化**（目标扰动）→ 模型只能学平均 → 波动坍缩。确定性训练（去全部随机增强）300 epoch 后：**minor corr 0.07-0.09 → 0.26（3 倍）、波动幅度比 0.06-0.30 → ≈1.0（86% 恢复）、dim1/dim4 corr 0.73/0.71**——**无增强时波动显著可学**
+4. **剩余瓶颈**（确定性下 0.26 仍不够）：小幅度维度（dim5-15 std 0.03-0.08）噪声相对大 → corr 低（0.03-0.34）；方向只对齐 51%（去均值 cos 0.513）；300 epoch 可能不足（L1 仍缓慢下降）
+5. **方案 D 完成**：trainer 统一走模型 forward（双源真理架构级修复）——确定性实验即验证（重构后代码行为正确）
+6. **对正式训练的含义**：训练必须**去掉几何增强**（旋转/缩放/弹性/抖动——都改 cell 哈希）；颜色增强（Chromatic*）不影响坐标可保留；历史所有带增强的训练（含 baseline 5.4%）均在目标扰动下训练——波动被压制是结构性原因之一
 
 ## 1. 最终结论
 
@@ -216,3 +224,29 @@ cos(F, T) = 0.95 是公共方向的假象：去均值后 cos = -0.04
 - **前提**：训练代码正确性必须完整验证（§9 清单）——未验证前不再跑全量实验
 
 ## 9. 可复用的诊断方法
+
+### 8.17 增强扰动：波动学不到的第一直接原因（第五版核心发现）
+- **症状**：单 chunk 过拟合（300 epoch）L1 平台 0.40、minor corr 0.09——"完美拟合"未实现（用户指正）
+- **诊断链**：
+  1. 单 chunk 目标结构：dim0 常数（std 0.04、能量 1.4%）、dim1-15 波动（判别信息）——dim0 corr 低是常数序列无意义
+  2. 单 chunk 目标波动空间平滑（KNN-16 残差 19.9% vs 随机 103%）——目标可学——排除"噪声地板"（此前 83% 是多场景混合口径）
+  3. decoder 逐点 Block（非纯插值）——架构可表达——排除架构限制
+  4. 确定性实验（去全部随机增强）：**minor corr 0.09→0.26、波动幅度比→1.0、dim1/dim4 corr 0.73/0.71**——增强扰动成立
+- **机制**：几何增强（RandomRotate/Scale/Flip/Jitter/ElasticDistortion）改变坐标 → GridSample 的 cell 哈希随 iter 变化 → 同一物理点聚合到不同 cell → 目标特征随 iter 扰动 → 模型只能学平均（波动坍缩）；确定性输入下目标固定 → 波动可学
+- **修复**：训练 transform 去掉全部几何增强（颜色增强 Chromatic* 不影响坐标可保留）；`lang-pretrain-ptv3m1-scannetpp-v2-overfit-det.py` 为确定性参考
+- **影响**：历史所有带增强的训练（含 baseline 5.4%）均在目标扰动下训练——波动被压制是结构性原因之一（与监督错配并列）
+
+### 8.18 单 chunk 过拟合实验（第五版验证手段）
+- **配置**：overfit config（split="" 单 chunk 00777c41d4_0、epoch=300、batch_size=1——drop_last=True 时 batch>1 会使 loader 长度为 0 导致 OneCycleLR total_steps=0 崩溃）
+- **增强版结果**：L1 21→0.40 平台、cos 0.65→0.08、minor corr 0.09——波动没学
+- **确定性版结果**：L1 10→0.37-0.43 平台、cos 0.98→0.07、minor corr 0.12（训练中）——离线分析（analyze_det_ckpt.py）：per-dim corr dim1=0.73/dim4=0.71、波动幅度比 ≈1.0、去均值 cos 0.51——**波动显著可学**
+- **TRIVIAL 报警噪音**：PerDimMonitor 的 warmup 用 comm_info['iter']（每 epoch 重置为 0）→ warmup_iters=200 永远不满足 → 每 epoch 报警（小 bug，非训练问题）
+- **方案 D 验证**：确定性实验运行在统一 forward 重构（trainer 调 self.model）后——行为正确（L1/cos 正常下降、波动可学）——双源真理架构级修复通过验证
+
+### 8.19 方案 D：双源真理架构级修复（完成）
+- **问题**：DensityInvariantTrainer 手动 backbone + 输出处理 + criteria（绕过 LangPretrainer.forward）——模型 forward 的修改静默失效（方案 X 第一版即此）
+- **修复**：trainer 组装 full_input（coord/feat/batch/grid_size/epoch_progress/valid_feat_mask/lang_feat/segment/offset/opacity/quat/scale）→ `self.model(full_input)`——前向/输出处理（训练分支不 normalize）/目标对齐（方案 X）/损失计算全部由模型 forward 单点负责；评测（tester/hook）走同一 forward
+- **模型 forward 改动**：normalize 移到评测分支（`if not self.training`）；训练分支返回损失分解键（l1_loss/cos_loss/contrast_loss/per_dim_l1）
+- **trainer 改动**：删除手动 Point/backbone/tanh/criteria/方案 X 显式调用；total_loss = model_loss + consistency_weight * consistency_loss（修复旧代码会把模型级 loss 重复 n_scenario 次的问题）
+- **验证**：确定性单 chunk 过拟合（重构后代码）——波动可学——通过
+

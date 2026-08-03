@@ -237,7 +237,7 @@ class LangPretrainer(nn.Module):
                 input_dict["valid_feat_mask"], input_dict.get("offset"),
             )
             # Pass coord, Gaussian parameters, and scene_path for Rendered2DLoss
-            loss = self.criteria(
+            loss_result = self.criteria(
                 point_feat["feat"],
                 target,
                 valid_feat_mask=input_dict["valid_feat_mask"],
@@ -249,7 +249,25 @@ class LangPretrainer(nn.Module):
                 scale=input_dict.get("scale"),
                 scene_path=input_dict.get("scene_path"),
             )
-            return dict(loss=loss, feat=point_feat["feat"])
+            if isinstance(loss_result, tuple):
+                loss = loss_result[0]
+                loss_dict = loss_result[1] if len(loss_result) >= 2 else {}
+                per_dim_l1 = loss_result[2].get('per_dim_l1') if len(loss_result) >= 3 else None
+                per_dim_w = loss_result[3].get('per_dim_l1_weights') if len(loss_result) >= 4 else None
+            else:
+                loss = loss_result
+                loss_dict = {}
+                per_dim_l1 = per_dim_w = None
+            out = dict(loss=loss, feat=point_feat["feat"])
+            if isinstance(loss, torch.Tensor):
+                dev = loss.device
+                out['l1_loss'] = torch.tensor(float(loss_dict.get('l1_loss', 0.0)), device=dev)
+                out['cos_loss'] = torch.tensor(float(loss_dict.get('cos_loss', 0.0)), device=dev)
+                out['contrast_loss'] = torch.tensor(float(loss_dict.get('contrast_loss', 0.0)), device=dev)
+                if per_dim_l1 is not None:
+                    out['per_dim_l1'] = per_dim_l1
+                    out['per_dim_l1_weights'] = per_dim_w
+            return out
         # test
         else:
             return dict(point_feat=point_feat)

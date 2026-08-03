@@ -1269,69 +1269,51 @@ class DensityInvariantTrainer(TrainerBase):
             total_points, dtype=torch.bool, device=device
         )
 
-        # Forward pass through backbone (batched for all scenarios)
-        # NAN CHECK: Check input data for anomalies
-        coord = batched_input['coord']
-        feat = batched_input['feat']
-        if torch.isnan(coord).any() or torch.isinf(coord).any():
-            raise ValueError(
-                f"🚨 NaN/Inf DETECTED IN INPUT COORD!\n"
-                f"  coord NaN: {torch.isnan(coord).any().item()}\n"
-                f"  coord Inf: {torch.isinf(coord).any().item()}\n"
-                f"  coord stats: min={coord.min():.2f}, max={coord.max():.2f}"
-            )
-        if torch.isnan(feat).any() or torch.isinf(feat).any():
-            raise ValueError(
-                f"🚨 NaN/Inf DETECTED IN INPUT FEAT!\n"
-                f"  feat NaN: {torch.isnan(feat).any().item()}\n"
-                f"  feat Inf: {torch.isinf(feat).any().item()}\n"
-                f"  feat stats: min={feat.min():.6f}, max={feat.max():.6f}"
-            )
+        # ===== 2026-08-03 双源真理修复：统一走模型 forward =====
+        # 之前 trainer 手动 backbone + 输出处理 + criteria（绕过 LangPretrainer.forward，
+        # 模型 forward 的修改静默失效——方案 X 第一版即此）。现在组装完整 input 交给
+        # self.model：前向 / 输出处理（训练分支不 normalize）/ 目标对齐（方案 X）/
+        # 损失计算全部由模型 forward 单点负责。评测（tester/hook）也走同一 forward，
+        # 双源真理消除：改模型 forward 即同时改训练与评测。
+        full_input = dict(batched_input)  # coord/feat/batch/grid_size/epoch_progress/valid_feat_mask
+        full_input['lang_feat'] = torch.cat([s['lang_feat'] for s in scenario_samples], dim=0)
+        if all('labels' in s for s in scenario_samples):
+            full_input['segment'] = torch.cat([s['labels'] for s in scenario_samples], dim=0)
+        offsets = [0]
+        for n in scenario_point_counts:
+            offsets.append(offsets[-1] + n)
+        full_input['offset'] = torch.tensor(offsets, device=device, dtype=torch.long)
+        feat_all = torch.cat([s['feat'] for s in scenario_samples], dim=0)
+        if feat_all.shape[-1] == 11:
+            full_input['opacity'] = feat_all[:, 3:4]
+            full_input['quat'] = feat_all[:, 4:8]
+            full_input['scale'] = feat_all[:, 8:11]
+
+        # NAN CHECK: 输入侧防御性检查
+        for k in ('coord', 'feat', 'lang_feat'):
+            v = full_input[k]
+            if torch.isnan(v).any() or torch.isinf(v).any():
+                raise ValueError(f"🚨 NaN/Inf DETECTED IN INPUT {k}!")
 
         with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-            from pointcept.models.utils.structure import Point
-            point = Point(batched_input)
-            point_feat = backbone(point)
+            outputs = self.model(full_input)
+            total_model_loss = outputs['loss']
+            # 模型 forward 训练分支返回 backbone 原始输出（不 normalize——幅度留给 L1）
+            batched_features = outputs['feat']  # [total_points, D]
 
-            # NAN CHECK: Detect NaN in backbone output immediately
-            feat_before_scale = point_feat["feat"]
-            if torch.isnan(feat_before_scale).any():
-                scenario_names = [s.get('scenario', 'unknown') for s in scenario_samples]
-                nan_dims = [d for d in range(feat_before_scale.shape[1]) if torch.isnan(feat_before_scale[:, d]).any()]
-                raise AssertionError(
-                    f"🚨 NaN DETECTED IN BACKBONE OUTPUT!\n"
-                    f"  NaN count: {torch.isnan(feat_before_scale).sum().item()}\n"
-                    f"  feat stats: min={feat_before_scale.min().item():.6f}, max={feat_before_scale.max().item():.6f}\n"
-                    f"  Iteration: {self.comm_info['iter']}, Epoch: {self.epoch}\n"
-                    f"  Scenarios: {scenario_names}\n"
-                    f"  Point counts: {scenario_point_counts}\n"
-                    f"  NaN dims: {nan_dims}\n"
-                    f"  AMP enabled: {self.cfg.enable_amp}"
-                )
+            # NAN CHECK: 模型输出
+            if torch.isnan(batched_features).any():
+                raise AssertionError("🚨 NaN DETECTED IN MODEL OUTPUT! Check backbone.")
 
-            # CRITICAL FIX: Do NOT normalize features
-            # Normalization causes L2 Loss = 2*(1-Cosine), leading to mode collapse
-            # point_feat["feat"] = F.normalize(point_feat["feat"], p=2, dim=1)  # REMOVED
-
-            # 2026-08-03 code review: 删除手动 tanh。
-            # 原注释声称 "The LangPretrainer wrapper applies tanh, but trainer bypasses it"——
-            # 但 LangPretrainer.forward（default.py）里根本没有 tanh（只有 normalize）。
-            # 8.6 已实测 backbone 输出在 tanh 线性区（补 tanh 无效果），tanh 是无意义的
-            # 几何污染，且让训练输出（tanh 幅度）与评测输出（normalize）多一层不一致。
-            batched_features = feat_before_scale
-
-            # 分布统计（2026-08-03 code review）：确认 backbone 输出幅度（tanh 是否
-            # 真在线性区、是否极端），每 100 iter 打印一次
+            # 分布统计（每 100 iter）：确认输出幅度（tanh 饱和判定参考）
             if self.comm_info['iter'] % 100 == 0:
-                feat_abs = feat_before_scale.abs()
-                feat_max = feat_abs.max().item()
-                feat_mean = feat_abs.mean().item()
-                feat_frac_gt2 = (feat_abs > 2.0).float().mean().item()
-                print(f"[BackboneOut] |feat| max={feat_max:.4f} mean={feat_mean:.4f} "
-                      f"frac>2={feat_frac_gt2:.4f} (tanh 饱和判定: frac>2 应≈0)", flush=True)
+                feat_abs = batched_features.abs()
+                print(f"[BackboneOut] |feat| max={feat_abs.max().item():.4f} "
+                      f"mean={feat_abs.mean().item():.4f} "
+                      f"frac>2={(feat_abs > 2.0).float().mean().item():.4f}", flush=True)
 
         # Clean up large intermediate tensors to free memory before loss computation
-        del point, point_feat, batched_input
+        del full_input, feat_all, batched_input
 
         # Now compute loss for each scenario separately
         # (Each scenario has its own lang_feat target)
@@ -1410,137 +1392,11 @@ class DensityInvariantTrainer(TrainerBase):
             # Get scenario name for debug/info
             scenario_name = sample_dict.get('scenario', f'scenario_{i}')
 
-            # Compute loss using criteria
-            with torch.amp.autocast("cuda", enabled=self.cfg.enable_amp):
-                # Get criteria
-                if hasattr(self.model, 'module'):
-                    criteria = self.model.module.criteria
-                else:
-                    criteria = self.model.criteria
-
-                segment = scenario_input.get("segment")
-                lang_feat = scenario_input.get('lang_feat')
-
-                # 方案 X（2026-08-03 修复）：目标在线对齐到 text16。
-                # trainer 直接调 backbone + criteria（绕过 LangPretrainer.forward），
-                # 模型 forward 里的 _align_target_to_text16 在训练路径不会执行——
-                # 必须在这里显式调用（第一版只改了模型 forward，训练从未生效）。
-                if lang_feat is not None and segment is not None and hasattr(self.model, 'module') \
-                        and getattr(self.model.module, 'align_text16', False):
-                    offset = torch.tensor([0, lang_feat.shape[0]], device=lang_feat.device)
-                    lang_feat = self.model.module._align_target_to_text16(
-                        lang_feat, segment,
-                        scenario_input.get('valid_feat_mask'),
-                        offset,
-                    )
-                elif lang_feat is not None and segment is not None \
-                        and getattr(self.model, 'align_text16', False):
-                    offset = torch.tensor([0, lang_feat.shape[0]], device=lang_feat.device)
-                    lang_feat = self.model._align_target_to_text16(
-                        lang_feat, segment,
-                        scenario_input.get('valid_feat_mask'),
-                        offset,
-                    )
-
-                # DEBUG: Compare pred vs target at loss computation (first iteration, first scenario only)
-                if self.comm_info['iter'] == 0 and i == 0:
-                    if lang_feat is not None:
-                        import torch.nn.functional as F
-                        import numpy as np
-
-                        # Compute overall difference statistics
-                        pred_np = scenario_feat.detach().cpu().numpy()
-                        gt_np = lang_feat.detach().cpu().numpy()
-                        diff = np.abs(pred_np - gt_np)
-                        overall_max_diff = diff.max()
-                        overall_mean_diff = diff.mean()
-
-                        # Compute cosine similarity
-                        pred_norm = F.normalize(scenario_feat, p=2, dim=1)  # [N, 16]
-                        gt_norm = F.normalize(lang_feat, p=2, dim=1)  # [N, 16]
-                        cos_sim_per_row = (pred_norm * gt_norm).sum(dim=1)  # [N]
-
-                        cos_mean = cos_sim_per_row.mean().item()
-                        cos_min = cos_sim_per_row.min().item()
-
-                        # Compact output: one line for differences, one for similarity
-                        status = "✓" if cos_mean > 0.5 else ("⚠️" if cos_mean > 0.1 else "🚨")
-                        print(f"    Pred vs Target: {status} Diff: max={overall_max_diff:.4f}, mean={overall_mean_diff:.4f} | "
-                              f"CosSim: mean={cos_mean:.4f}, min={cos_min:.4f}", flush=True)
-
-                # Prepare kwargs for criteria call (include Gaussian params for Rendered2DLoss)
-                criteria_kwargs = {
-                    'valid_feat_mask': scenario_input['valid_feat_mask'],
-                    'segment': segment,
-                    'epoch_progress': epoch_progress,
-                    'scenario': scenario_name,  # Pass scenario for Rendered2DLoss (only dense computes loss)
-                }
-                # Add optional parameters for Rendered2DLoss
-                if 'coord' in scenario_input:
-                    criteria_kwargs['coord'] = scenario_input['coord']
-                if 'opacity' in scenario_input:
-                    criteria_kwargs['opacity'] = scenario_input['opacity']
-                if 'quat' in scenario_input:
-                    criteria_kwargs['quat'] = scenario_input['quat']
-                if 'scale' in scenario_input:
-                    criteria_kwargs['scale'] = scenario_input['scale']
-                if 'scene_path' in scenario_input:
-                    criteria_kwargs['scene_path'] = scenario_input['scene_path']
-
-                # Compute loss (returns tuple when verbose_losses=True)
-                loss_result = criteria(
-                    scenario_feat,
-                    lang_feat,  # Use raw features, not normalized
-                    **criteria_kwargs,
-                )
-
-                # Handle return formats:
-                # - (loss, loss_dict) or (loss, loss_dict, per_dim_losses, per_dim_weights) when verbose_losses=True
-                # - just loss when verbose_losses=False
-                if isinstance(loss_result, tuple):
-                    loss = loss_result[0]
-                    if len(loss_result) == 2:
-                        loss_dict = loss_result[1]
-                        per_dim_losses = None
-                        per_dim_weights = None
-                    elif len(loss_result) == 4:
-                        loss_dict = loss_result[1]
-                        per_dim_losses = loss_result[2]
-                        per_dim_weights = loss_result[3]
-                    else:
-                        loss_dict = None
-                        per_dim_losses = None
-                        per_dim_weights = None
-                else:
-                    loss = loss_result
-                    loss_dict = None
-                    per_dim_losses = None
-                    per_dim_weights = None
-
-                # Store this scenario's loss for current iteration (will be averaged later)
-                # NOTE: This is only this scenario's individual loss, NOT the total training loss
-                # The actual total_loss used for backprop is computed later (sum of all scenarios + consistency)
-                scenario_losses_for_real_scene[scenario_name] = {
-                    'total': loss.item(),  # Single scenario loss
-                    'l1': loss_dict.get('l1_loss', 0.0) if loss_dict else 0.0,
-                    'cos': loss_dict.get('cos_loss', 0.0) if loss_dict else 0.0,
-                    'contrast': loss_dict.get('contrast_loss', 0.0) if loss_dict else 0.0,
-                    'per_dim_l1': per_dim_losses.get('per_dim_l1') if per_dim_losses else None,
-                    'per_dim_l1_weights': per_dim_weights.get('per_dim_l1_weights') if per_dim_weights else None,
-                }
-
-            # Build output dict with loss components for InformationWriter logging
-            output = dict(loss=loss, feat=scenario_feat)
-            # Add individual loss components for display in training logs
-            # loss_dict contains Python floats from Criteria, need to convert back to tensors
-            if loss_dict:
-                device = loss.device if isinstance(loss, torch.Tensor) else torch.device('cpu')
-                # Use scalar tensors (0-dim) with requires_grad=False for logging
-                output['l1_loss'] = torch.tensor(float(loss_dict.get('l1_loss', 0.0)), device=device)
-                output['cos_loss'] = torch.tensor(float(loss_dict.get('cos_loss', 0.0)), device=device)
-                output['contrast_loss'] = torch.tensor(float(loss_dict.get('contrast_loss', 0.0)), device=device)
-            scenario_outputs.append(output)
-            scenario_losses.append(loss)
+            # 2026-08-03 双源真理修复：损失已由模型 forward 统一计算（concat 级，
+            # 一次 criteria 调用）。per-scenario 分解不可得，日志用模型级分解；
+            # scenario_feat 切片仅用于 consistency loss（跨 scenario 对比）。
+            scenario_outputs.append(dict(feat=scenario_feat))
+            scenario_losses.append(total_model_loss)
 
             # Clean up scenario-specific tensors to free memory
             del scenario_feat, scenario_input
@@ -1559,27 +1415,17 @@ class DensityInvariantTrainer(TrainerBase):
         iters_per_epoch = len(self.train_loader)
         true_global_iter = self.epoch * iters_per_epoch + local_iter
 
-        # Aggregate losses from all scenarios for the current real scene
-        # Average the losses across scenarios (dense, single) for a single value per real scene
-        if scenario_losses_for_real_scene:
-            avg_total = sum(v['total'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-            avg_l1 = sum(v['l1'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-            avg_cos = sum(v['cos'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-            avg_contrast = sum(v['contrast'] for v in scenario_losses_for_real_scene.values()) / len(scenario_losses_for_real_scene)
-
-            # Aggregate per-dimension L1 losses (average across scenarios)
-            per_dim_l1_list = [v['per_dim_l1'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1'] is not None]
-            if per_dim_l1_list:
-                # Stack and average per-dimension losses
-                avg_per_dim_l1 = torch.stack(per_dim_l1_list).mean(dim=0)  # [D]
-            else:
-                avg_per_dim_l1 = None
-
-            # Aggregate per-dimension weights (take first scenario's weights, as they should be the same)
-            per_dim_weights_list = [v['per_dim_l1_weights'] for v in scenario_losses_for_real_scene.values() if v['per_dim_l1_weights'] is not None]
-            avg_per_dim_l1_weights = per_dim_weights_list[0] if per_dim_weights_list else None
+        # 2026-08-03 双源真理修复：损失由模型 forward 统一计算（concat 级），
+        # 分解从 outputs 直接取（不再 per-scenario 平均）。
+        if outputs and 'loss' in outputs:
+            avg_total = float(outputs['loss'].item()) if isinstance(outputs['loss'], torch.Tensor) else float(outputs['loss'])
+            avg_l1 = float(outputs.get('l1_loss', torch.tensor(0.0)).item()) if isinstance(outputs.get('l1_loss'), torch.Tensor) else float(outputs.get('l1_loss', 0.0))
+            avg_cos = float(outputs.get('cos_loss', torch.tensor(0.0)).item()) if isinstance(outputs.get('cos_loss'), torch.Tensor) else float(outputs.get('cos_loss', 0.0))
+            avg_contrast = float(outputs.get('contrast_loss', torch.tensor(0.0)).item()) if isinstance(outputs.get('contrast_loss'), torch.Tensor) else float(outputs.get('contrast_loss', 0.0))
+            avg_per_dim_l1 = outputs.get('per_dim_l1', None)
+            avg_per_dim_l1_weights = outputs.get('per_dim_l1_weights', None)
         else:
-            avg_total = avg_l1 = avg_cos = avg_rendered2d = 0.0
+            avg_total = avg_l1 = avg_cos = avg_contrast = 0.0
             avg_per_dim_l1 = None
             avg_per_dim_l1_weights = None
 
@@ -1680,16 +1526,11 @@ class DensityInvariantTrainer(TrainerBase):
         #     consistency_loss = consistency_loss + 0.1 * grid_alignment_loss
         #     consistency_loss_dict['grid_alignment'] = grid_alignment_loss.item()
 
-        # Compute weighted total loss
-        # Initialize as scalar tensor to ensure it's compatible with InformationWriter
-        device = scenario_losses[0].device if scenario_losses else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        total_loss = torch.tensor(0.0, device=device, dtype=scenario_losses[0].dtype if scenario_losses else torch.float32)
-        for loss, scenario in zip(scenario_losses, scenarios_to_use):
-            weight = self.scenario_weights.get(scenario, 1.0)
-            total_loss = total_loss + weight * loss
-
-        # Add density consistency loss
-        total_loss = total_loss + self.consistency_weight * consistency_loss
+        # Compute total loss（2026-08-03 双源真理修复：模型 forward 已对 concat 全部
+        # scenario 算过一次 loss（点级平均），这里直接用它 + consistency，
+        # 不再对 scenario_losses 重复加权求和（旧代码会把模型级 loss 重复 n_scenario 次）
+        device = total_model_loss.device if isinstance(total_model_loss, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        total_loss = total_model_loss + self.consistency_weight * consistency_loss
 
         # LOSS SPIKE DETECTION: Skip iteration to prevent gradient explosion in AMP
         # Chain reaction: loss spike → large gradients → fp16 overflow → NaN
