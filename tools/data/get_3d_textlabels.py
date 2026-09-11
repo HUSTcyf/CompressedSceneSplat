@@ -473,9 +473,9 @@ def main():
     parser.add_argument('--dataset', type=str, required=True,
                        choices=['lerf_ovs', '3DOVS', 'all'],
                        help='Dataset to process')
-    parser.add_argument('--gaussian-train-root', type=str, default='/new_data/cyf/projects/SceneSplat/gaussian_train',
+    parser.add_argument('--gaussian-train-root', type=str, default='/home/isom/cyf/SceneSplat/gaussian_train',
                        help='Path to gaussian_train root directory')
-    parser.add_argument('--dataset-root', type=str, default='/new_data/cyf/projects/SceneSplat/datasets',
+    parser.add_argument('--dataset-root', type=str, default='/home/isom/cyf/SceneSplat/datasets',
                        help='Path to datasets root directory (for label files and caching)')
     parser.add_argument('--scenes', type=str, nargs='+', default=None,
                        help='Specific scenes to process (default: all scenes)')

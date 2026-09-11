@@ -266,7 +266,7 @@ def main():
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default="/home/yli7/scratch/repos/dataset_tools/ARKitScenes/input",
+        default="/home/isom/cyf/SceneSplat/arkit",
     )
     args = parser.parse_args()
 

@@ -42,8 +42,8 @@ def main():
     print("="*70)
 
     # Paths
-    scene_path = Path("/new_data/cyf/Datasets/SceneSplat7k/matterport3d/val_grid1.0cm_chunk6x6x4_stride4x4x4/2azQ1b91cZZ_0")
-    repo_root = Path("/new_data/cyf/projects/SceneSplat")
+    scene_path = Path("/home/isom/cyf/SceneSplat/matterport3d/val_grid1.0cm_chunk6x6x4_stride4x4x4/2azQ1b91cZZ_0")
+    repo_root = Path("/home/isom/cyf/CompressedSceneSplat")
 
     # Check scene exists
     if not scene_path.exists():

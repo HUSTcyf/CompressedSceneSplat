@@ -63,7 +63,7 @@ def analyze_learning_dynamics(losses: np.ndarray) -> Dict:
 
 def main():
     """Main analysis function."""
-    loss_dir = Path("/new_data/cyf/projects/SceneSplat/exp/lite-16-gridsvd/loss_curves")
+    loss_dir = Path("/home/isom/cyf/CompressedSceneSplat/exp/lite-16-gridsvd/loss_curves")
     acc_file = loss_dir / "_accumulated_history.json"
 
     with open(acc_file, 'r') as f:
@@ -192,7 +192,7 @@ def main():
             report.append(f"- {issue}\n")
 
     # Save report
-    output_dir = Path("/new_data/cyf/projects/SceneSplat/.claude/skills/loss-curve-analyzer-workspace/iteration-1/eval-1/without_skill/outputs")
+    output_dir = Path("/home/isom/cyf/CompressedSceneSplat/.claude/skills/loss-curve-analyzer-workspace/iteration-1/eval-1/without_skill/outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_file = output_dir / "detailed_analysis.md"

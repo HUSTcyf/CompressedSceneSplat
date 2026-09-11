@@ -89,15 +89,15 @@ def main():
 
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/matterport3d_test.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/matterport3d_test.txt"
     )
     preprocessed_root = (
         args.preprocessed_root
-        or "/home/yli7/scratch2/datasets/ptv3_preprocessed/matterport3d"
+        or "/home/isom/cyf/SceneSplat/matterport3d"
     )
     gs_root = (
         args.gs_root
-        or "/home/yli7/scratch2/datasets/gaussian_world/matterport3d_region_mcmc_3dgs"
+        or "/home/isom/cyf/SceneSplat/matterport3d_region_mcmc_3dgs"
     )
     lang_feat_path = None
     nn_num = args.nn_num or 25

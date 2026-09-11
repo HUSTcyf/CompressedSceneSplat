@@ -7,8 +7,8 @@
 #   ./preprocess.sh figurines    # Process only figurines scene
 
 # Configuration
-DATASET_BASE="/new_data/cyf/projects/mini-splatting2/data/lerf_ovs"
-DATASET_BASE="/new_data/cyf/projects/mini-splatting2/data/3DOVS"
+DATASET_BASE="/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs"
+DATASET_BASE="/home/isom/cyf/SceneSplat/gaussian_train/3DOVS"
 SAM2_MODEL_PATH="./sam2_repo/checkpoints/sam2.1_hiera_large.pt"
 SAM2_CONFIG="sam2.1_hiera_l.yaml"  # Script will auto-detect from model path
 

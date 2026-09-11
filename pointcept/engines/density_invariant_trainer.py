@@ -919,8 +919,8 @@ class DensityInvariantTrainer(TrainerBase):
         from pointcept.datasets import build_dataset, collate_fn
         import torch.utils.data
 
-        if not self.cfg.evaluate:
-            return None
+        # 2026-08-04: 无条件构建（LangPretrainZeroShotSemSegEval 带
+        # eval_during_train=True 时训练中也用 val_loader）
 
         val_cfg = self.cfg.data.val
         val_cfg = val_cfg if isinstance(val_cfg, (list, tuple)) else [val_cfg]
@@ -929,7 +929,9 @@ class DensityInvariantTrainer(TrainerBase):
         for cfg_i in val_cfg:
             val_data = build_dataset(cfg_i)
             sampler = (
-                torch.utils.data.distributed.DistributedSampler(val_data)
+                torch.utils.data.distributed.DistributedSampler(
+                    val_data, shuffle=False
+                )
                 if comm.get_world_size() > 1
                 else None
             )

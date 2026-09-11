@@ -171,8 +171,12 @@ class SerializedAttention(PointModule):
 
     def forward(self, point):
         if not self.enable_flash:
+            # 2026-08-03 修复：density trainer 的 offset 带前导 0（[0, N1, ...]），
+            # bincount.min() 会取到 0 → patch_size=0 → arange(step=0) 崩溃。
+            # 跳过空段再取 min（flash 路径静态 patch_size 不受影响）。
+            bincount = offset2bincount(point.offset)
             self.patch_size = min(
-                offset2bincount(point.offset).min().tolist(), self.patch_size_max
+                bincount[bincount > 0].min().tolist(), self.patch_size_max
             )
 
         H = self.num_heads

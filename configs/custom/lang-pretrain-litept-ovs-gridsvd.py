@@ -12,10 +12,10 @@ Key features:
 - Grid-based feature alignment for consistency across different densities
 
 Combines datasets from:
-- /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs
-- /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS
+- /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs
+- /home/isom/cyf/SceneSplat/gaussian_train/3DOVS
 
-SVD files should be located at: /new_data/cyf/projects/SceneSplat/grid_svd_output/
+SVD files should be located at: /home/isom/cyf/CompressedSceneSplat/grid_svd_output/
 
 Usage:
     # Using train_lite.py with density-invariant training (default for this config)
@@ -168,8 +168,8 @@ model = dict(
         # dict(
         #     type="Rendered2DLoss",
         #     loss_weight=1.0,
-        #     gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
-        #     datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
+        #     gaussian_train_root="/home/isom/cyf/SceneSplat/gaussian_train",
+        #     datasets_root="/home/isom/cyf/SceneSplat/datasets",
         #     warmup_progress=0.0,  # Start immediately (no warmup)
         #     target_progress=0.5,  # Reach max weight at 50% training progress
         #     max_num_views=10,  # Use up to 10 views per scene to save memory
@@ -317,12 +317,12 @@ param_dicts = [
 dataset_type = "GenericGSDataset"
 
 # OVS data roots (point to parent directory, split specifies the subdirectory)
-data_root_ovs_1 = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs"
-data_root_ovs_2 = "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS"
+data_root_ovs_1 = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs"
+data_root_ovs_2 = "/home/isom/cyf/SceneSplat/gaussian_train/3DOVS"
 
 # Single scene for debugging
-single_scene_train_root = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train/figurines"
-single_scene_val_root = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val/figurines"
+single_scene_train_root = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train/figurines"
+single_scene_val_root = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/val/figurines"
 
 data = dict(
     num_classes=100,

@@ -35,7 +35,7 @@ def _majority_vote(neighbor_labels : np.ndarray, ignore_label, num_classes):
         #     k = len(labels_2d[0])
         # else:
         #     k = 0
-        for i in numba.prange(n_points):
+        for i in range(n_points):
             counts = np.zeros(num_classes, dtype=np.int32)
             max_count = 0
             best_label = ignore_label

@@ -113,20 +113,20 @@ def main():
     # ------------------------------
     # Paths & Setup
     # ------------------------------
-    val_split_path = "/home/yli7/scratch2/datasets/scannetpp_v1/splits/nvs_sem_val.txt"
+    val_split_path = "/home/isom/cyf/SceneSplat/scannetpp_v1/splits/nvs_sem_val.txt"
     val_split_path = "temp.txt"
     scannetpp_preprocessed_root = (
-        "/home/yli7/scratch2/datasets/ptv3_preprocessed/scannetpp_v1_preprocessed"
+        "/home/isom/cyf/SceneSplat/scannetpp_v1_preprocessed"
     )
 
     # 3DGS data and language features
     scannetpp_3dgs_root = (
-        "/home/yli7/scratch2/datasets/gaussian_world/scannetpp_v1_mcmc_3dgs"
+        "/home/isom/cyf/SceneSplat/scannetpp_v1_mcmc_3dgs"
     )
-    scannetpp_langfeat_root = "/home/yli7/scratch2/datasets/gaussian_world/scannetpp_v1_mcmc_3dgs/language_features"
+    scannetpp_langfeat_root = "/home/isom/cyf/SceneSplat/scannetpp_v1_mcmc_3dgs/language_features"
 
     # top-100 classes text file
-    text_path = "/home/yli7/scratch2/datasets/scannetpp_v1/metadata/semantic_benchmark/top100.txt"
+    text_path = "/home/isom/cyf/SceneSplat/scannetpp_v1/metadata/semantic_benchmark/top100.txt"
 
     EXCLUDED_CLASS_NAMES = ["wall", "floor", "ceiling"]
 

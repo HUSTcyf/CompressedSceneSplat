@@ -159,7 +159,7 @@ When analyzing loss curves, use these patterns:
 
 ```bash
 # Find loss curve files
-find /new_data/cyf/projects/SceneSplat/exp -name "_accumulated_history.json" -o -name "*_loss_data.json"
+find /home/isom/cyf/CompressedSceneSplat/exp -name "_accumulated_history.json" -o -name "*_loss_data.json"
 
 # Quick analysis (use Python)
 python -c "

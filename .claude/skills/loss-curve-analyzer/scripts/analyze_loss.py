@@ -251,7 +251,7 @@ def main():
         data = load_loss_data(args.loss_dir)
     else:
         # Try default location
-        default_path = Path("/new_data/cyf/projects/SceneSplat/exp/lite-16-gridsvd/loss_curves")
+        default_path = Path("/home/isom/cyf/CompressedSceneSplat/exp/lite-16-gridsvd/loss_curves")
         if default_path.exists():
             data = load_loss_data(str(default_path))
         else:

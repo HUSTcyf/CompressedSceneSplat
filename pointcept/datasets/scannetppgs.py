@@ -2,6 +2,7 @@ import os
 import numpy as np
 
 from pointcept.utils.cache import shared_dict
+from pointcept.utils.svd_sign import canonicalize_svd_sign, remove_scene_mean
 
 from .builder import DATASETS
 from .defaults import DefaultDataset
@@ -57,6 +58,9 @@ class ScanNetPPGSDataset(DefaultDataset):
         is_train=True,
         load_compressed_lang_feat=False,
         svd_rank=16,
+        svd_center=False,
+        global_sign_path=None,
+        target_rotate_matrix_path=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -64,6 +68,32 @@ class ScanNetPPGSDataset(DefaultDataset):
         self.is_train = is_train
         self.load_compressed_lang_feat = load_compressed_lang_feat
         self.svd_rank = svd_rank
+        self.svd_center = svd_center
+        # 2026-08-03 全局符号对齐注册表（只读 sidecar，原始 npz 不动）：
+        # {chunk_basename: signs[16]}，加载时对压缩特征按维翻转符号。
+        # 生成脚本：tools/compression/build_global_sign_registry.py
+        self.global_signs = None
+        if global_sign_path and os.path.exists(global_sign_path):
+            reg = np.load(global_sign_path, allow_pickle=True)
+            self.global_signs = {
+                str(n): s for n, s in zip(reg["names"], reg["signs"])
+            }
+            print(
+                f"current: loaded global sign registry ({len(self.global_signs)} chunks) "
+                f"from {global_sign_path}"
+            )
+        # 2026-08-04 训练目标正交旋转（rebuttal Table 2 ③）：固定随机正交矩阵，
+        # canonicalize/global_signs 之后应用，把目标整体转到"等价基"。只影响训练
+        # 目标（val/test load_compressed_lang_feat=False，评测端 Procrustes 吸收）。
+        self.target_rotate_matrix = None
+        if target_rotate_matrix_path and os.path.exists(target_rotate_matrix_path):
+            self.target_rotate_matrix = np.load(target_rotate_matrix_path)["matrix"].astype(
+                np.float32
+            )
+            print(
+                f"current: loaded target rotate matrix {self.target_rotate_matrix.shape} "
+                f"from {target_rotate_matrix_path}"
+            )
 
     def get_data(self, idx):
         data_path = self.data_list[idx % len(self.data_list)]
@@ -140,6 +170,18 @@ class ScanNetPPGSDataset(DefaultDataset):
                 try:
                     svd_data = np.load(svd_file)
                     compressed = svd_data['compressed']  # [M, rank]
+                    compressed = canonicalize_svd_sign(compressed)  # 每列最大绝对值取正，消除逐场景基符号歧义
+                    # 2026-08-03 全局符号对齐（加载时应用，不修改原始文件）：
+                    # max-abs 规范只对强维稳定，弱维符号跨 chunk 随机 → 多 chunk
+                    # 训练梯度抵消。用参考 chunk 的类均值符号约定统一所有 chunk。
+                    if self.global_signs is not None and name in self.global_signs:
+                        compressed = compressed * self.global_signs[name]
+                    # 2026-08-04 目标正交旋转（rebuttal Table 2 ③）：等价基扰动，
+                    # 必须放在 canonicalize/global_signs 之后（否则会被规范步骤抵消）。
+                    if self.target_rotate_matrix is not None:
+                        compressed = compressed @ self.target_rotate_matrix
+                    if self.svd_center:
+                        compressed = remove_scene_mean(compressed)
                     indices = svd_data['indices']  # [N] - point to grid mapping
 
                     # Add point_to_grid mapping to data_dict (for density-invariant training)

@@ -15,7 +15,7 @@ Key optimizations for large-scale processing:
 Usage:
     # Compute from val data (1152-dim -> 16-dim)
     python tools/compute_projection_matrix_large_scale.py \\
-        --data_root /new_data/cyf/Datasets/SceneSplat7k/matterport3d \\
+        --data_root /home/isom/cyf/SceneSplat/matterport3d \\
         --chunk_dir val_grid1.0cm_chunk6x6x4_stride4x4x4 \\
         --svd_rank 16 \\
         --sample_per_chunk 10000 \\
@@ -23,7 +23,7 @@ Usage:
 
     # Compute from multiple sources
     python tools/compute_projection_matrix_large_scale.py \\
-        --data_root /new_data/cyf/Datasets/SceneSplat7k/matterport3d \\
+        --data_root /home/isom/cyf/SceneSplat/matterport3d \\
         --chunk_dirs train_grid1.0cm_chunk6x6x4_stride4x4x4,val_grid1.0cm_chunk6x6x4_stride4x4x4 \\
         --svd_rank 16 \\
         --max_total_samples 500000 \\

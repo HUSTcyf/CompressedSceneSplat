@@ -41,17 +41,17 @@ from tools.gaussian_renderer import GaussianModel, render
 from tools.scene.colmap_loader import read_intrinsics_binary, read_extrinsics_binary, qvec2rotmat
 
 # Default paths
-CHECKPOINT_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs"
-DATASET_ROOT = "/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs"
-EVAL_RESULTS_ROOT = "/new_data/cyf/projects/SceneSplat/eval_results/LERF-SceneSplat"
-OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_with_mask"
-EVAL_RESULTS_ROOT = "/new_data/cyf/projects/OccamLGS/eval_results/LERF-origin"
+CHECKPOINT_ROOT = "/home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs"
+DATASET_ROOT = "/home/isom/cyf/SceneSplat/datasets/lerf_ovs"
+EVAL_RESULTS_ROOT = "/home/isom/cyf/CompressedSceneSplat/eval_results/LERF-SceneSplat"
+OUTPUT_ROOT = "/home/isom/cyf/CompressedSceneSplat/output_rendered_with_mask"
+EVAL_RESULTS_ROOT = "/home/isom/cyf/SceneSplat/projects/OccamLGS/eval_results/LERF-origin"
 
-CHECKPOINT_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_results/3DOVS"
-DATASET_ROOT = "/new_data/cyf/projects/SceneSplat/datasets/3DOVS"
-EVAL_RESULTS_ROOT = "/new_data/cyf/projects/SceneSplat/eval_results/3DOVS-SceneSplat"
-OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_with_mask"
-EVAL_RESULTS_ROOT = "/new_data/cyf/projects/OccamLGS/eval_results/3DOVS-origin"
+CHECKPOINT_ROOT = "/home/isom/cyf/CompressedSceneSplat/gaussian_results/3DOVS"
+DATASET_ROOT = "/home/isom/cyf/SceneSplat/datasets/3DOVS"
+EVAL_RESULTS_ROOT = "/home/isom/cyf/CompressedSceneSplat/eval_results/3DOVS-SceneSplat"
+OUTPUT_ROOT = "/home/isom/cyf/CompressedSceneSplat/output_rendered_with_mask"
+EVAL_RESULTS_ROOT = "/home/isom/cyf/SceneSplat/projects/OccamLGS/eval_results/3DOVS-origin"
 
 
 class MiniCamera:

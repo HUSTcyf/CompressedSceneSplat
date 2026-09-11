@@ -24,10 +24,10 @@ from tqdm import tqdm
 
 
 # Default paths
-DEFAULT_TRAIN_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train"
+DEFAULT_TRAIN_ROOT = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train"
 DATASET_ROOTS = {
-    "lerf_ovs": "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train",
-    "3DOVS": "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train",
+    "lerf_ovs": "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train",
+    "3DOVS": "/home/isom/cyf/SceneSplat/gaussian_train/3DOVS/train",
 }
 
 

@@ -53,13 +53,13 @@ from typing import Tuple, Dict, List, Optional, Union
 # Default paths
 dataset = "lerf_ovs"
 dataset = "3DOVS"
-DATA_ROOT = "/new_data/cyf/projects/SceneSplat"
+DATA_ROOT = "/home/isom/cyf/CompressedSceneSplat"
 TRAIN_ROOT = f"{DATA_ROOT}/gaussian_train/{dataset}/train"
 CHECKPOINT_ROOT = f"{DATA_ROOT}/gaussian_results/{dataset}"
 OUTPUT_ROOT = f"{DATA_ROOT}/output_features"
 
 # OccamLGS paths
-OCCAMLGS_OUTPUT_ROOT = "/new_data/cyf/projects/OccamLGS/output/LERF"
+OCCAMLGS_OUTPUT_ROOT = "/home/isom/cyf/SceneSplat/projects/OccamLGS/output/LERF"
 OCCAMLGS_BASE_CHECKPOINT_ITER = 30000  # Default iteration for base checkpoint (without language features)
 
 # SVD compression rank

@@ -2,8 +2,8 @@
 Config file for training LitePT on OVS (Open-Vocabulary Scenes) 3DGS data.
 
 Combines datasets from:
-- /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs
-- /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS
+- /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs
+- /home/isom/cyf/SceneSplat/gaussian_train/3DOVS
 
 Usage:
     python tools/train_lite.py --config-file configs/custom/semseg-litept-ovs.py
@@ -100,8 +100,8 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 dataset_type = "GenericGSDataset"
 
 # Combine both OVS directories
-data_root_ovs_1 = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs"
-data_root_ovs_2 = "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS"
+data_root_ovs_1 = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs"
+data_root_ovs_2 = "/home/isom/cyf/SceneSplat/gaussian_train/3DOVS"
 
 data = dict(
     num_classes=20,  # Placeholder

@@ -648,6 +648,9 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         pred_label_mapping=None,
         svd_rank=None,
         use_procrustes=False,
+        svd_center=False,
+        eval_during_train=False,
+        max_eval_scenes=None,
     ):
         """
         Args:
@@ -658,6 +661,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             confidence_threshold (float): Minimum confidence to consider prediction valid
             svd_rank (int): SVD rank for text embeddings reduction (must match model output dim)
             use_procrustes (bool): Whether to use Procrustes alignment for evaluation
+            eval_during_train (bool): run eval at every epoch end during training
+            max_eval_scenes (int): limit number of scenes per eval (None = all)
         """
         super().__init__()
         with open(class_names, "r") as f:
@@ -668,6 +673,9 @@ class LangPretrainZeroShotSemSegEval(HookBase):
         # SVD and Procrustes configuration
         self.svd_rank = svd_rank
         self.use_procrustes = use_procrustes
+        self.svd_center = svd_center
+        self.eval_during_train = eval_during_train
+        self.max_eval_scenes = max_eval_scenes
         self._text_embeddings_path = text_embeddings  # Store path, load later when trainer is available
 
         # Placeholder for text embeddings (will be loaded in eval() when trainer is available)
@@ -705,7 +713,7 @@ class LangPretrainZeroShotSemSegEval(HookBase):
     #         self.trainer.model.train()
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.trainer.cfg.evaluate or getattr(self, "eval_during_train", False):
             self.eval()
 
     def _neighbor_voting(self, coords, initial_labels, valid_mask, query_coords=None):
@@ -803,6 +811,9 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             _, _, Vt = np.linalg.svd(text_emb_norm, full_matrices=False)
             components = Vt[:self.svd_rank, :].T  # [D, rank]
             text_emb_reduced = text_emb_np @ components  # [N, rank]
+            if self.svd_center:
+                # 与训练目标一致：目标去均值 → text 也去类均值（2026-08-03）
+                text_emb_reduced = text_emb_reduced - text_emb_reduced.mean(axis=0)
 
             self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1)
             print(f"  Reduced text_embeddings shape: {self.text_embeddings.shape}")
@@ -892,6 +903,8 @@ class LangPretrainZeroShotSemSegEval(HookBase):
             print(f"use_procrustes: {self.use_procrustes}")
 
             for i, input_dict in enumerate(self.trainer.val_loader):
+                if self.max_eval_scenes is not None and i >= self.max_eval_scenes:
+                    break
                 # Move data to GPU
                 input_dict = {
                     k: v.to(self.device) if isinstance(v, torch.Tensor) else v
@@ -899,8 +912,10 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 }
 
                 # Forward pass
-                output_dict = self.trainer.model(input_dict, chunk_size=600000)
+                output_dict = self.trainer.model(input_dict, chunk_size=300000)
                 point_feat = output_dict["point_feat"]["feat"]
+                # 与训练一致：训练时输出为 tanh(backbone)（2026-08-03 修复）
+                point_feat = torch.tanh(point_feat)
 
                 # Get ground truth labels
                 pc_coord = None
@@ -929,25 +944,22 @@ class LangPretrainZeroShotSemSegEval(HookBase):
                 if valid_segment.numel() == 0:
                     continue
 
-                # === FIRST BATCH: Compute Procrustes Q matrix if enabled ===
-                if self.use_procrustes and not procrustes_computed:
-                    # Need labels for all points (not just valid) for Q computation
+                # === EACH SCENE: Compute Procrustes Q matrix (与 tester 一致, 2026-08-03 修复) ===
+                # 原实现只在第一个 batch 拟合一次并全局应用——每个场景的局部 SVD 基不同，
+                # 单 Q 只对齐第一个场景，其余场景全部 misalign（实测 mIoU 0.0048 vs 每场景 41.8% 上界）
+                if self.use_procrustes:
                     Q_matrix = self._compute_procrustes_q_matrix(point_feat, segment)
-                    procrustes_computed = True
-
-                    # Apply Procrustes alignment to text embeddings
-                    # text_embeddings: [num_classes, d], Q: [d, d]
-                    text_embeddings = torch.mm(text_embeddings, Q_matrix.T)
-                    print(f"Applied Procrustes Q matrix to text embeddings")
-                    print(f"  text_embeddings shape: {text_embeddings.shape}")
-                    print(f"  Q shape: {Q_matrix.shape}")
+                    # 每场景从原始 text embeddings 派生（避免旋转累积）
+                    scene_text = torch.mm(self.text_embeddings.to(self.device), Q_matrix.T)
+                else:
+                    scene_text = text_embeddings
 
                 # === Normalize point features for cosine similarity ===
                 point_feat_norm = F.normalize(point_feat, p=2, dim=1)
 
                 # === Compute predictions using cosine similarity ===
                 # Dot product of normalized vectors = cosine similarity
-                similarity = torch.mm(point_feat_norm, text_embeddings.t())
+                similarity = torch.mm(point_feat_norm, scene_text.t())
                 max_probs, pred_labels = torch.max(similarity, dim=1)
 
                 # Apply confidence threshold
@@ -1334,7 +1346,7 @@ class LangPretrainZeroShotSemSegEvalMulti(HookBase):
     #         self.trainer.model.train()
 
     def after_epoch(self):
-        if self.trainer.cfg.evaluate:
+        if self.trainer.cfg.evaluate or getattr(self, "eval_during_train", False):
             self.eval()
 
     def _neighbor_voting(self, coords, initial_labels, valid_mask, query_coords=None):
@@ -1423,8 +1435,10 @@ class LangPretrainZeroShotSemSegEvalMulti(HookBase):
                         for k, v in input_dict.items()
                     }
 
-                    output_dict = self.trainer.model(input_dict, chunk_size=600000)
+                    output_dict = self.trainer.model(input_dict, chunk_size=300000)
                     point_feat = output_dict["point_feat"]["feat"]  # normalized
+                    # 与训练一致：训练时输出为 tanh(backbone)（2026-08-03 修复）
+                    point_feat = torch.tanh(point_feat)
 
                     # Get ground truth labels
                     pc_coord = None

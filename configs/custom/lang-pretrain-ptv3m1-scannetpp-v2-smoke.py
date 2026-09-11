@@ -56,10 +56,6 @@ model = dict(
     type="LangPretrainer",
     verbose_losses=True,
     # 方案 X：训练目标逐 chunk Procrustes 对齐到 text16（与评测 Q 拟合同构）
-    align_text16=True,
-    text_embeddings_path=text_embeddings_path,
-    svd_rank=16,
-    align_min_points=10,
     backbone=dict(
         type="PT-v3m1",
         in_channels=11,  # 3DGS features: color(3) + opacity(1) + quat(4) + scale(3)

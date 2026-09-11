@@ -143,8 +143,8 @@ model = dict(
         # dict(
         #     type="Rendered2DLoss",
         #     loss_weight=1.0,  # Maximum weight
-        #     gaussian_train_root="/new_data/cyf/projects/SceneSplat/gaussian_train",
-        #     datasets_root="/new_data/cyf/projects/SceneSplat/datasets",
+        #     gaussian_train_root="/home/isom/cyf/SceneSplat/gaussian_train",
+        #     datasets_root="/home/isom/cyf/SceneSplat/datasets",
         #     warmup_progress=0.0,  # Start immediately (no warmup)
         #     target_progress=0.5,  # Reach max weight at 50% training progress
         #     max_num_views=10,  # Use up to 10 views per scene to save memory
@@ -242,8 +242,8 @@ save_path = "exp/lite-16-scannet-gridsvd"
 # Dataset settings (same as original Scannet config)
 # ============================================================================
 dataset_type = "ScanNet200GSDataset"
-data_root = "/new_data/cyf/Datasets/SceneSplat7k/scannet"
-repo_root = "/new_data/cyf/projects/SceneSplat"
+data_root = "/home/isom/cyf/SceneSplat/scannet"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
 
 class_names_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_labels.txt"
 text_embeddings_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_text_embeddings_siglip2.pt"

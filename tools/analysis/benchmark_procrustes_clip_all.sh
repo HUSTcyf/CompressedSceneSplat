@@ -3,18 +3,18 @@
 # and compute aggregate statistics.
 
 # Python environment
-PYTHON_PATH="/new_data/cyf/.conda/envs/scene_splat/bin/python"
+PYTHON_PATH="/home/isom/cyf/SceneSplat/.conda/envs/scene_splat/bin/python"
 
 # Paths
-DATA_ROOT="/new_data/cyf/projects/SceneSplat/gaussian_train_clip/lerf_ovs/val"
-TEXT_EMBED="/new_data/cyf/projects/OccamLGS/datasets/lerf_ovs_text_embeddings_clip_no_prefix.pt"
+DATA_ROOT="/home/isom/cyf/SceneSplat/gaussian_train_clip/lerf_ovs/val"
+TEXT_EMBED="/home/isom/cyf/SceneSplat/projects/OccamLGS/datasets/lerf_ovs_text_embeddings_clip_no_prefix.pt"
 SVD_RANK=16
 LABEL_FILE="lang_label.npy"
 NUM_RUNS=1
 WARMUP_RUNS=1
 
 # Output directory
-OUTPUT_DIR="/new_data/cyf/projects/SceneSplat/tools/analysis"
+OUTPUT_DIR="/home/isom/cyf/CompressedSceneSplat/tools/analysis"
 BASE_OUTPUT="${OUTPUT_DIR}/benchmark_clip_results"
 
 # SVD suffixes to test
@@ -42,7 +42,7 @@ for suffix in "${SVD_SUFFIXES[@]}"; do
 
     OUTPUT_FILE="${BASE_OUTPUT}_${suffix}.json"
 
-    ${PYTHON_PATH} /new_data/cyf/projects/SceneSplat/tools/analysis/benchmark_procrustes_with_labels.py \
+    ${PYTHON_PATH} /home/isom/cyf/CompressedSceneSplat/tools/analysis/benchmark_procrustes_with_labels.py \
         --data_root "${DATA_ROOT}" \
         --text_embed "${TEXT_EMBED}" \
         --svd_rank ${SVD_RANK} \

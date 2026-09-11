@@ -77,7 +77,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 # dataset settings
 dataset_type = "ScanNet200GSDataset"
 data_root = (
-    "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannet_default_fix_xyz_gs"
+    "/home/isom/cyf/SceneSplat/scannet_default_fix_xyz_gs"
 )
 
 data = dict(

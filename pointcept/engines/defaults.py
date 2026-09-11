@@ -120,7 +120,10 @@ def default_config_parser(file_path, options):
     if cfg.seed is None:
         cfg.seed = get_random_seed()
 
-    cfg.data.train.loop = cfg.epoch // cfg.eval_epoch
+    # 修复（2026-08-04）：loop = epoch // eval_epoch 在 eval_epoch=1 时使
+    # dataset 每 epoch 重复 20 遍（20 epochs → 数据过 400 遍 ≈ 115h）。
+    # 改为尊重 config 显式 loop；未指定时沿用原语义。
+    cfg.data.train.loop = cfg.data.train.get("loop", cfg.epoch // cfg.eval_epoch)
 
     os.makedirs(os.path.join(cfg.save_path, "model"), exist_ok=True)
     if not cfg.resume:

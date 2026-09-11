@@ -7,6 +7,7 @@ from pointcept.engines.defaults import (
     default_setup,
 )
 from pointcept.engines.train import TRAINERS
+from pointcept.engines.density_invariant_trainer import DensityInvariantTrainer  # noqa: F401  # register trainer
 from pointcept.engines.launch import launch
 from pointcept.utils import comm  # Import comm module to set _LOCAL_PROCESS_GROUP
 

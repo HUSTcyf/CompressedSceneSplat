@@ -37,17 +37,17 @@ LOAD_INTO_MEMORY_GB = 10  # when a scene’s coord.npy is > this, fall back to m
 
 DATASETS: Dict[str, Dict[str, str]] = {
     # dataset_key              gaussian_root                               original_root
-    # "scannet_mcmc_3dgs":       "/home/yli7/scratch2/datasets/gaussian_world/preprocessed/scannet_mcmc_3dgs",
-    # "scannetpp_v2_mcmc_3dgs":  "/home/yli7/scratch2/datasets/gaussian_world/preprocessed/scannetpp_v2_mcmc_3dgs",
-    "matterport3d_region_mcmc_3dgs": "/home/yli7/scratch2/datasets/gaussian_world/preprocessed/matterport3d_region_mcmc_3dgs",
-    # "holicity_mcmc_3dgs":      "/home/yli7/scratch2/datasets/gaussian_world/preprocessed/holicity_mcmc_3dgs",
+    # "scannet_mcmc_3dgs":       "/home/isom/cyf/SceneSplat/preprocessed/scannet_mcmc_3dgs",
+    # "scannetpp_v2_mcmc_3dgs":  "/home/isom/cyf/SceneSplat/preprocessed/scannetpp_v2_mcmc_3dgs",
+    "matterport3d_region_mcmc_3dgs": "/home/isom/cyf/SceneSplat/preprocessed/matterport3d_region_mcmc_3dgs",
+    # "holicity_mcmc_3dgs":      "/home/isom/cyf/SceneSplat/preprocessed/holicity_mcmc_3dgs",
 }
 
 ORIGINAL_ROOTS: Dict[str, str] = {
-    # "scannet_mcmc_3dgs":       "/home/yli7/scratch2/datasets/ptv3_preprocessed/scannet_preprocessed",
-    # "scannetpp_v2_mcmc_3dgs":  "/home/yli7/scratch2/datasets/ptv3_preprocessed/scannetpp_v2_preprocessed",
-    "matterport3d_region_mcmc_3dgs": "/home/yli7/scratch2/datasets/ptv3_preprocessed/matterport3d",
-    # "holicity_mcmc_3dgs":      "/home/yli7/scratch/datasets/ptv3_preprocessed/holicity",
+    # "scannet_mcmc_3dgs":       "/home/isom/cyf/SceneSplat/scannet_preprocessed",
+    # "scannetpp_v2_mcmc_3dgs":  "/home/isom/cyf/SceneSplat/scannetpp_v2_preprocessed",
+    "matterport3d_region_mcmc_3dgs": "/home/isom/cyf/SceneSplat/matterport3d",
+    # "holicity_mcmc_3dgs":      "/home/isom/cyf/SceneSplat/holicity",
 }
 
 SCENE_SPLITS = ("train", "val", "test")  # folders at root level without “chunk”

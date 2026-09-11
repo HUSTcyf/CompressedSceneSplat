@@ -3,7 +3,7 @@
 Test validation on ScanNet test data using SVD-decomposed text embeddings with Procrustes alignment.
 
 This script tests the validation flow with:
-- ScanNet test data at /new_data/cyf/Datasets/SceneSplat7k/scannet/test_grid1.0cm_chunk6x6_stride3x3
+- ScanNet test data at /home/isom/cyf/SceneSplat/scannet/test_grid1.0cm_chunk6x6_stride3x3
 - 768-dim text embeddings SVD-reduced to 16-dim
 - Procrustes alignment matrix Q for feature alignment
 - SVD-16 model outputs
@@ -100,7 +100,7 @@ def validate_with_compressed_embeddings(
     config_path: str,
     weight_path: str,
     text_embeddings_path: str,
-    data_root: str = "/new_data/cyf/Datasets/SceneSplat7k/scannet",
+    data_root: str = "/home/isom/cyf/SceneSplat/scannet",
     split: str = "test_grid1.0cm_chunk6x6_stride3x3",
     device: str = "cuda",
     num_scenes: int = 10,
@@ -464,7 +464,7 @@ def main():
                        help="Path to model checkpoint")
     parser.add_argument("--text_embeddings", type=str, required=True,
                        help="Path to 768-dim text embeddings (will be SVD-reduced)")
-    parser.add_argument("--data_root", type=str, default="/new_data/cyf/Datasets/SceneSplat7k/scannet",
+    parser.add_argument("--data_root", type=str, default="/home/isom/cyf/SceneSplat/scannet",
                        help="Path to test data root")
     parser.add_argument("--split", type=str, default="test_grid1.0cm_chunk6x6_stride3x3",
                        help="Test split name")

@@ -15,7 +15,7 @@ _base_ = [
 
 # Dataset type and root path
 dataset_type = "ScanNetPPGSDataset"
-data_root = "/path/to/your/scannetpp_preprocessed_data"
+data_root = "/home/isom/cyf/SceneSplat/scannetpp_v2"
 
 # Split configurations for training/validation
 train_split = (

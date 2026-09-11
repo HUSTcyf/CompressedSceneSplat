@@ -2,11 +2,11 @@
 #
 # Replica dataset instance segmentation evaluation
 #
-# Direct port of /new_data/cyf/projects/Gaga/eval.py with adaptations for SceneSplat
+# Direct port of /home/isom/cyf/SceneSplat/projects/Gaga/eval.py with adaptations for SceneSplat
 #
 # Usage:
 #   python tools/eval_replica.py \\
-#       --gt_masks /new_data/cyf/projects/Gaga/datasets/replica/office_0/semantic_instance \\
+#       --gt_masks /home/isom/cyf/SceneSplat/projects/Gaga/datasets/replica/office_0/semantic_instance \\
 #       --pred_masks /path/to/predicted/masks
 #
 

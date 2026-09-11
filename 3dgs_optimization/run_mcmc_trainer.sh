@@ -66,7 +66,7 @@ run_training() {
     mkdir -p "$scene_result_dir"
 
     # Change to 3dgs_optimization directory
-    cd /new_data/cyf/projects/SceneSplat/3dgs_optimization
+    cd /home/isom/cyf/CompressedSceneSplat/3dgs_optimization
 
     # Run the training command
     CUDA_VISIBLE_DEVICES=$GPU_ID /data/cyf/.conda/envs/scene_splat/bin/python examples/simple_trainer.py \

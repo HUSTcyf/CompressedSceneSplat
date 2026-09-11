@@ -79,8 +79,8 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "HoliCityGSDataset"
-repo_root = "/home/yli7/projects/release/SceneSplat"
-data_root = "/home/yli7/scratch/datasets/gaussian_world/preprocessed/holicity_mcmc_3dgs"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
+data_root = "/home/isom/cyf/SceneSplat/holicity_mcmc_3dgs"
 
 hooks = [
     dict(type="CheckpointLoader"),

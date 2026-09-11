@@ -94,15 +94,15 @@ def convert_checkpoint_for_ovs(
 
 if __name__ == "__main__":
     # Paths
-    ckpt_path = "/new_data/cyf/projects/SceneSplat/LitePT/ckpts/model_best_scannet.pth"
-    output_path = "/new_data/cyf/projects/SceneSplat/LitePT/ckpts/model_best_ovs.pth"
+    ckpt_path = "/home/isom/cyf/CompressedSceneSplat/LitePT/ckpts/model_best_scannet.pth"
+    output_path = "/home/isom/cyf/CompressedSceneSplat/LitePT/ckpts/model_best_ovs.pth"
 
     # Check if input exists
     if not Path(ckpt_path).exists():
         print(f"Error: Checkpoint not found: {ckpt_path}")
         print("\nLooking for alternative checkpoints...")
         # Try to find any checkpoint in LitePT/ckpts/
-        ckpt_dir = Path("/new_data/cyf/projects/SceneSplat/LitePT/ckpts")
+        ckpt_dir = Path("/home/isom/cyf/CompressedSceneSplat/LitePT/ckpts")
         if ckpt_dir.exists():
             ckpts = list(ckpt_dir.glob("*.pth"))
             if ckpts:

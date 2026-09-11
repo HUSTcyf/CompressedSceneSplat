@@ -843,7 +843,7 @@ def main():
         description='Compute Average JM Distance Between Classes'
     )
     parser.add_argument('--data-root', type=str,
-                       default='/new_data/cyf/projects/SceneSplat/gaussian_train',
+                       default='/home/isom/cyf/SceneSplat/gaussian_train',
                        help='Path to training data directory')
     parser.add_argument('--rank', type=int, default=16,
                        help='SVD rank for compression (default: 16)')

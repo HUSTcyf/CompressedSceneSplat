@@ -139,16 +139,16 @@ def main():
 
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/holicity_val.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/holicity_val.txt"
     )
     preprocessed_root = (
         args.preprocessed_root
-        or "/home/yli7/scratch/datasets/ptv3_preprocessed/holicity"
+        or "/home/isom/cyf/SceneSplat/ptv3_preprocessed/holicity"
     )
     gs_root = (
-        args.gs_root or "/home/yli7/scratch/datasets/gaussian_world/holicity_mcmc_3dgs"
+        args.gs_root or "/home/isom/cyf/SceneSplat/holicity_mcmc_3dgs"
     )  # scannet_default_fix_xyz_gs, scannet_3dgs_mcmc
-    lang_feat_path = "/home/yli7/scratch2/datasets/gaussian_world/holicity_mcmc_3dgs/language_features_clip"
+    lang_feat_path = "/home/isom/cyf/SceneSplat/holicity_mcmc_3dgs/language_features_clip"
 
     # used for logging
     model_name = "clip"  # override with the model name
@@ -232,7 +232,7 @@ def main():
             raise ValueError(f"Unsupported model name: {model_name}")
         return text_feat
 
-    # text_feat_path = "/home/yli7/scratch/datasets/holicity/metadata/holicity_text_embeddings_siglip2.pt"
+    # text_feat_path = "/home/isom/cyf/SceneSplat/holicity/metadata/holicity_text_embeddings_siglip2.pt"
     # text_feat = torch.load(text_feat_path, map_location="cpu")
     text_feat = prepare_text_features(holicity_label_prompt)
 

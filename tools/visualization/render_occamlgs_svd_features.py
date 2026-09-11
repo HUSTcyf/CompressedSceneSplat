@@ -8,7 +8,7 @@ features, and visualizes them using PCA (3 components).
 
 Usage:
     python tools/visualization/render_occamlgs_svd_features.py \\
-        --scene /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+        --scene /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
         --checkpoint chkpnt30000_langfeat_1.pth \\
         --svd-rank 16 \\
         --output-dir ./svd_render_results
@@ -431,20 +431,20 @@ def main():
 Examples:
   # Render with SVD-16 compression
   python tools/visualization/render_occamlgs_svd_features.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --svd-rank 16 \\
       --output-dir ./svd_render_results
 
   # Use different SVD rank
   python tools/visualization/render_occamlgs_svd_features.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --svd-rank 32 \\
       --num-views 5 \\
       --output-dir ./svd_render_results
 
   # Use different feature level
   python tools/visualization/render_occamlgs_svd_features.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --checkpoint chkpnt30000_langfeat_2.pth \\
       --feature-level 2 \\
       --svd-rank 16 \\

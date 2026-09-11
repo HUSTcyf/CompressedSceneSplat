@@ -255,8 +255,8 @@ def main():
         type=str,
         nargs="+",
         default=[
-            "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train",
-            "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS/train",
+            "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train",
+            "/home/isom/cyf/SceneSplat/gaussian_train/3DOVS/train",
         ],
         help="Paths to training data directories"
     )

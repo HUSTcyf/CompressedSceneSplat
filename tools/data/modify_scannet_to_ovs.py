@@ -153,8 +153,8 @@ def modify_checkpoint_for_ovs(
 
 
 if __name__ == "__main__":
-    ckpt_path = "/new_data/cyf/projects/SceneSplat/LitePT/ckpts/model_best_scannet.pth"
-    output_path = "/new_data/cyf/projects/SceneSplat/LitePT/ckpts/model_best_ovs.pth"
+    ckpt_path = "/home/isom/cyf/CompressedSceneSplat/LitePT/ckpts/model_best_scannet.pth"
+    output_path = "/home/isom/cyf/CompressedSceneSplat/LitePT/ckpts/model_best_ovs.pth"
 
     modify_checkpoint_for_ovs(
         ckpt_path=ckpt_path,

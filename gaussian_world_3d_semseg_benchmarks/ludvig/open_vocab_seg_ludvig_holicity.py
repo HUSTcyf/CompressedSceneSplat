@@ -139,19 +139,19 @@ def main():
 
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/holicity_mini_val.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/holicity_mini_val.txt"
     )
     preprocessed_root = (
         args.preprocessed_root
-        or "/home/yli7/scratch/datasets/ptv3_preprocessed/holicity"
+        or "/home/isom/cyf/SceneSplat/ptv3_preprocessed/holicity"
     )
     gs_root = (
         args.gs_root
-        or "/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/holicity"
+        or "/home/isom/cyf/SceneSplat/outputs/ludvig/holicity"
     )
     langfeat_root = (
         args.langfeat_root
-        or "/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/holicity"
+        or "/home/isom/cyf/SceneSplat/outputs/ludvig/holicity"
     )
     nn_num = args.nn_num or 25
     args.print_class_iou = True

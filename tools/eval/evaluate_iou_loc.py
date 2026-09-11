@@ -146,7 +146,7 @@ def load_or_compute_procrustes_Q(
     q_file_candidates = [
         text_embed_dir / f"Q_procrustes_{benchmark_name}_average_r{svd_rank}.npz",
         text_embed_dir.parent / f"Q_procrustes_{benchmark_name}_average_r{svd_rank}.npz",
-        Path(f"/new_data/cyf/projects/SceneSplat/gaussian_train/Q_procrustes_{benchmark_name}_average_r{svd_rank}.npz"),
+        Path(f"/home/isom/cyf/SceneSplat/gaussian_train/Q_procrustes_{benchmark_name}_average_r{svd_rank}.npz"),
     ]
 
     for q_file in q_file_candidates:
@@ -765,23 +765,23 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default=None)
     parser.add_argument("--gt_folder", type=str, default=None)
     parser.add_argument("--feat_folder", type=str, default=None)
-    parser.add_argument("--feat_base_path", type=str, default=None, help="Base path for features (e.g., /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs)")
+    parser.add_argument("--feat_base_path", type=str, default=None, help="Base path for features (e.g., /home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs)")
     parser.add_argument("--single_level", action="store_true", help="Use single feature level (level 0) instead of multiple levels")
     parser.add_argument("--feat_level", type=int, default=None, help="Specific feature level to use (0, 1, 2, or 3). Overrides --single_level behavior.")
     parser.add_argument("--stability_thresh", type=float, default=0.5, help="Maximum gradient value considered stable (default: 0.5, relaxed from 0.3)")
     parser.add_argument("--min_mask_size", type=float, default=0.001)
     parser.add_argument("--max_mask_size", type=float, default=0.95)
     parser.add_argument("--src_dim", type=int, default=768, help="Source dimension of language features to load (default: 768 for SigLIP2; options: 512 for OpenCLIP, 16 for SVD-compressed)")
-    parser.add_argument("--projection_matrix", type=str, default=None, help="Path to projection matrix (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/projection_matrix_768_to_16_lerf.npy)")
+    parser.add_argument("--projection_matrix", type=str, default=None, help="Path to projection matrix (e.g., /home/isom/cyf/SceneSplat/gaussian_train/projection_matrix_768_to_16_lerf.npy)")
 
     # CLIP model options
     parser.add_argument("--use_clip", action="store_true", help="Use CLIP (OpenCLIPNetwork) instead of SigLIP2Network")
 
     # Procrustes alignment options
     parser.add_argument("--use_procrustes", action="store_true", help="Use Procrustes alignment before computing similarity")
-    parser.add_argument("--text_embeddings", type=str, default=None, help="Path to text embeddings for Q matrix computation (e.g., /new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt)")
-    parser.add_argument("--q_matrix", type=str, default=None, help="Path to pre-computed Q matrix (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/Q_procrustes_scannet20_average_r16.npz)")
-    parser.add_argument("--train_data_root", type=str, default=None, help="Path to training data root for per-scene Q computation (e.g., /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train)")
+    parser.add_argument("--text_embeddings", type=str, default=None, help="Path to text embeddings for Q matrix computation (e.g., /home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt)")
+    parser.add_argument("--q_matrix", type=str, default=None, help="Path to pre-computed Q matrix (e.g., /home/isom/cyf/SceneSplat/gaussian_train/Q_procrustes_scannet20_average_r16.npz)")
+    parser.add_argument("--train_data_root", type=str, default=None, help="Path to training data root for per-scene Q computation (e.g., /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train)")
 
     args = parser.parse_args()
 

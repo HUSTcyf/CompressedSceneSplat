@@ -65,7 +65,7 @@ def repair_checkpoint(ckpt_path, backup=True):
     return True
 
 if __name__ == "__main__":
-    ckpt_path = "/new_data/cyf/projects/SceneSplat/exp/lite-16-gridsvd/model/model_last.pth"
+    ckpt_path = "/home/isom/cyf/CompressedSceneSplat/exp/lite-16-gridsvd/model/model_last.pth"
     
     if len(sys.argv) > 1:
         ckpt_path = sys.argv[1]

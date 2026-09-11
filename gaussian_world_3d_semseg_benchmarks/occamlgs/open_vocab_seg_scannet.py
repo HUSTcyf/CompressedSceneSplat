@@ -139,15 +139,15 @@ def main():
     model_name = "clip"
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/scannet_val.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/scannet_val.txt"
     )
     scannet_preprocessed_root = (
         args.scannet_preprocessed_root
-        or "/home/yli7/scratch2/datasets/ptv3_preprocessed/scannet_preprocessed"
+        or "/home/isom/cyf/SceneSplat/scannet_preprocessed"
     )
     scannet_3dgs_root = (
         args.scannet_3dgs_root
-        or "/home/yli7/scratch2/datasets/gaussian_world/scannet_mcmc_3dgs"
+        or "/home/isom/cyf/SceneSplat/scannet_mcmc_3dgs"
     )  # scannet_default_fix_xyz_gs, scannet_mcmc_3dgs
     scannet_langfeat_root = os.path.join(
         scannet_3dgs_root, f"language_features_{model_name}"

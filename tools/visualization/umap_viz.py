@@ -1647,7 +1647,7 @@ def create_per_scene_visualization(original_2d: np.ndarray, compressed_2d: np.nd
 def main():
     parser = argparse.ArgumentParser(description='UMAP visualization of language features')
     parser.add_argument('--data-root', type=str,
-                       default='/new_data/cyf/projects/SceneSplat/gaussian_train',
+                       default='/home/isom/cyf/SceneSplat/gaussian_train',
                        help='Path to training data directory')
     parser.add_argument('--output-dir', type=str,
                        default='langfeat_visualizations',

@@ -1282,25 +1282,25 @@ def main():
     # Run prediction
     predictor.run()
 
-# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val --output ./output_features --weight exp/lite-16-gridsvd/model/model_last.pth --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 --iterations 30000 --preprocessed --recursive --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs
+# python tools/batch_predict.py --input /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/val --output ./output_features --weight exp/lite-16-gridsvd/model/model_last.pth --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 --iterations 30000 --preprocessed --recursive --original_checkpoint /home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs
 #
 # Single crop mode (center crop only, faster):
-# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val \
+# python tools/batch_predict.py --input /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/val \
 #     --output ./output_features_single \
 #     --weight exp/lite-16-gridsvd/model/model_last.pth \
 #     --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py \
 #     --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 \
 #     --iterations 30000 --preprocessed --recursive \
-#     --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs
+#     --original_checkpoint /home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs
 #
 # Multi-crop mode (full scene coverage, slower):
-# python tools/batch_predict.py --input /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val \
+# python tools/batch_predict.py --input /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/val \
 #     --output ./output_features_full \
 #     --weight exp/lite-16-gridsvd/model/model_last.pth \
 #     --config configs/custom/lang-pretrain-litept-ovs-gridsvd.py \
 #     --model_type litept --chunk_size 1000000 --grid_size 0.01 --device cuda:1 \
 #     --iterations 30000 --preprocessed --recursive \
-#     --original_checkpoint /new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs \
+#     --original_checkpoint /home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs \
 #     --use_multi_crop --crop_radius 5.0 --crop_overlap 0.2 --max_crops 50
 if __name__ == "__main__":
     main()

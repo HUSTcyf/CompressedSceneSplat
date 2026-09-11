@@ -7,7 +7,7 @@ ScanNet++ 场景推理与可视化示例
 2. 生成语义分割预测结果 (可选)
 3. 可视化 GT 和预测结果
 
-场景: /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be
+场景: /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be
 
 使用方法:
     # 完整流程 (推理 + 预测 + 可视化)
@@ -271,22 +271,22 @@ def run_visualization(
 def main():
     parser = argparse.ArgumentParser(description="ScanNet++ 场景推理与可视化")
     parser.add_argument("--scene_path", type=str,
-        default="/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be",
+        default="/home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be",
         help="场景路径")
     parser.add_argument("--checkpoint", type=str,
-        default="/new_data/cyf/projects/SceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth",
+        default="/home/isom/cyf/CompressedSceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth",
         help="预训练权重路径")
     parser.add_argument("--config", type=str,
-        default="/new_data/cyf/projects/SceneSplat/configs/inference/lang-pretrain-pt-v3m1-3dgs.py",
+        default="/home/isom/cyf/CompressedSceneSplat/configs/inference/lang-pretrain-pt-v3m1-3dgs.py",
         help="推理配置文件")
     parser.add_argument("--output_dir", type=str,
-        default="/new_data/cyf/projects/SceneSplat/output_visualization",
+        default="/home/isom/cyf/CompressedSceneSplat/output_visualization",
         help="输出目录")
     parser.add_argument("--class_names", type=str,
-        default="/new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100.txt",
+        default="/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100.txt",
         help="类别名称文件")
     parser.add_argument("--text_embeddings", type=str,
-        default="/new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt",
+        default="/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt",
         help="文本嵌入文件")
     parser.add_argument("--gpu_id", type=int, default=0,
         help="GPU 设备 ID")

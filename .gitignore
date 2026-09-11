@@ -48,3 +48,4 @@ LitePT/ckpts
 *.ply
 *.pth
 *.png
+_offline/

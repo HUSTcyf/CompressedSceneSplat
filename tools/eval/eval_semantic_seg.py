@@ -101,7 +101,7 @@ if __name__ == "__main__":
     maccsss = []
     for scan_name in scene_list:
         # (1) GT ply    change!
-        gt_file_path = f"/new_data/cyf/projects/OpenGaussian/datasets/scannet/{scan_name}/{scan_name}_vh_clean_2.labels.ply"
+        gt_file_path = f"/home/isom/cyf/SceneSplat/projects/OpenGaussian/datasets/scannet/{scan_name}/{scan_name}_vh_clean_2.labels.ply"
         points, labels = read_labels_from_ply(gt_file_path)
 
         # (2) note: 19 & 15 & 10 classes

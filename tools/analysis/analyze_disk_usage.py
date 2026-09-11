@@ -71,7 +71,7 @@ except ImportError:
 # Default paths
 DATASET_CONFIGS = {
     "scannet": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/scannet"),
+        "root": Path("/home/isom/cyf/SceneSplat/scannet"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6_stride3x3",
             "test": "test_grid1.0cm_chunk6x6_stride3x3",
@@ -83,7 +83,7 @@ DATASET_CONFIGS = {
         "excluded_scenes": [],  # Scenes with missing/incomplete files to exclude
     },
     "scannetpp": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2"),
+        "root": Path("/home/isom/cyf/SceneSplat/scannetpp_v2"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6_stride3x3",
             "test": "test_grid1.0cm_chunk6x6_stride3x3",
@@ -102,7 +102,7 @@ DATASET_CONFIGS = {
         ],
     },
     "matterport3d": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/matterport3d"),
+        "root": Path("/home/isom/cyf/SceneSplat/matterport3d"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6x4_stride4x4x4",
             "val": "val_grid1.0cm_chunk6x6x4_stride4x4x4",

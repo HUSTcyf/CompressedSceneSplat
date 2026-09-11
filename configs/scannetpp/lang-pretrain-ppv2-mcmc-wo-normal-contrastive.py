@@ -78,10 +78,10 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetPPGSDataset"
-data_root = "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannetpp_v2_default_fix_xyz_gs"
+data_root = "/home/isom/cyf/SceneSplat/scannetpp_v2_default_fix_xyz_gs"
 
-class_names_path = "/home/yli7/projects/gaussian_world/GS_Transformer_release/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_labels.txt"
-text_embeddings_path = "/home/yli7/projects/gaussian_world/GS_Transformer_release/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_text_embeddings_siglip2.pt"
+class_names_path = "/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_labels.txt"
+text_embeddings_path = "/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_text_embeddings_siglip2.pt"
 hooks = [
     dict(type="CheckpointLoader"),
     dict(type="IterationTimer", warmup_iter=2),
@@ -236,7 +236,7 @@ data = dict(
     test=dict(
         type="ScanNet200GSDataset",
         split="val_selected_10",
-        data_root="/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannet_default_fix_xyz_gs",
+        data_root="/home/isom/cyf/SceneSplat/scannet_default_fix_xyz_gs",
         filtered_scene=[
             "c601466b77",
             "654a4f341b",

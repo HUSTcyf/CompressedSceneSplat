@@ -775,9 +775,11 @@ class SVDWeightedL1Loss(nn.Module):
             # Normalize to [min_weight, base_weight]
             normalized = (self.dim_variance - stat_min) / (stat_max - stat_min)
             if self.weight_strategy in ("inverse_variance", "inverse_std"):
-                # 反方差（2026-08-03）: 目标 96% 能量在公共方向(dim0)，判别信息全在低方差波动维。
-                # 原方差加权给公共方向权重 1.0、波动维仅 0.1 → 模型只学公共方向（波动维 corr ≈ 0）。
-                # 反转后波动维获得高权重，L1 损失聚焦判别分量（方向仍由 CosineSimilarity 负责）。
+                # 反方差（2026-08-03）: 给低方差维高权重。
+                # 语义注意（2026-08-06 实测，见 docs/training_launch_procedure.md §3.4）：
+                # canonicalize 后 dim0（公共方向）方差最小——"variance" 下 dim0 得
+                # 最小权重、波动维得高权重；"inverse_variance" 反而给 dim0 权重 1.0。
+                # 用哪个策略以实测为准，不要凭直觉。
                 normalized = 1 - normalized
             weights = self.min_weight + normalized * (self.base_weight - self.min_weight)
         else:
@@ -885,6 +887,182 @@ class SVDWeightedL1Loss(nn.Module):
             }
             return (weighted_loss, loss_dict)
         return weighted_loss
+
+
+@LOSSES.register_module()
+class ClassMeanProcrustesLoss(nn.Module):
+    """
+    类均值 Procrustes 残差损失（2026-08-04，聚合级监督，目标 mIoU>25%）。
+
+    评测链 = 每场景类均值 Q 拟合（归一化 + 等权类平均）→ 余弦分类（上界 33.94%）。
+    本损失把同一信号放入训练，替换逐点 L1/cos（逐点目标被 96% 公共方向 + 噪声维
+    主导，波动维跨场景方向只对齐 0.51 → 逐点回归学不到类结构）：
+
+    - 逐场景（offset 分段）聚合：每点 L2 归一化 → 等权类均值（min_points 过滤）
+    - 正交 Procrustes Q = UV^T（M = F_c^T T_c 的 SVD），detach——每 iter 重拟合，
+      梯度只流经残差（envelope 梯度）；Q 吸收场景基旋转歧义 → 损失基无关
+    - 对齐后残差 L1/L2（类均值已单位化 → 纯方向对齐，与评测余弦指标一致）
+
+    与评测端 compute_procrustes_Q_cuda_with_labels（tools/projection/
+    compute_procrustes_alignment_simple.py）同构：每点归一化 + 类平均 + SVD 闭式解。
+
+    依赖 segment 标签（训练集有）与 offset（场景边界，trainer 已构建）。
+    """
+    def __init__(
+        self,
+        reduction="mean",
+        loss_weight=1.0,
+        min_points_per_class=50,
+        residual="l1",
+        point_weight=1.0,   # 逐点类均值残差权重（v2 主力：全强度逐点梯度）
+        mean_weight=0.3,    # 类均值等权残差权重（稀有类信号）
+        center=True,        # v3：类均值去质心后拟合 Q（移除退化的公共方向）
+        class_weights=None, # v11 阶段2：逐类权重 dict {class_id: weight}（主流类锚定）
+        class_weight_others=1.0,
+        point_class_weights=None,  # v17: 逐点项逐类权重（只锐化指定类的类内散布）
+        point_class_weight_others=1.0,  # v24: 逐点项其他类权重
+    ):
+        super(ClassMeanProcrustesLoss, self).__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+        self.min_points_per_class = min_points_per_class
+        self.residual = residual
+        self.point_weight = point_weight
+        self.mean_weight = mean_weight
+        self.center = center
+        self.class_weights = class_weights or {}
+        self.class_weight_others = class_weight_others
+        self.point_class_weights = point_class_weights or {}
+        self.point_class_weight_others = point_class_weight_others
+
+    def forward(self, pred, target, valid_feat_mask, segment=None, offset=None, **kwargs):
+        """
+        Args:
+            pred: [N, D] 模型输出
+            target: [N, D] 目标压缩特征
+            valid_feat_mask: [N] 有效点掩码
+            segment: [N] 语义标签（-1 = ignore）
+            offset: [S+1] 场景边界（trainer 的 full_input['offset']，累积和）
+
+        v2（2026-08-05）：逐点残差 = ||F_i Q − T_cls(i)||，每点以全强度梯度拉向
+        本类的类均值方向（无噪声目标）。v1 只做类均值残差 → 梯度按 1/n_c 稀释，
+        大类点梯度 ≈ 0，被 cos/权重衰减压过 → epoch 3 起类结构退化（17.1%→5.7%）。
+        """
+        if segment is None:
+            raise ValueError("ClassMeanProcrustesLoss requires segment labels")
+        device = pred.device
+        valid = (valid_feat_mask > 0) & (segment != -1)
+        pred, target, segment = pred[valid], target[valid], segment[valid]
+
+        if pred.shape[0] < self.min_points_per_class * 3:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        if offset is None:
+            offset = torch.tensor([0, pred.shape[0]], device=device)
+
+        losses = []
+        n_scenes = 0
+        for s in range(len(offset) - 1):
+            p = pred[offset[s]:offset[s + 1]]
+            t = target[offset[s]:offset[s + 1]]
+            seg = segment[offset[s]:offset[s + 1]]
+            if p.shape[0] < self.min_points_per_class * 3:
+                continue
+            losses.append(self._scene_loss(p, t, seg))
+            n_scenes += 1
+        if n_scenes == 0:
+            return torch.tensor(0.0, device=device, requires_grad=pred.requires_grad)
+
+        loss = torch.stack(losses).mean()
+        if self.reduction == "sum":
+            loss = loss * n_scenes
+        return self.loss_weight * loss
+
+    def _scene_loss(self, pred, target, segment):
+        # 1. 每点 L2 归一化（镜像评测端：只保留方向，避免偏移幅值主导）
+        pred = pred / (pred.norm(dim=1, keepdim=True) + 1e-8)
+
+        # 2. 等权类均值 + 最小点数过滤（与评测端类平均 1/n 一致）
+        unique_labels = torch.unique(segment)
+        F_c_list, T_c_list, keep_classes = [], [], []
+        for lab in unique_labels:
+            idx = (segment == lab).nonzero(as_tuple=True)[0]
+            if idx.numel() < self.min_points_per_class:
+                continue
+            F_c_list.append(pred[idx].mean(dim=0))
+            T_c_list.append(target[idx].mean(dim=0))
+            keep_classes.append(lab)
+        if len(F_c_list) < 3:
+            # 类太少：无类结构信号，返回 0（不惩罚）
+            # 2026-08-05 修复：detach()*0 无 grad_fn → "element 0 does not require grad"
+            return torch.tensor(0.0, device=pred.device, requires_grad=pred.requires_grad)
+        F_c = torch.stack(F_c_list)  # [K, D]
+        T_c = torch.stack(T_c_list)
+
+        # 3. 类均值单位化（纯方向对齐，与评测余弦分类一致）
+        F_c = F_c / (F_c.norm(dim=1, keepdim=True) + 1e-8)
+        T_c = T_c / (T_c.norm(dim=1, keepdim=True) + 1e-8)
+
+        # 3b. v3：去质心（移除公共方向——退化维使 Q 秩亏 → 拟合不稳定 → 训练震荡）
+        #     评测分类只依赖类间判别结构（去质心后），公共方向由评测 Q 吸收。
+        if self.center:
+            F_mean = F_c.mean(dim=0, keepdim=True)
+            T_mean = T_c.mean(dim=0, keepdim=True)
+            F_c = F_c - F_mean
+            T_c = T_c - T_mean
+
+        # 4. 正交 Procrustes Q（闭式解；detach——每 iter 重拟合，梯度只流经残差）
+        M = F_c.t() @ T_c  # [D, D]
+        U, S, Vt = torch.linalg.svd(M)
+        Q = U @ Vt
+        if torch.det(Q) < 0:
+            U[:, -1] *= -1
+            Q = U @ Vt
+        Q = Q.detach()
+
+        # 5a. 类均值等权残差（稀有类信号；v1 主体）
+        # v11 阶段2：逐类权重（主流类降权锚定，稀有类全速学习）
+        if self.class_weights:
+            w = torch.tensor(
+                [self.class_weights.get(int(c), self.class_weight_others) for c in keep_classes],
+                device=F_c.device, dtype=F_c.dtype,
+            ).unsqueeze(1)  # [K, 1]
+            resid_mean = (F_c @ Q - T_c) * w
+        else:
+            resid_mean = F_c @ Q - T_c
+        if self.residual == "l1":
+            loss_mean = resid_mean.abs().mean()
+        else:
+            loss_mean = (resid_mean ** 2).mean()
+
+        # 5b. 逐点类均值残差（v2 主力：每点全强度梯度，目标 = 本类均值方向，无噪声）
+        #     映射每点到其保留类的索引（classes 已排序）
+        classes = torch.stack(keep_classes)  # [K] 已排序（torch.unique 升序）
+        pos = torch.searchsorted(classes, segment)  # [N]
+        in_keep = (pos < classes.numel()) & (classes[pos.clamp(max=classes.numel() - 1)] == segment)
+        p_idx = pos[in_keep]
+        if p_idx.numel() < 100:
+            loss_point = loss_mean
+        else:
+            F_p = pred[in_keep]  # [M, D] 已归一化
+            T_p = T_c[p_idx]     # [M, D]（center=True 时为去质心类均值）
+            if self.center:
+                # v3：逐点同样去质心（公共方向无监督，评测 Q 吸收）
+                F_p = F_p - F_mean
+            resid_point = F_p @ Q - T_p
+            # v17: 逐点项逐类权重（只锐化指定类的类内散布，其他类不变）
+            if self.point_class_weights:
+                pw = torch.tensor(
+                    [self.point_class_weights.get(int(c), self.point_class_weight_others) for c in classes],
+                    device=F_c.device, dtype=F_c.dtype,
+                )
+                resid_point = resid_point * pw[p_idx].unsqueeze(1)
+            if self.residual == "l1":
+                loss_point = resid_point.abs().mean()
+            else:
+                loss_point = (resid_point ** 2).mean()
+
+        return self.point_weight * loss_point + self.mean_weight * loss_mean
 
 
 @LOSSES.register_module()

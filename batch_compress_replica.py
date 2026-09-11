@@ -10,30 +10,30 @@ so each scene is processed only once.
 Usage:
     # Process all replica scenes with dual-GPU parallel (default: cuda:0 and cuda:1)
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica
 
     # Single GPU mode
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --single_gpu
 
     # Specify custom GPUs
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --gpus cuda:0,cuda:1
 
     # Specify custom ranks
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --ranks 8,16,32
 
     # All other parameters are passed through to compress_grid_svd.py
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --grid_size 0.01 \\
         --ranks 16,32
@@ -287,30 +287,30 @@ def main():
 Examples:
     # Process all replica scenes with dual-GPU (default: cuda:0, cuda:1)
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica
 
     # Single GPU mode
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --single_gpu
 
     # Specify custom GPUs
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --gpus cuda:0,cuda:2
 
     # Specify custom ranks
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --ranks 8,16,32
 
     # All other parameters are passed through to compress_grid_svd.py
     python batch_compress_replica.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \\
         --dataset replica \\
         --grid_size 0.01 \\
         --ranks 16,32

@@ -13,13 +13,13 @@ Modes:
    To:   {destination_root}/{scene_name}/
 
    Example (ScanNetPP):
-   From: /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2_train/{scene_name}/
-   To:   /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3/{scene_name}/
+   From: /home/isom/cyf/SceneSplat/scannetpp_v2_train/{scene_name}/
+   To:   /home/isom/cyf/SceneSplat/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3/{scene_name}/
 
 2. OVS mode (default):
    Scene-to-dataset mapping with {dataset}/train/ subdirectories.
-   From: /new_data/cyf/projects/SceneSplat/grid_svd_output/{scene_name}/
-   To:   /new_data/cyf/projects/SceneSplat/gaussian_train/{dataset}/train/{scene_name}/
+   From: /home/isom/cyf/CompressedSceneSplat/grid_svd_output/{scene_name}/
+   To:   /home/isom/cyf/SceneSplat/gaussian_train/{dataset}/train/{scene_name}/
    Scene-to-dataset mapping:
    - 3DOVS: bed, bench, lawn, room, sofa
    - lerf_ovs: figurines, ramen, teatime, waldo_kitchen
@@ -266,14 +266,14 @@ def main():
     # Set default paths based on mode
     if args.direct:
         # Direct mode: default to ScanNetPP paths
-        default_grid_svd_root = "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2_train"
-        default_data_root = "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3"
+        default_grid_svd_root = "/home/isom/cyf/SceneSplat/scannetpp_v2_train"
+        default_data_root = "/home/isom/cyf/SceneSplat/scannetpp_v2/train_grid1.0cm_chunk6x6_stride3x3"
         grid_svd_root = Path(args.grid_svd_root) if args.grid_svd_root else Path(default_grid_svd_root)
         data_root = Path(args.data_root) if args.data_root else Path(default_data_root)
     else:
         # OVS mode: use original paths
-        default_grid_svd_root = "/new_data/cyf/projects/SceneSplat/grid_svd_output"
-        default_data_root = "/new_data/cyf/projects/SceneSplat/gaussian_train"
+        default_grid_svd_root = "/home/isom/cyf/CompressedSceneSplat/grid_svd_output"
+        default_data_root = "/home/isom/cyf/SceneSplat/gaussian_train"
         grid_svd_root = Path(args.grid_svd_root) if args.grid_svd_root else Path(default_grid_svd_root)
         data_root = Path(args.data_root) if args.data_root else Path(default_data_root)
 

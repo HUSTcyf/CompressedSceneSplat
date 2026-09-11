@@ -51,7 +51,7 @@ from functools import partial
 import multiprocessing
 
 # Add LangSplat autoencoder to path
-sys.path.append('/new_data/cyf/projects/LangSplat/autoencoder')
+sys.path.append('/home/isom/cyf/SceneSplat/projects/LangSplat/autoencoder')
 try:
     from model import Autoencoder
     AUTOENCODER_AVAILABLE = True
@@ -114,7 +114,7 @@ def load_trained_autoencoder(dataset_name, scene_name, encoder_dims=None, decode
     Returns:
         Loaded autoencoder model or None if not available
     """
-    encoder_path = "/new_data/cyf/projects/LangSplat"
+    encoder_path = "/home/isom/cyf/SceneSplat/projects/LangSplat"
     if not AUTOENCODER_AVAILABLE:
         return None
 

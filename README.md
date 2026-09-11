@@ -31,7 +31,7 @@ $^\star$: Equal Contribution, $^\dagger$: Corresponding Author <br>
 
 ## Installation
 
-Please set up the provided conda environment with Python 3.10, PyTorch 2.5.1, and CUDA 12.4. 
+Please set up the provided conda environment with Python 3.10, PyTorch 2.7.0, and CUDA 12.8. 
 
 ```bash
 conda env create -f env.yaml

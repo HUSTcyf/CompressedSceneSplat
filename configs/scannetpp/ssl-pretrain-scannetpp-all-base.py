@@ -85,7 +85,7 @@ param_dicts = [dict(keyword="block", lr=0.0001)]
 # dataset settings
 dataset_type = "GenericGSDataset"
 data_root = (
-    "/insait/qimaqi/data/scannetpp_v2_fixed_preprocessed_nochunk/"
+    "/home/isom/cyf/SceneSplat/scannetpp_v2_fixed_preprocessed_nochunk/"
 )
 
 

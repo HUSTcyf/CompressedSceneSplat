@@ -160,18 +160,18 @@ def main():
     version = "scannetpp_v2"
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/scannetpp_val.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/scannetpp_val.txt"
     )
     scannetpp_preprocessed_root = (
         args.scannetpp_preprocessed_root
-        or f"/home/yli7/scratch2/datasets/ptv3_preprocessed/{version}_preprocessed"
+        or f"/home/isom/cyf/SceneSplat/{version}_preprocessed"
     )
     scannetpp_3dgs_root = (
         args.scannetpp_3dgs_root
-        or "/home/yli7/scratch2/datasets/gaussian_world/scannetpp_v2_mcmc_3dgs"
+        or "/home/isom/cyf/SceneSplat/scannetpp_v2_mcmc_3dgs"
     )  # scannetpp_v1_default_fix_xyz_gs # scannetpp_v1_mcmc_3dgs
     text_path = (
-        f"/home/yli7/scratch2/datasets/{version}/metadata/semantic_benchmark/top100.txt"
+        f"/home/isom/cyf/SceneSplat/datasets/{version}/metadata/semantic_benchmark/top100.txt"
     )
     scannetpp_langfeat_root = os.path.join(
         scannetpp_3dgs_root, f"language_features_{model_name}"

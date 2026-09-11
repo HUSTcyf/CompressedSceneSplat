@@ -79,9 +79,9 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 # dataset settings
 dataset_type = "ScanNet200GSDataset"
 data_root = (
-    "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannet_3dgs_mcmc_preprocessed"
+    "/home/isom/cyf/SceneSplat/scannet_3dgs_mcmc_preprocessed"
 )
-repo_root = "/home/yli7/projects/release/SceneSplat_release"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
 
 class_names_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_labels.txt"
 text_embeddings_path = f"{repo_root}/pointcept/datasets/preprocessing/scannet/meta_data/scannet200_text_embeddings_siglip2.pt"

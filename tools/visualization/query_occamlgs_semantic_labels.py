@@ -563,20 +563,20 @@ def main():
 Examples:
   # Query by single label
   python tools/visualization/query_occamlgs_semantic_labels.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --query "chair" \\
       --output-dir ./semantic_query_results
 
   # Query by multiple labels
   python tools/visualization/query_occamlgs_semantic_labels.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --query "chair" "table" "bed" \\
       --num-views 10 \\
       --output-dir ./semantic_query_results
 
   # Use custom distance threshold
   python tools/visualization/query_occamlgs_semantic_labels.py \\
-      --scenes /new_data/cyf/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
+      --scenes /home/isom/cyf/SceneSplat/projects/OccamLGS/output/scannet-origin/scene0000_00 \\
       --query "wall" \\
       --distance-threshold 0.1 \\
       --output-dir ./semantic_query_results

@@ -94,20 +94,20 @@ def main():
     # ------------------------------
     # Paths & Setup
     # ------------------------------
-    # val_split_path = "/home/yli7/scratch2/datasets/scannetpp_v1/splits/nvs_sem_val.txt"
+    # val_split_path = "/home/isom/cyf/SceneSplat/scannetpp_v1/splits/nvs_sem_val.txt"
     val_split_path = "temp.txt"
-    scannetpp_preprocessed_root = "/home/yli7/scratch2/datasets/scannetpp_preprocessed"
+    scannetpp_preprocessed_root = "/home/isom/cyf/SceneSplat/datasets/scannetpp_preprocessed"
 
     # Root where your 3DGS + CLIP feats are stored
-    # scannetpp_3dgs_root = "/home/yli7/scratch2/datasets/gaussian_world/scannetpp_3dgs_default_depth_true"
-    scannetpp_3dgs_root = "/home/yli7/scratch2/outputs/scannetpp_v1_default_fix_xyz_gs"
-    # scannetpp_langfeat_root = "/home/yli7/scratch2/datasets/gaussian_world/scannetpp_lang_feat"
+    # scannetpp_3dgs_root = "/home/isom/cyf/SceneSplat/scannetpp_3dgs_default_depth_true"
+    scannetpp_3dgs_root = "/home/isom/cyf/SceneSplat/outputs/scannetpp_v1_default_fix_xyz_gs"
+    # scannetpp_langfeat_root = "/home/isom/cyf/SceneSplat/scannetpp_lang_feat"
     scannetpp_langfeat_root = (
-        "/home/yli7/scratch2/outputs/scannetpp_v1_default_fix_xyz_gs/language_features"
+        "/home/isom/cyf/SceneSplat/outputs/scannetpp_v1_default_fix_xyz_gs/language_features"
     )
 
     # The top-100 classes text file
-    text_path = "/home/yli7/scratch2/datasets/scannetpp_v1/metadata/semantic_benchmark/top100.txt"
+    text_path = "/home/isom/cyf/SceneSplat/scannetpp_v1/metadata/semantic_benchmark/top100.txt"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)

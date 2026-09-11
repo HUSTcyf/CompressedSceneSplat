@@ -325,7 +325,7 @@ def main():
     parser.add_argument("--scene", type=str, default="figurines",
                         help="场景名称 (默认: figurines)")
     parser.add_argument("--data_root", type=str,
-                        default="/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train",
+                        default="/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train",
                         help="数据根目录")
     parser.add_argument("--svd_rank", type=int, default=16,
                         help="SVD压缩rank (默认: 16)")

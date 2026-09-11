@@ -53,7 +53,7 @@ except ImportError:
 # SceneSplat dataset configurations
 DATASET_CONFIGS = {
     "scannet": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/scannet"),
+        "root": Path("/home/isom/cyf/SceneSplat/scannet"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6_stride3x3",
             "test": "test_grid1.0cm_chunk6x6_stride3x3",
@@ -66,7 +66,7 @@ DATASET_CONFIGS = {
         "excluded_scenes": [],
     },
     "scannetpp": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2"),
+        "root": Path("/home/isom/cyf/SceneSplat/scannetpp_v2"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6_stride3x3",
             "test": "test_grid1.0cm_chunk6x6_stride3x3",
@@ -82,7 +82,7 @@ DATASET_CONFIGS = {
         ],
     },
     "matterport3d": {
-        "root": Path("/new_data/cyf/Datasets/SceneSplat7k/matterport3d"),
+        "root": Path("/home/isom/cyf/SceneSplat/matterport3d"),
         "subdirs": {
             "train": "train_grid1.0cm_chunk6x6x4_stride4x4x4",
             "val": "val_grid1.0cm_chunk6x6x4_stride4x4x4",
@@ -1288,7 +1288,7 @@ Examples:
             pass
     elif not args.data_root and not args.stats_json:
         # Default to gaussian_train if neither dataset nor data-root specified
-        data_root = '/new_data/cyf/projects/SceneSplat/gaussian_train'
+        data_root = '/home/isom/cyf/SceneSplat/gaussian_train'
 
     # When using stats-json without data-root, we still need dataset config for HF data
     if args.stats_json and not data_root and not args.dataset:

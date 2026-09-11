@@ -20,18 +20,18 @@ SceneSplat Format:
 Usage:
     # Extract single scene
     python tools/extract_occamlgs_to_scenesplat.py \\
-        --input /new_data/cyf/projects/OccamLGS/output/LERF-origin/figurines \\
+        --input /home/isom/cyf/SceneSplat/projects/OccamLGS/output/LERF-origin/figurines \\
         --output gaussian_train_clip/lerf_ovs/train
 
     # Extract all scenes (recursive)
     python tools/extract_occamlgs_to_scenesplat.py \\
-        --input /new_data/cyf/projects/OccamLGS/output/LERF-origin \\
+        --input /home/isom/cyf/SceneSplat/projects/OccamLGS/output/LERF-origin \\
         --output gaussian_train_clip/lerf_ovs/train \\
         --recursive
 
     # Extract with SVD compression
     python tools/extract_occamlgs_to_scenesplat.py \\
-        --input /new_data/cyf/projects/OccamLGS/output/LERF-origin/figurines \\
+        --input /home/isom/cyf/SceneSplat/projects/OccamLGS/output/LERF-origin/figurines \\
         --output gaussian_train_clip/lerf_ovs/train \\
         --compress_svd
 """

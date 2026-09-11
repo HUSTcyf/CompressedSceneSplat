@@ -68,11 +68,11 @@ from tools.arguments import ModelParams, PipelineParams, OptimizationParams, get
 
 # Text embedding paths - using custom embeddings that match the visual feature model
 TEXT_EMBEDDING_PATHS = {
-    "lerf_ovs": "/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs_text_embeddings_custom.pt",
-    "3DOVS": "/new_data/cyf/projects/SceneSplat/datasets/3DOVS_text_embeddings_custom.pt",
+    "lerf_ovs": "/home/isom/cyf/SceneSplat/datasets/lerf_ovs_text_embeddings_custom.pt",
+    "3DOVS": "/home/isom/cyf/SceneSplat/datasets/3DOVS_text_embeddings_custom.pt",
 }
 TEXT_EMBEDDING_PATHS = {
-    "lerf_ovs": "/new_data/cyf/projects/OccamLGS/datasets/lerf_ovs_text_embeddings_clip_no_prefix.pt",
+    "lerf_ovs": "/home/isom/cyf/SceneSplat/projects/OccamLGS/datasets/lerf_ovs_text_embeddings_clip_no_prefix.pt",
 }
 feat_folder = "language_features_siglip2_sam2"
 feat_folder = "language_features"

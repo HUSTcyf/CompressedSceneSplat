@@ -14,7 +14,7 @@ This is a ONE-TIME computation - the resulting matrix can be reused for all scen
 Usage:
     # Compute projection matrix from one or multiple scenes
     python tools/compute_projection_matrix.py \
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train \
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train \
         --dataset 3DOVS \
         --split train \
         --output projection_matrix_768_to_16.npy
@@ -197,7 +197,7 @@ def main():
     parser.add_argument(
         "--data_root",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/gaussian_train",
+        default="/home/isom/cyf/SceneSplat/gaussian_train",
         help="Root directory containing datasets",
     )
     parser.add_argument(

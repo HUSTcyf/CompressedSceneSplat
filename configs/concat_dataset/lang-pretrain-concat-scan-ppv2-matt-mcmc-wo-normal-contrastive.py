@@ -79,15 +79,15 @@ scheduler = dict(
 param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset root
-repo_root = "/new_data/cyf/projects/SceneSplat"
-scannet_data_root = "/new_data/cyf/Datasets/SceneSplat7k/scannet" 
-# "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannet_3dgs_mcmc_preprocessed"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
+scannet_data_root = "/home/isom/cyf/SceneSplat/scannet" 
+# "/home/isom/cyf/SceneSplat/scannet_3dgs_mcmc_preprocessed"
 scannetpp_data_root = (
-    "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2"
+    "/home/isom/cyf/SceneSplat/scannetpp_v2"
 )
-matterport3d_data_root = "/new_data/cyf/Datasets/SceneSplat7k/matterport3d"
+matterport3d_data_root = "/home/isom/cyf/SceneSplat/matterport3d"
 holicity_data_root = (
-    "/new_data/cyf/Datasets/SceneSplat7k/holicity"
+    "/home/isom/cyf/SceneSplat/holicity"
 )
 
 # training settings

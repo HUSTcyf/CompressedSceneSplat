@@ -84,7 +84,7 @@ param_dicts = [dict(keyword="block", lr=0.0001)]
 # dataset settings
 dataset_type = "GenericGSDataset"
 data_root = (
-    "/insait/qimaqi/data/scannetpp_v2_fixed_preprocessed_nochunk/"
+    "/home/isom/cyf/SceneSplat/scannetpp_v2_fixed_preprocessed_nochunk/"
 )
 
 
@@ -96,12 +96,12 @@ hooks = [
 ]
 
 # TODO too long, refine
-scannetppv2_root = 'your_scannetppv2_root'  # please set your scannetppv2 root path
-scannet_root = 'your_scannet_root'  # please set your scannet root path
-threer_scans_root = 'your_3r_scans_root'  # please set your 3r scans root path
-arkitscenes_root = 'your_arkitscenes_root'  # please set your arkitscenes root path
-hypersim_root = 'your_hypersim_root'  # please set your hypersim root path
-matterport_root = 'your_matterport_root'  # please set your matterport root path
+scannetppv2_root = '/home/isom/cyf/SceneSplat/scannetpp_v2_fixed_preprocessed_nochunk'
+scannet_root = '/home/isom/cyf/SceneSplat/scannet_fixed_preprocessed_nochunk'
+threer_scans_root = '/home/isom/cyf/SceneSplat/3rscan'  # 需先上传 3RScan 数据集
+arkitscenes_root = '/home/isom/cyf/SceneSplat/arkitscenes'  # 需先上传 ARKitScenes 数据集
+hypersim_root = '/home/isom/cyf/SceneSplat/hypersim'  # 需先上传 Hypersim 数据集
+matterport_root = '/home/isom/cyf/SceneSplat/matterport3d'
 
 
 data = dict(

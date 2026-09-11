@@ -11,7 +11,7 @@ Usage:
 
     # Batch mode - all scenes in a dataset
     python batch_compress_lerf.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train_clip/lerf_ovs \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train_clip/lerf_ovs \\
         --dataset lerf_ovs --split train
 
     # Specify which feature sequences to process (default: 1,2,3)
@@ -107,7 +107,7 @@ Examples:
 
     # Batch mode - all scenes in lerf_ovs/train
     python batch_compress_lerf.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train_clip/lerf_ovs \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train_clip/lerf_ovs \\
         --dataset lerf_ovs --split train
 
     # Specify custom feature sequences (e.g., only 1 and 2)

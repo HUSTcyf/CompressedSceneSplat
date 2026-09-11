@@ -7,7 +7,7 @@ Usage:
         --input /path/to/semantic_instance \
         --output /path/to/output_dir
 
-Reference: visualize_obj function from /new_data/cyf/projects/Gaga/render.py
+Reference: visualize_obj function from /home/isom/cyf/SceneSplat/projects/Gaga/render.py
 """
 
 import os

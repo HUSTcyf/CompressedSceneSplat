@@ -9,8 +9,8 @@ This script measures:
 
 Usage:
     python tools/analysis/benchmark_procrustes_with_labels.py \\
-        --data_root /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/val \\
-        --text_embed /new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt \\
+        --data_root /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/val \\
+        --text_embed /home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt \\
         --svd_rank 16 \\
         --label_file lang_label.npy \\
         --num_runs 10 \\

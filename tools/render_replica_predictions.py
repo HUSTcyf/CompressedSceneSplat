@@ -10,21 +10,21 @@ Usage:
     # Single scene
     python tools/render_replica_predictions.py \\
         --scene office_0 \\
-        --checkpoint /new_data/cyf/projects/SceneSplat/output_features/max_0_depth_True_default_office_0/checkpoint_with_features_s.pth \\
+        --checkpoint /home/isom/cyf/CompressedSceneSplat/output_features/max_0_depth_True_default_office_0/checkpoint_with_features_s.pth \\
         --output-dir /path/to/output/masks
 
     # Batch processing - all scenes
     python tools/render_replica_predictions.py \\
         --batch \\
         --all-scenes \\
-        --features-base /new_data/cyf/projects/SceneSplat/output_features \\
+        --features-base /home/isom/cyf/CompressedSceneSplat/output_features \\
         --output-dir /path/to/output/masks
 
     # Batch processing - specific scenes
     python tools/render_replica_predictions.py \\
         --batch \\
         --scenes office_0 office_1 room_0 \\
-        --features-base /new_data/cyf/projects/SceneSplat/output_features \\
+        --features-base /home/isom/cyf/CompressedSceneSplat/output_features \\
         --output-dir /path/to/output/masks
 """
 
@@ -49,9 +49,9 @@ except ImportError:
     print("Warning: open_clip not available. Please install with: pip install open_clip_torch")
 
 # Default paths
-GAGA_ROOT = "/new_data/cyf/projects/Gaga/datasets/replica"  # For camera params and GT masks
-REPLICA_ROOT = "/new_data/cyf/Datasets/Replica"  # For semantic.json class definitions
-OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_masks"
+GAGA_ROOT = "/home/isom/cyf/SceneSplat/projects/Gaga/datasets/replica"  # For camera params and GT masks
+REPLICA_ROOT = "/home/isom/cyf/SceneSplat/Datasets/Replica"  # For semantic.json class definitions
+OUTPUT_ROOT = "/home/isom/cyf/CompressedSceneSplat/output_rendered_masks"
 
 # Replica dataset class names (from semantic.json)
 # These are the common semantic classes across Replica scenes
@@ -855,21 +855,21 @@ Examples:
   # Single scene with SigLIP2 (default, matches eval_3DOVS.sh)
   python tools/render_replica_predictions.py \\
       --scene office_0 \\
-      --checkpoint /new_data/cyf/projects/SceneSplat/output_features/max_0_depth_True_default_office_0/checkpoint_with_features_s.pth \\
+      --checkpoint /home/isom/cyf/CompressedSceneSplat/output_features/max_0_depth_True_default_office_0/checkpoint_with_features_s.pth \\
       --output-dir /path/to/output/masks
 
   # Batch process all default scenes with SigLIP2
   python tools/render_replica_predictions.py \\
       --batch \\
       --all-scenes \\
-      --features-base /new_data/cyf/projects/SceneSplat/output_features \\
+      --features-base /home/isom/cyf/CompressedSceneSplat/output_features \\
       --output-dir /path/to/output/masks
 
   # Batch process specific scenes
   python tools/render_replica_predictions.py \\
       --batch \\
       --scenes office_0 office_1 room_0 \\
-      --features-base /new_data/cyf/projects/SceneSplat/output_features \\
+      --features-base /home/isom/cyf/CompressedSceneSplat/output_features \\
       --output-dir /path/to/output/masks
 
   # Use fallback clustering instead of SigLIP2
@@ -877,7 +877,7 @@ Examples:
       --batch \\
       --all-scenes \\
       --no-use-siglip2 \\
-      --features-base /new_data/cyf/projects/SceneSplat/output_features \\
+      --features-base /home/isom/cyf/CompressedSceneSplat/output_features \\
       --output-dir /path/to/output/masks
         """
     )
@@ -896,7 +896,7 @@ Examples:
     parser.add_argument("--all-scenes", action="store_true",
                         help="Process all available scenes")
     parser.add_argument("--features-base", type=str,
-                        default="/new_data/cyf/projects/SceneSplat/output_features",
+                        default="/home/isom/cyf/CompressedSceneSplat/output_features",
                         help="Base directory for checkpoint files (batch mode)")
 
     # Common arguments

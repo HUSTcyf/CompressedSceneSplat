@@ -78,7 +78,7 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset settings
 dataset_type = "ScanNetPPGSDataset"
-data_root = "/home/yli7/scratch-shared/datasets/gaussian_world/preprocessed/scannetpp_v1_default_fix_xyz_gs"
+data_root = "/home/isom/cyf/SceneSplat/scannetpp_v1_default_fix_xyz_gs"
 feat_keys = ("color", "opacity", "quat", "scale", "normal")
 
 hooks = [
@@ -87,8 +87,8 @@ hooks = [
     dict(type="InformationWriter"),
     dict(
         type="LangPretrainZeroShotSemSegEval",
-        class_names="/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannetpp_v1_default_fix_xyz_gs/metadata/semantic_benchmark/top100.txt",
-        text_embeddings="/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannetpp_v1_default_fix_xyz_gs/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt",
+        class_names="/home/isom/cyf/SceneSplat/scannetpp_v1_default_fix_xyz_gs/metadata/semantic_benchmark/top100.txt",
+        text_embeddings="/home/isom/cyf/SceneSplat/scannetpp_v1_default_fix_xyz_gs/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt",
         excluded_classes=["wall", "floor", "ceiling"],
         ignore_index=-1,
         vote_k=25,

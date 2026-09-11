@@ -16,22 +16,22 @@ Usage:
     python tools/compress_grid_svd.py --data_dir /path/to/scene --grid_size 0.01
 
     # Batch mode - all scenes in a dataset (processes each scene separately)
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train
 
     # Batch mode - specific scenes
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --scenes scene1,scene2
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --scenes scene1,scene2
 
     # With custom ranks
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --ranks 8,16,32
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --ranks 8,16,32
 
     # Use CPU RPCA
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --gpu -1
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --gpu -1
 
     # Disable RPCA
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --no_rpca
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --no_rpca
 
     # Specify output directory
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --output_dir /path/to/output
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --output_dir /path/to/output
 """
 
 import os
@@ -57,7 +57,7 @@ except ImportError:
 from pointcept.models.utils.structure import Point
 
 # Import RPCA utilities
-from tools.rpca_utils import (
+from tools.compression.rpca_utils import (
     apply_rpca,
     RPCA_CPU_AVAILABLE,
     CUDA_AVAILABLE,
@@ -457,9 +457,15 @@ def compute_grid_average_features(
             
             assert grid_point_counts[grid_idx] == point_indices.shape[0]
 
-    non_zero_rows = grid_avg_feats.any(dim=1)
-    grid_avg_feats = grid_avg_feats[non_zero_rows]
-    grid_point_counts = grid_point_counts[grid_point_counts > 0]
+    # 原始实现（2026-08-02 替换）：按 avg 非零过滤。若某网格 count>0 但平均特征恰为
+    # 全零（理论缺陷，真实数据未触发），会被 compressed 漏掉而保留在 indices 中导致
+    # 后续行号错位。改为统一按 count>0 过滤，保证与 point_to_grid_indices 严格对齐。
+    # non_zero_rows = grid_avg_feats.any(dim=1)
+    # grid_avg_feats = grid_avg_feats[non_zero_rows]
+    # grid_point_counts = grid_point_counts[grid_point_counts > 0]
+    valid_grids = grid_point_counts > 0
+    grid_avg_feats = grid_avg_feats[valid_grids]
+    grid_point_counts = grid_point_counts[valid_grids]
     # Compute point_to_grid_indices from grid_to_point_indices (after reassignment)
     # Initialize with -1 (points not in any grid)
     point_to_grid_indices = np.full(N, -1, dtype=np.int64)
@@ -712,6 +718,8 @@ def save_svd_results(
 
         # Save compressed features and point-to-grid indices
         # This matches the loading logic in compute_grid.py
+        # 注意：磁盘数据保持原始（不做符号规范化），符号翻转在加载时执行
+        # （pointcept/utils/svd_sign.py 的 canonicalize_svd_sign，被数据集与训练器调用）
         compressed_feat = results["compressed"]
         indices = results["indices"]
 
@@ -907,19 +915,19 @@ Examples:
     python tools/compress_grid_svd.py --data_dir /path/to/scene --grid_size 0.01
 
     # Batch mode - all scenes in a dataset (each scene processed separately)
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train
 
     # Batch mode - specific scenes
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --scenes scene1,scene2
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --scenes scene1,scene2
 
     # With custom ranks
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --ranks 8,16,32
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --ranks 8,16,32
 
     # Use CPU for RPCA
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --device cpu
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --device cpu
 
     # Disable RPCA
-    python tools/compress_grid_svd.py --data_root /new_data/cyf/projects/SceneSplat/gaussian_train --dataset 3DOVS --split train --no_rpca
+    python tools/compress_grid_svd.py --data_root /home/isom/cyf/SceneSplat/gaussian_train --dataset 3DOVS --split train --no_rpca
         """
     )
 
@@ -933,7 +941,7 @@ Examples:
     parser.add_argument(
         "--data_root",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/gaussian_train",
+        default="/home/isom/cyf/SceneSplat/gaussian_train",
         help="Root directory containing datasets (batch mode)",
     )
     parser.add_argument(

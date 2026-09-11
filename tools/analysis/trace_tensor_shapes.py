@@ -235,7 +235,7 @@ def main():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/exp/lite-768/model/model_last.pth",
+        default="/home/isom/cyf/CompressedSceneSplat/exp/lite-768/model/model_last.pth",
         help="Path to model checkpoint",
     )
     parser.add_argument(

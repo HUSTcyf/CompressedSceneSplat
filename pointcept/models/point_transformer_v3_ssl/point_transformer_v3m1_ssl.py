@@ -172,7 +172,7 @@ class SerializedAttention(PointModule):
     def forward(self, point):
         if not self.enable_flash:
             self.patch_size = min(
-                offset2bincount(point.offset).min().tolist(), self.patch_size_max
+                offset2bincount(point.offset)[1:].min().tolist(), self.patch_size_max
             )
             # print("No flash", self.patch_size)
 

@@ -66,6 +66,8 @@ class Criteria(object):
                     name = "l1_loss"
                 elif name == "svdweightedl1loss":
                     name = "l1_loss"
+                elif name == "classmeanprocrustesloss":
+                    name = "class_loss"
                 elif name == "rendered2dloss":
                     name = "rendered2d_loss"
 
@@ -76,8 +78,9 @@ class Criteria(object):
             l1_val = loss_values.get('l1_loss', 0.0)
             cos_val = loss_values.get('cos_loss', 0.0)
             contrast_val = loss_values.get('contrast_loss', 0.0)
+            class_val = loss_values.get('class_loss', 0.0)
             total_val = loss.detach().item()
-            print(f"L1={l1_val:.6f}, Cos={cos_val:.6f}, Contrast={contrast_val:.6f}, Total={total_val:.6f}", flush=True)
+            print(f"Class={class_val:.6f}, Cos={cos_val:.6f}, L1={l1_val:.6f}, Contrast={contrast_val:.6f}, Total={total_val:.6f}", flush=True)
 
             # Return total loss, individual loss values, and per-dimension losses
             return loss, loss_values, per_dim_losses, per_dim_weights

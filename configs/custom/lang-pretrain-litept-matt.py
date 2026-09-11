@@ -225,8 +225,8 @@ save_path = "exp/lite-16-matt-gridsvd"
 # Dataset settings
 # ============================================================================
 dataset_type = "Matterport3D_160_GSDataset"
-repo_root = "/new_data/cyf/projects/SceneSplat"
-matterport3d_data_root = "/new_data/cyf/Datasets/SceneSplat7k/matterport3d"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
+matterport3d_data_root = "/home/isom/cyf/SceneSplat/matterport3d"
 
 class_names_path = f"{repo_root}/pointcept/datasets/preprocessing/matterport3d/meta_data/matterport_nyu160_labels.txt"
 text_embeddings_path = f"{repo_root}/pointcept/datasets/preprocessing/matterport3d/meta_data/matterport-nyu160_text_embeddings_siglip2.pt"

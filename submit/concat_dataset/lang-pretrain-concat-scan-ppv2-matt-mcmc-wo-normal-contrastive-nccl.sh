@@ -14,7 +14,7 @@ micromamba activate scene_splat
 
 module purge
 module load 2023
-module load CUDA/12.4.0
+module load CUDA/12.8
 
 echo "Running on $(hostname) | $(date)"
 MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)

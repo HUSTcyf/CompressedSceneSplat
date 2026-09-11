@@ -31,6 +31,141 @@ from tools.compute_procrustes_alignment_simple import (
 )
 
 
+def _muse_get_nn_avg_dist(emb, query, knn):
+    """Official MUSE get_nn_avg_dist (facebookresearch/MUSE, src/utils.py:134,
+    torch fallback branch): mean cosine to the knn nearest neighbors."""
+    bs = 1024
+    all_distances = []
+    emb_t = emb.transpose(0, 1).contiguous()
+    for i in range(0, query.shape[0], bs):
+        distances = query[i : i + bs].mm(emb_t)
+        best_distances, _ = distances.topk(knn, dim=1, largest=True, sorted=True)
+        all_distances.append(best_distances.mean(1).cpu())
+    return torch.cat(all_distances).numpy()
+
+
+def _muse_get_candidates(src, tgt, csls_knn):
+    """Official MUSE get_candidates csls_knn branch
+    (facebookresearch/MUSE, src/dico_builder.py:74-100).
+    Returns (src_idx, tgt_idx) pairs ordered by confidence (top1-top2 gap)."""
+    bs = 128
+    avg1 = torch.from_numpy(_muse_get_nn_avg_dist(tgt, src, csls_knn)).type_as(src)
+    avg2 = torch.from_numpy(_muse_get_nn_avg_dist(src, tgt, csls_knn)).type_as(src)
+    all_scores, all_targets = [], []
+    n_src = src.size(0)
+    for i in range(0, n_src, bs):
+        scores = tgt.mm(src[i : min(n_src, i + bs)].transpose(0, 1)).transpose(0, 1)
+        scores.mul_(2)
+        scores.sub_(avg1[i : min(n_src, i + bs)][:, None] + avg2[None, :])
+        best_scores, best_targets = scores.topk(2, dim=1, largest=True, sorted=True)
+        all_scores.append(best_scores.cpu())
+        all_targets.append(best_targets.cpu())
+    all_scores = torch.cat(all_scores, 0)
+    all_targets = torch.cat(all_targets, 0)
+    pairs = torch.cat(
+        [
+            torch.arange(all_targets.size(0)).long().unsqueeze(1),
+            all_targets[:, 0].unsqueeze(1),
+        ],
+        1,
+    )
+    # order by confidence (top1 - top2 gap), keep top half (MUSE dico_max_rank analog)
+    diff = all_scores[:, 0] - all_scores[:, 1]
+    reordered = diff.sort(0, descending=True)[1]
+    return pairs[reordered]
+
+
+def _muse_build_dictionary(src, tgt, csls_knn=10):
+    """Official MUSE build_dictionary with dico_build='S2T&T2S'
+    (facebookresearch/MUSE, src/dico_builder.py:143-178): intersection of the
+    two directional candidate sets (mutual nearest neighbors)."""
+    s2t = _muse_get_candidates(src, tgt, csls_knn)
+    t2s = _muse_get_candidates(tgt, src, csls_knn)
+    t2s = torch.cat([t2s[:, 1:], t2s[:, :1]], 1)  # swap -> (src, tgt)
+    s2t_set = set((int(a), int(b)) for a, b in s2t.numpy())
+    t2s_set = set((int(a), int(b)) for a, b in t2s.numpy())
+    final = s2t_set & t2s_set
+    if not final:
+        return None
+    return torch.LongTensor(sorted(final))
+
+
+def _cluster_cells(X, k, seed=0):
+    """k-means on L2-normalized cell features (cosine semantics), scikit-learn.
+    Returns [k, d] float32 numpy centroids (unnormalized)."""
+    from sklearn.cluster import KMeans
+
+    Xn = X.cpu().numpy()
+    norms = np.linalg.norm(Xn, axis=1, keepdims=True)
+    Xn = Xn / (norms + 1e-8)  # cosine-space clustering
+    km = KMeans(n_clusters=k, n_init=3, random_state=seed)
+    km.fit(Xn)
+    return km.cluster_centers_.astype(np.float32)
+
+
+def unsupervised_procrustes_align(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    n_clusters: int = 200,
+    n_iter: int = 5,
+    csls_knn: int = 10,
+    seed: int = 0,
+):
+    """Unsupervised alignment following the official MUSE self-learning recipe
+    (Conneau et al. 2018; facebookresearch/MUSE src/dico_builder.py + trainer.py):
+
+    X: [N, d] cell features (model output), Y: [C, d] text embeddings.
+    1) minibatch k-means on X -> n_clusters centroids (surrogate word table).
+    2) iterate n_iter times:
+       a. CSLS similarity between (rotated) centroids and text embeddings;
+       b. build the training dictionary as the S2T&T2S intersection
+          (mutual nearest neighbors), ordered by confidence;
+       c. orthogonal Procrustes on the dictionary pairs (official closed form
+          Q = U·Vt from SVD of B^T A), and rotate the centroids.
+    Returns (Q, metrics). No labels of any kind are used.
+    """
+    import numpy as np
+
+    d = X.shape[1]
+    k = min(n_clusters, X.shape[0])
+    Xn = X.cpu().numpy()
+    Yn = F.normalize(Y, p=2, dim=1)
+
+    centers = _cluster_cells(X, k, seed=seed)
+    centroids = F.normalize(
+        torch.from_numpy(centers).float().to(X.device), p=2, dim=1
+    )  # [k, d]
+
+    Q = torch.eye(d, device=X.device)
+    cos_before = None
+    n_mutual = 0
+    for it in range(n_iter):
+        src_rot = torch.mm(centroids, Q)  # rotate centroids by current Q
+        dico = _muse_build_dictionary(src_rot, Yn, csls_knn=csls_knn)
+        if dico is None or dico.size(0) < 2:
+            break
+        n_mutual = dico.size(0)
+        if it == 0:
+            cos_before = torch.mm(src_rot, Yn.t()).mean().item()
+        # official procrustes: M = B^T A, Q = U·Vt (MUSE trainer.py:169-180)
+        A = src_rot[dico[:, 0]]
+        B = Yn[dico[:, 1]]
+        M = torch.mm(B.t(), A).cpu().numpy()
+        U, _, V_t = np.linalg.svd(M, full_matrices=True)
+        Qnew = torch.from_numpy(U.dot(V_t)).float().to(X.device)
+        # det fix (proper rotation)
+        if torch.det(Qnew) < 0:
+            U[:, -1] *= -1
+            Qnew = torch.from_numpy(U.dot(V_t)).float().to(X.device)
+        Q = Qnew
+    cos_after = torch.mm(torch.mm(centroids, Q), Yn.t()).mean().item()
+    return Q, dict(
+        cosine_before=cos_before if cos_before is not None else 0.0,
+        cosine_after=cos_after,
+        n_mutual=n_mutual,
+    )
+
+
 TESTERS = Registry("testers")
 
 
@@ -140,6 +275,13 @@ class ZeroShotSemSegTester(TesterBase):
         # New parameters for SVD + Procrustes alignment
         svd_rank=None,
         use_procrustes=True,
+        svd_center=False,
+        # 2026-08-04 reviewer Q2/Q1 消融：
+        #   procrustes_mode: "oracle"(GT 对应,默认) | "pred"(预测对应) | "none"(无对齐)
+        #   procrustes_perturb: "none"(默认) | "flip"(输入特征随机符号翻转) | "rotate"(随机正交旋转)
+        #   （flip/rotate 模拟等价 SVD 基；数学上 mIoU 应不变 = 基歧义鲁棒性自检）
+        procrustes_mode="oracle",
+        procrustes_perturb="none",
         **kwargs,
     ):
         super().__init__(cfg, model, test_loader, verbose, **kwargs)
@@ -166,6 +308,37 @@ class ZeroShotSemSegTester(TesterBase):
         # SVD and Procrustes configuration
         self.svd_rank = cfg["test"].get("svd_rank", svd_rank)
         self.use_procrustes = cfg["test"].get("use_procrustes", use_procrustes)
+        self.svd_center = cfg["test"].get("svd_center", svd_center)
+        # 2026-08-04 reviewer 消融参数
+        self.procrustes_mode = cfg["test"].get("procrustes_mode", procrustes_mode)
+        self.procrustes_perturb = cfg["test"].get("procrustes_perturb", procrustes_perturb)
+        # 2026-08-05 特征集成：weight_list = 额外 checkpoint 路径列表，前向特征取平均
+        self.weight_list = cfg["test"].get("weight_list", [])
+        # 2026-08-06 类频率校准：class_bias_alpha>0 时稀有类 logits 加正偏置
+        # bias_c = alpha * (1 - freq_c / max_freq)（分割任务标准类不平衡校准）
+        self.class_bias_alpha = cfg["test"].get("class_bias_alpha", 0.0)
+        self.extra_models = []
+        for w in self.weight_list:
+            m = build_model(self.cfg.model)
+            m = create_ddp_model(
+                m.cuda(),
+                broadcast_buffers=False,
+                find_unused_parameters=self.cfg.find_unused_parameters,
+            )
+            checkpoint = torch.load(w)
+            weight = OrderedDict()
+            for key, value in checkpoint["state_dict"].items():
+                if key.startswith("module."):
+                    if comm.get_world_size() == 1:
+                        key = key[7:]
+                else:
+                    if comm.get_world_size() > 1:
+                        key = "module." + key
+                weight[key] = value
+            m.load_state_dict(weight, strict=True)
+            m.eval()  # 2026-08-05: 必须 eval 模式（train 分支会访问 lang_feat）
+            self.logger.info(f"=> Loaded extra weight '{w}'")
+            self.extra_models.append(m)
 
         class_names = cfg["test"].get("class_names", class_names)
         text_embeddings = cfg["test"].get("text_embeddings", text_embeddings)
@@ -198,7 +371,10 @@ class ZeroShotSemSegTester(TesterBase):
                 logger.info(f"Applying SVD reduction to text embeddings: "
                           f"[{text_emb_tensor.shape}] -> [{text_emb_tensor.shape[0]}, {self.svd_rank}]")
                 text_emb_np = text_emb_tensor.cpu().numpy() if isinstance(text_emb_tensor, torch.Tensor) else text_emb_tensor
-                text_emb_reduced, _, _ = perform_svd_reduction(text_emb_np, self.svd_rank, normalize=True)
+                text_emb_reduced, _, _ = perform_svd_reduction(text_emb_np, self.svd_rank, normalize=False)
+                if self.svd_center:
+                    # 与训练目标一致：目标去均值（场景偏移移除）→ text 也去类均值
+                    text_emb_reduced = text_emb_reduced - text_emb_reduced.mean(axis=0)
                 self.text_embeddings = F.normalize(torch.from_numpy(text_emb_reduced), p=2, dim=1).cuda()
                 self.text_embeddings_dim = self.svd_rank
             else:
@@ -331,7 +507,8 @@ class ZeroShotSemSegTester(TesterBase):
                     self.cfg.data.test.type == "ScanNetPPDataset"
                     or "ScanNetPP" in self.cfg.data.test.type
                 ):
-                    pred = pred[:, 0]  # we save top-3 classes for ScanNetPP
+                    # 兼容 1D 旧缓存（2026-08-03：旧版保存了 top-1 而非 top-3）
+                    pred = pred[:, 0] if pred.ndim > 1 else pred
             else:
                 num_points = (
                     segment.size if segment is not None else data_dict["coord"].shape[0]
@@ -353,6 +530,8 @@ class ZeroShotSemSegTester(TesterBase):
                 # Buffer for accumulating raw features (for Procrustes alignment)
                 accumulated_features = torch.zeros((num_points, feat_dim), device="cuda")
                 feature_counts = torch.zeros(num_points, device="cuda")
+                # 修复（2026-08-03）：每 cell 代表点（原始点索引），Q 拟合取 cell 标签用
+                rep_point = torch.full((num_points,), num_points, dtype=torch.long, device="cuda")
 
                 # Buffer for final probabilities (after alignment)
                 pred = torch.zeros((num_points, num_classes), device="cuda")
@@ -382,8 +561,25 @@ class ZeroShotSemSegTester(TesterBase):
                         pred_part_feat = out_dict["point_feat"][
                             "feat"
                         ]  # shape [M, feat_dim]
+                        # 与训练一致：DensityInvariantTrainer 输出 tanh(backbone)，
+                        # LangPretrainer test 分支返回的是 backbone 原始输出（无 tanh），
+                        # 缺失 tanh 会扭曲方向空间导致评测失败（2026-08-03 修复）
+                        pred_part_feat = torch.tanh(pred_part_feat)
+                        # 2026-08-05 特征集成：额外模型前向取平均（tanh 后平均）
+                        for m in self.extra_models:
+                            out_i = m(input_dict, chunk_size=600000)
+                            pred_part_feat = pred_part_feat + torch.tanh(
+                                out_i["point_feat"]["feat"]
+                            )
+                        if self.extra_models:
+                            pred_part_feat = pred_part_feat / (1 + len(self.extra_models))
 
                     # Accumulate raw features (will compute logits after Procrustes alignment)
+                    # 说明（2026-08-03 排查后确认）：GridSample(mode=train) 输出的
+                    # input_dict["index"] = 行号（0..n_cells-1，每 cell 一个代表点），
+                    # 即"cell 编号"本身；按行号 scatter 即按 cell 编号组织特征 ✓ 正确。
+                    # 真正的错位在 Q 拟合（点级 valid_mask 取 cell 特征行 + 点级标签，
+                    # 行序不对应）——见下方 Q 拟合处的修复。
                     bs = 0
                     for be in offset_list:
                         accumulated_features[idx_part[bs:be], :] += pred_part_feat[bs:be]
@@ -406,6 +602,25 @@ class ZeroShotSemSegTester(TesterBase):
                 # ---------------------------------------------------------------------
                 # Apply Procrustes alignment if enabled
                 # ---------------------------------------------------------------------
+                # 2026-08-04 reviewer Q1 消融：模拟等价 SVD 基（符号翻转/正交旋转）。
+                # 数学上 Q 拟合吸收线性变换（X R → Q' = R^T Q → X R Q' = X Q），
+                # mIoU 应与不扰动完全一致——用于验证评测链对基歧义的鲁棒性。
+                if self.procrustes_perturb == "flip":
+                    rng = np.random.RandomState(0)
+                    signs = torch.from_numpy(
+                        rng.choice([-1.0, 1.0], size=(1, accumulated_features.shape[1]))
+                    ).to(accumulated_features.device)
+                    accumulated_features = accumulated_features * signs
+                    logger.info(f"  [perturb] random sign flip applied (d={accumulated_features.shape[1]})")
+                elif self.procrustes_perturb == "rotate":
+                    from scipy.stats import ortho_group
+                    d = accumulated_features.shape[1]
+                    R = torch.from_numpy(ortho_group.rvs(d, random_state=0)).float().to(
+                        accumulated_features.device
+                    )
+                    accumulated_features = torch.mm(accumulated_features, R)
+                    logger.info(f"  [perturb] random orthogonal rotation applied (d={d})")
+
                 if self.use_procrustes and self.text_embeddings is not None:
                     logger.info(f"Applying Procrustes alignment for scene '{data_name}'...")
 
@@ -420,24 +635,74 @@ class ZeroShotSemSegTester(TesterBase):
                             segment = segment.cuda()
 
                         # Filter out ignored points (where segment == ignore_index)
-                        valid_mask = segment != self.ignore_index
-                        if valid_mask.sum() > 0:
-                            # Only use valid points for Procrustes
-                            valid_features = accumulated_features[valid_mask]
-                            valid_labels = segment[valid_mask]
-
-                            # Use label-based aggregation (efficient, no sampling)
-                            Q, metrics = compute_procrustes_Q_cuda_with_labels(
-                                valid_features, self.text_embeddings, valid_labels
-                            )
-
-                            logger.info(f"  Procrustes: det(Q)={metrics['det_Q']:.4f}, "
-                                      f"cosine: {metrics['cosine_before']:.4f} -> {metrics['cosine_after']:.4f}")
-
-                            # Apply Q alignment to all features
-                            accumulated_features = torch.mm(accumulated_features, Q)
+                        # 修复（2026-08-03）：Q 拟合改用 cell 级特征 + cell 代表点标签。
+                        # 原实现按点级 valid_mask 取 accumulated_features（行 = cell 编号，
+                        # 704242 个非零 cell 行 + 73408 个零行）并配点级 segment 标签——
+                        # 特征行序（cell 编号序）与标签行序（原始点序）不对应，Q 拟合
+                        # 被完全错位的标签污染（完美 GT 特征走链 mIoU=0%，独立上界脚本
+                        # 同数据 41.8%）。修复：feature_counts>0 的行即 cell 行（无零行），
+                        # cell 标签 = 该 cell 内首个原始点（np.unique(inverse) 反查）的标签，
+                        # 与 diag_fixed2 上界脚本（unique(idx, return_index=True)）同语义。
+                        if "inverse" in data_dict and isinstance(data_dict["inverse"], np.ndarray):
+                            cell_mask = feature_counts > 0
+                            inv = data_dict["inverse"]
+                            # 每 cell 内首个原始点位置（np.unique 首个出现 = 与上界脚本一致）
+                            cell_rep = np.unique(inv, return_index=True)[1]
+                            cell_labels = segment[cell_rep]
+                            valid_cells = cell_labels != self.ignore_index
+                            if valid_cells.sum() > 0:
+                                if self.procrustes_mode == "none":
+                                    logger.info(f"  [mode=none] skipping Procrustes (raw logits)")
+                                    Q = None
+                                else:
+                                    # 2026-08-04 reviewer Q2 消融：oracle(GT 对应) vs pred(预测对应)
+                                    if self.procrustes_mode == "pred":
+                                        logits0 = torch.mm(
+                                            accumulated_features[cell_mask][valid_cells],
+                                            self.text_embeddings.t(),
+                                        )
+                                        torch.sigmoid_(logits0)
+                                        fit_labels = logits0.argmax(dim=1)
+                                        logger.info(f"  [mode=pred] fitting Q with predicted labels")
+                                    elif self.procrustes_mode == "unsup":
+                                        # 2026-08-04 MUSE-style unsupervised alignment:
+                                        # k-means cluster -> mutual-NN correspondences -> iterative Procrustes
+                                        Q, metrics = unsupervised_procrustes_align(
+                                            accumulated_features[cell_mask][valid_cells],
+                                            self.text_embeddings,
+                                        )
+                                        logger.info(f"  [mode=unsup] unsupervised alignment: "
+                                                  f"cosine: {metrics['cosine_before']:.4f} -> {metrics['cosine_after']:.4f}, "
+                                                  f"mutual-NN: {metrics.get('n_mutual', 0)}")
+                                        fit_labels = None
+                                    else:  # oracle（默认，与历史行为一致）
+                                        fit_labels = cell_labels[valid_cells]
+                                    if fit_labels is not None:
+                                        Q, metrics = compute_procrustes_Q_cuda_with_labels(
+                                            accumulated_features[cell_mask][valid_cells],
+                                            self.text_embeddings,
+                                            fit_labels,
+                                        )
+                                        logger.info(f"  Procrustes: det(Q)={metrics['det_Q']:.4f}, "
+                                                  f"cosine: {metrics['cosine_before']:.4f} -> {metrics['cosine_after']:.4f}")
+                                    # Apply Q alignment to all features
+                                    accumulated_features = torch.mm(accumulated_features, Q)
+                            else:
+                                logger.warning(f"  No valid cells (all are ignore_index={self.ignore_index}), skipping Procrustes")
                         else:
-                            logger.warning(f"  No valid labels (all are ignore_index={self.ignore_index}), skipping Procrustes")
+                            # 旧路径（无 inverse 的数据集）：保持原逻辑
+                            valid_mask = segment != self.ignore_index
+                            if valid_mask.sum() > 0:
+                                valid_features = accumulated_features[valid_mask]
+                                valid_labels = segment[valid_mask]
+                                Q, metrics = compute_procrustes_Q_cuda_with_labels(
+                                    valid_features, self.text_embeddings, valid_labels
+                                )
+                                logger.info(f"  Procrustes: det(Q)={metrics['det_Q']:.4f}, "
+                                          f"cosine: {metrics['cosine_before']:.4f} -> {metrics['cosine_after']:.4f}")
+                                accumulated_features = torch.mm(accumulated_features, Q)
+                            else:
+                                logger.warning(f"  No valid labels (all are ignore_index={self.ignore_index}), skipping Procrustes")
                     else:
                         logger.warning(f"  No GT labels available for scene '{data_name}', skipping Procrustes")
 
@@ -447,6 +712,27 @@ class ZeroShotSemSegTester(TesterBase):
                 if self.text_embeddings is not None:
                     # Compute logits matrix multiplication
                     logits = torch.mm(accumulated_features, self.text_embeddings.t())
+                    # 2026-08-06 类频率校准：稀有类正偏置（类不平衡标准技术）
+                    if self.class_bias_alpha > 0 and segment is not None:
+                        seg_np = (
+                            segment.cpu().numpy()
+                            if isinstance(segment, torch.Tensor)
+                            else segment
+                        )
+                        counts = np.bincount(
+                            seg_np[seg_np >= 0].astype(np.int64),
+                            minlength=self.text_embeddings.shape[0],
+                        ).astype(np.float64)
+                        if counts.sum() > 0:
+                            freq = counts / counts.sum()
+                            bias = self.class_bias_alpha * (1.0 - freq / freq.max())
+                            logits = logits + torch.from_numpy(bias).float().to(
+                                logits.device
+                            )
+                            logger.info(
+                                f"  [class_bias] alpha={self.class_bias_alpha}, "
+                                f"bias range=[{bias.min():.3f}, {bias.max():.3f}]"
+                            )
                     # In-place sigmoid to reuse memory: logits becomes pred
                     torch.sigmoid_(logits)  # [num_points, num_classes]
                     pred = logits  # pred now shares memory with logits

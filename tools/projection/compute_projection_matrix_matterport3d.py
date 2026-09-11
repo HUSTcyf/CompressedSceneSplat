@@ -15,14 +15,14 @@ Option 2: Extract/use 768-dim subset from 1152-dim features
 Usage:
     # Compute from val data (1152-dim -> 16-dim)
     python tools/compute_projection_matrix_matterport3d.py \\
-        --data_root /new_data/cyf/Datasets/SceneSplat7k/matterport3d \\
+        --data_root /home/isom/cyf/SceneSplat/matterport3d \\
         --split val \\
         --svd_rank 16 \\
         --output projection_matrix_1152_to_16.npy
 
     # Compute for 768-dim text embeddings (using subset)
     python tools/compute_projection_matrix_matterport3d.py \\
-        --data_root /new_data/cyf/Datasets/SceneSplat7k/matterport3d \\
+        --data_root /home/isom/cyf/SceneSplat/matterport3d \\
         --split val \\
         --svd_rank 16 \\
         --text_dim 768 \\

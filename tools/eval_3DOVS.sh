@@ -13,8 +13,8 @@
 #   2. SigLIP2 (768-dim): Set ENCODER="siglip2" (default)
 
 # Base paths
-FEAT_BASE_PATH="/new_data/cyf/projects/SceneSplat/gaussian_results/3DOVS"
-GT_BASE_PATH="/new_data/cyf/projects/OccamLGS/datasets/3DOVS"
+FEAT_BASE_PATH="/home/isom/cyf/CompressedSceneSplat/gaussian_results/3DOVS"
+GT_BASE_PATH="/home/isom/cyf/SceneSplat/projects/OccamLGS/datasets/3DOVS"
 
 # Name of the folder containing extracted features
 # Should match output from feature rendering pipeline

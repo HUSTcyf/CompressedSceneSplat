@@ -79,14 +79,14 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 
 # dataset root
 dataset_type = "ScanNetPPGSDataset"
-repo_root = "/home/yli7/projects/release/SceneSplat"
-scannet_data_root = "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannet_3dgs_mcmc_preprocessed"
+repo_root = "/home/isom/cyf/CompressedSceneSplat"
+scannet_data_root = "/home/isom/cyf/SceneSplat/scannet_3dgs_mcmc_preprocessed"
 scannetpp_data_root = (
-    "/home/yli7/scratch/datasets/gaussian_world/preprocessed/scannetpp_v2_mcmc_3dgs"
+    "/home/isom/cyf/SceneSplat/scannetpp_v2_mcmc_3dgs"
 )
-matterport3d_data_root = "/home/yli7/scratch/datasets/gaussian_world/preprocessed/matterport3d_region_mcmc_3dgs"
+matterport3d_data_root = "/home/isom/cyf/SceneSplat/matterport3d_region_mcmc_3dgs"
 holicity_data_root = (
-    "/home/yli7/scratch/datasets/gaussian_world/preprocessed/holicity_mcmc_3dgs"
+    "/home/isom/cyf/SceneSplat/holicity_mcmc_3dgs"
 )
 
 hooks = [

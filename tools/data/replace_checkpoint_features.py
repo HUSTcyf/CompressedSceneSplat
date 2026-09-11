@@ -15,12 +15,12 @@ Usage:
 
     # Custom paths
     python tools/replace_checkpoint_features.py --all \\
-        --output_dir /new_data/cyf/projects/SceneSplat/output_features \\
-        --gaussian_train /new_data/cyf/projects/SceneSplat/gaussian_train
+        --output_dir /home/isom/cyf/CompressedSceneSplat/output_features \\
+        --gaussian_train /home/isom/cyf/SceneSplat/gaussian_train
 
     # Direct feature file path (override gaussian_train search)
     python tools/replace_checkpoint_features.py --scene figurines \\
-        --feat_path /new_data/cyf/projects/SceneSplat/output_features/figurines/language_features_768d.npy
+        --feat_path /home/isom/cyf/CompressedSceneSplat/output_features/figurines/language_features_768d.npy
 """
 
 import argparse
@@ -388,13 +388,13 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/output_features",
+        default="/home/isom/cyf/CompressedSceneSplat/output_features",
         help="Directory containing scene checkpoints (default: output_features)",
     )
     parser.add_argument(
         "--gaussian_train",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/gaussian_train",
+        default="/home/isom/cyf/SceneSplat/gaussian_train",
         help="Directory containing scene data with lang_feat.npy (default: gaussian_train)",
     )
 

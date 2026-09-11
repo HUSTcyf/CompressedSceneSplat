@@ -374,11 +374,20 @@ class PreciseEvaluator(HookBase):
                 best_path = os.path.join(
                     self.trainer.cfg.save_path, "model", "model_best.pth"
                 )
-                self.trainer.logger.info("=> Testing on model_best...")
-                checkpoint = torch.load(best_path)
-                state_dict = checkpoint["state_dict"]
-                tester.model.load_state_dict(state_dict, strict=True)
-                self.trainer.logger.info(f"Loaded ckpt from {best_path}")
+                if os.path.exists(best_path):
+                    self.trainer.logger.info("=> Testing on model_best...")
+                    # 训练 checkpoint 含 numpy.dtype 等对象，PyTorch 2.6+ 默认 weights_only=True 会拒绝
+                    # （与 CheckpointLoader 的加载方式保持一致，2026-08-03 修复）
+                    checkpoint = torch.load(best_path, weights_only=False)
+                    state_dict = checkpoint["state_dict"]
+                    tester.model.load_state_dict(state_dict, strict=True)
+                    self.trainer.logger.info(f"Loaded ckpt from {best_path}")
+                else:
+                    # model_best 从未保存（如 Best mIoU = -inf）时，fallback 到当前权重，
+                    # 避免 after_train 崩溃导致评测中断（2026-08-03 修复）
+                    self.trainer.logger.warning(
+                        f"model_best.pth not found at {best_path}, testing current weights"
+                    )
             tester.test()
         elif isinstance(cfg.test, list):
             for i, test_cfg in enumerate(cfg.test):
@@ -393,9 +402,15 @@ class PreciseEvaluator(HookBase):
                     best_path = os.path.join(
                         self.trainer.cfg.save_path, "model", "model_best.pth"
                     )
-                    self.trainer.logger.info("=> Testing on model_best...")
-                    load_checkpoint(tester.model, best_path)
-                    self.trainer.logger.info(f"Loaded ckpt from {best_path}")
+                    if os.path.exists(best_path):
+                        self.trainer.logger.info("=> Testing on model_best...")
+                        load_checkpoint(tester.model, best_path)
+                        self.trainer.logger.info(f"Loaded ckpt from {best_path}")
+                    else:
+                        # model_best 从未保存时 fallback 到当前权重（2026-08-03 修复）
+                        self.trainer.logger.warning(
+                            f"model_best.pth not found at {best_path}, testing current weights"
+                        )
                 tester.test()
                 del tester
                 torch.cuda.empty_cache()
@@ -419,11 +434,18 @@ class BeginningEvaluator(HookBase):  # for testing
             if self.test_last:
                 self.trainer.logger.info("=> Testing on model_last (current weight)...")
             else:
-                self.trainer.logger.info("=> Testing on model_best ...")
                 best_path = os.path.join(
                     self.trainer.cfg.save_path, "model", "model_best.pth"
                 )
-                checkpoint = torch.load(best_path)
+                if not os.path.exists(best_path):
+                    # 从未保存过 best（如第一次训练尚未评测）时跳过评测（2026-08-03 修复）
+                    self.trainer.logger.warning(
+                        f"model_best.pth not found at {best_path}, skip evaluation"
+                    )
+                    return
+                self.trainer.logger.info("=> Testing on model_best ...")
+                # 训练 checkpoint 含 numpy.dtype 等对象，需 weights_only=False（2026-08-03 修复）
+                checkpoint = torch.load(best_path, weights_only=False)
                 self.trainer.logger.info(f"Loading ckpt from {best_path}")
                 state_dict = checkpoint["state_dict"]
                 tester.model.load_state_dict(state_dict, strict=True)
@@ -438,12 +460,19 @@ class BeginningEvaluator(HookBase):  # for testing
                         "=> Testing on model_last (current weight)..."
                     )
                 else:
-                    self.trainer.logger.info("=> Testing on model_best ...")
                     best_path = os.path.join(
                         self.trainer.cfg.save_path, "model", "model_best.pth"
                     )
-                    load_checkpoint(tester.model, best_path)
-                    self.trainer.logger.info(f"Loading ckpt from {best_path}")
+                    if os.path.exists(best_path):
+                        self.trainer.logger.info("=> Testing on model_best ...")
+                        load_checkpoint(tester.model, best_path)
+                        self.trainer.logger.info(f"Loading ckpt from {best_path}")
+                    else:
+                        # 从未保存过 best 时跳过评测（2026-08-03 修复）
+                        self.trainer.logger.warning(
+                            f"model_best.pth not found at {best_path}, skip evaluation"
+                        )
+                        continue
                 tester.test()
                 del tester
                 torch.cuda.empty_cache()

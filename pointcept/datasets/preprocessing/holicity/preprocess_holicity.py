@@ -8,9 +8,9 @@ For each scene listed in train.txt, val.txt, or test.txt, this script:
 
 Usage:
     python preprocess_holicity.py \
-        --input_root /home/yli7/scratch/datasets/holicity/perspective/collected_by_region \
-        --split_dir /home/yli7/scratch/datasets/holicity/splits/ours \
-        --output_root /home/yli7/scratch/datasets/ptv3_preprocessed/holicity
+        --input_root /home/isom/cyf/SceneSplat/holicity/perspective/collected_by_region \
+        --split_dir /home/isom/cyf/SceneSplat/holicity/splits/ours \
+        --output_root /home/isom/cyf/SceneSplat/holicity
 """
 
 import os
@@ -30,7 +30,7 @@ def parse_args():
     )
     parser.add_argument(
         "--split_dir",
-        default="/home/yli7/scratch/datasets/holicity/splits/ours",
+        default="/home/isom/cyf/SceneSplat/holicity/splits/ours",
         help="Folder containing train.txt, val.txt, test.txt",
     )
     parser.add_argument(

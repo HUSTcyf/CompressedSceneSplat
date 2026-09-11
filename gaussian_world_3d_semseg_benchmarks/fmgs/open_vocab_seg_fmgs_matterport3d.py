@@ -96,18 +96,18 @@ def main():
 
     val_split_path = (
         args.val_split_path
-        or "/home/yli7/projects/yue/language_feat_exps/splits/matterport3d_mini_test.txt"
+        or "/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/matterport3d_mini_test.txt"
     )
     preprocessed_root = (
         args.preprocessed_root
-        or "/home/yli7/scratch2/datasets/ptv3_preprocessed/matterport3d"
+        or "/home/isom/cyf/SceneSplat/matterport3d"
     )
     gs_root = (
         args.gs_root
-        or "/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/matterport3d"
+        or "/home/isom/cyf/SceneSplat/outputs/ludvig/matterport3d"
     )
     langfeat_root = (
-        "/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/matterport3d"
+        "/home/isom/cyf/SceneSplat/outputs/ludvig/matterport3d"
     )
     nn_num = args.nn_num or 25
     args.print_class_iou = True
@@ -184,7 +184,7 @@ def main():
 
     text_prompts_21 = ["this is a " + label for label in MATTERPORT_LABELS_21]
     text_prompts_160 = ["this is a " + label for label in MATTERPORT_LABELS_160]
-    # text_feat_path = "/home/yli7/scratch/datasets/holicity/metadata/holicity_text_embeddings_siglip2.pt"
+    # text_feat_path = "/home/isom/cyf/SceneSplat/holicity/metadata/holicity_text_embeddings_siglip2.pt"
     # text_feat_21 = torch.load(text_feat_path, map_location="cpu")
     text_feat_21 = prepare_text_features(text_prompts_21)
     text_feat_160 = prepare_text_features(text_prompts_160)

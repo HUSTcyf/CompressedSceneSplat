@@ -1061,7 +1061,7 @@ def main():
     parser.add_argument(
         "--data_root",
         type=str,
-        default="/new_data/cyf/projects/SceneSplat/gaussian_train",
+        default="/home/isom/cyf/SceneSplat/gaussian_train",
         help="Root directory containing datasets (batch mode)",
     )
     parser.add_argument(

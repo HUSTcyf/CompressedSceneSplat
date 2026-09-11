@@ -6,7 +6,7 @@
 # 2. 生成语义分割预测结果
 # 3. 可视化 GT 和预测结果
 #
-# 场景: /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be
+# 场景: /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be
 
 set -e  # 遇到错误时退出
 
@@ -15,23 +15,23 @@ set -e  # 遇到错误时退出
 # ============================================
 
 # 场景路径
-SCENE_PATH="/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be"
+SCENE_PATH="/home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be"
 SCENE_NAME="0d2ee665be"
 
 # 预训练权重路径 (SceneSplat PT-v3m1 模型，768维特征)
-CHECKPOINT_PATH="/new_data/cyf/projects/SceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth"
+CHECKPOINT_PATH="/home/isom/cyf/CompressedSceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth"
 
 # 推理配置
-CONFIG_PATH="/new_data/cyf/projects/SceneSplat/configs/inference/lang-pretrain-pt-v3m1-3dgs.py"
+CONFIG_PATH="/home/isom/cyf/CompressedSceneSplat/configs/inference/lang-pretrain-pt-v3m1-3dgs.py"
 
 # 输出目录
-OUTPUT_BASE_DIR="/new_data/cyf/projects/SceneSplat/output_visualization"
+OUTPUT_BASE_DIR="/home/isom/cyf/CompressedSceneSplat/output_visualization"
 INFERENCE_OUTPUT_DIR="${OUTPUT_BASE_DIR}/inference/${SCENE_NAME}"
 VISUAL_OUTPUT_DIR="${OUTPUT_BASE_DIR}/visualization"
 
 # ScanNet++ 类别信息
-CLASS_NAMES_FILE="/new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100.txt"
-TEXT_EMBEDDINGS_FILE="/new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt"
+CLASS_NAMES_FILE="/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100.txt"
+TEXT_EMBEDDINGS_FILE="/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/top100_text_embeddings_siglip2.pt"
 
 # GPU 设备
 GPU_ID=0
@@ -51,10 +51,10 @@ echo ""
 mkdir -p "${INFERENCE_OUTPUT_DIR}"
 
 # 运行推理 (使用 batch_predict_inference.py)
-CUDA_VISIBLE_DEVICES=${GPU_ID} python /new_data/cyf/projects/SceneSplat/tools/batch_predict_inference.py \
+CUDA_VISIBLE_DEVICES=${GPU_ID} python /home/isom/cyf/CompressedSceneSplat/tools/batch_predict_inference.py \
     --config "${CONFIG_PATH}" \
     --checkpoint "${CHECKPOINT_PATH}" \
-    --input-root "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val" \
+    --input-root "/home/isom/cyf/SceneSplat/scannetpp_v2/val" \
     --output-dir "${INFERENCE_OUTPUT_DIR}" \
     --scene "${SCENE_NAME}" \
     --device cuda
@@ -193,7 +193,7 @@ mkdir -p "${VISUAL_OUTPUT_DIR}"
 
 # 3.1 可视化 GT (Ground Truth)
 echo "可视化 Ground Truth..."
-CUDA_VISIBLE_DEVICES=${GPU_ID} python /new_data/cyf/projects/SceneSplat/tools/visualize_semantic_segmentation.py \
+CUDA_VISIBLE_DEVICES=${GPU_ID} python /home/isom/cyf/CompressedSceneSplat/tools/visualize_semantic_segmentation.py \
     --data_path "${SCENE_PATH}" \
     --mode gt \
     --output_path "${VISUAL_OUTPUT_DIR}/${SCENE_NAME}_gt.ply" \
@@ -203,7 +203,7 @@ echo "  GT 可视化已保存: ${VISUAL_OUTPUT_DIR}/${SCENE_NAME}_gt.ply"
 
 # 3.2 可视化预测结果
 echo "可视化预测结果..."
-CUDA_VISIBLE_DEVICES=${GPU_ID} python /new_data/cyf/projects/SceneSplat/tools/visualize_semantic_segmentation.py \
+CUDA_VISIBLE_DEVICES=${GPU_ID} python /home/isom/cyf/CompressedSceneSplat/tools/visualize_semantic_segmentation.py \
     --data_path "${SCENE_PATH}" \
     --pred_path "${INFERENCE_OUTPUT_DIR}/${SCENE_NAME}/predictions.npy" \
     --mode pred \
@@ -214,7 +214,7 @@ echo "  预测可视化已保存: ${VISUAL_OUTPUT_DIR}/${SCENE_NAME}_pred.ply"
 
 # 3.3 对比可视化
 echo "生成对比可视化..."
-CUDA_VISIBLE_DEVICES=${GPU_ID} python /new_data/cyf/projects/SceneSplat/tools/visualize_semantic_segmentation.py \
+CUDA_VISIBLE_DEVICES=${GPU_ID} python /home/isom/cyf/CompressedSceneSplat/tools/visualize_semantic_segmentation.py \
     --data_path "${SCENE_PATH}" \
     --pred_path "${INFERENCE_OUTPUT_DIR}/${SCENE_NAME}/predictions.npy" \
     --mode compare \

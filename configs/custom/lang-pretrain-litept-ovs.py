@@ -5,8 +5,8 @@ This config implements representation learning with language features from CLIP/
 enabling open-vocabulary 3D scene understanding.
 
 Combines datasets from:
-- /new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs
-- /new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS
+- /home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs
+- /home/isom/cyf/SceneSplat/gaussian_train/3DOVS
 
 Usage:
     python tools/train_lite.py --config-file configs/custom/lang-pretrain-litept-ovs.py
@@ -109,8 +109,8 @@ param_dicts = [dict(keyword="block", lr=0.0001)]
 dataset_type = "GenericGSDataset"
 
 # OVS data roots (point to parent directory, split specifies the subdirectory)
-data_root_ovs_1 = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs"
-data_root_ovs_2 = "/new_data/cyf/projects/SceneSplat/gaussian_train/3DOVS"
+data_root_ovs_1 = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs"
+data_root_ovs_2 = "/home/isom/cyf/SceneSplat/gaussian_train/3DOVS"
 
 data = dict(
     num_classes=100,  # Placeholder for pretraining (not used)

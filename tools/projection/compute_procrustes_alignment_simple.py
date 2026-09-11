@@ -25,8 +25,8 @@ Typical Use Case:
 Usage:
     # Compute Q for each scene and save separately
     python tools/compute_procrustes_alignment_simple.py \\
-        --data_root /new_data/cyf/Datasets/SceneSplat7k/scannet/test_grid1.0cm_chunk6x6_stride3x3 \\
-        --text_embed /new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt \\
+        --data_root /home/isom/cyf/SceneSplat/scannet/test_grid1.0cm_chunk6x6_stride3x3 \\
+        --text_embed /home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannet/meta_data/scannet20_text_embeddings_siglip2.pt \\
         --svd_rank 16 \\
         --output_dir /path/to/output
 """
@@ -273,10 +273,19 @@ def compute_procrustes_Q_cuda_with_labels(
     if labels.dtype != torch.long:
         labels = labels.long()
 
+    # 修复（2026-08-03）：归一化 + 类平均，避免大类主导 Q 拟合
+    # 原实现直接对未归一化特征做类求和：wall/floor/ceiling 每类数百万点，
+    # 物体类仅几百点 → M_matrix 被大类主导 → 小类对齐失败 → 分类全指向结构类
+    # （实测 mIoU 0.6% vs 归一化+类平均的上界 41.8%）
+    X_c = X_c / (X_c.norm(dim=1, keepdim=True) + 1e-8)  # 每点归一化（只保留方向）
+    counts = torch.bincount(labels, minlength=M).clamp(min=1).to(X_c.dtype)
+
     # Use index_add_ for efficient aggregation
     # sum_j[labels[i]] += X_c[i] for all i
     # Memory: only O(M*d) for sum_j, no large intermediate matrices
+    sum_j = torch.zeros(M, d, device=X_c.device, dtype=X_c.dtype)
     sum_j.index_add_(0, labels, X_c)  # [M, d]
+    sum_j = sum_j / counts[:, None]   # 类平均（每类等权）
 
     # Compute M = sum_j^T @ Y: [d, M] @ [M, d] = [d, d]
     M_matrix = torch.mm(sum_j.t(), Y)  # [d, d]
@@ -331,6 +340,86 @@ def compute_procrustes_Q_cuda_with_labels(
         'singular_values': S.cpu().tolist(),
         'orthogonality_error': float(orthogonality_error.cpu()),
         'det_Q': float(det_Q.cpu()),
+    }
+
+    return Q, metrics
+
+
+def compute_procrustes_Q_label_free(
+    X_c: torch.Tensor,
+    Y: torch.Tensor,
+    max_iters: int = 5,
+    tol: float = 1e-4,
+    device: str = 'cuda',
+) -> Tuple[torch.Tensor, Dict]:
+    """
+    Compute Procrustes Q without GT labels via iterative pseudo-label alignment.
+
+    At inference there are no ground-truth semantic labels, so we cannot directly
+    pair each point with its class text embedding. Instead we iteratively:
+      1. Compute cosine similarity → pseudo-labels
+      2. Use pseudo-labels to compute Q (Procrustes)
+      3. Apply Q, recompute pseudo-labels
+      Repeat until convergence.
+
+    Args:
+        X_c: [N, d] model-predicted features (already L2-normalized)
+        Y:   [M, d] SVD-reduced text embeddings (already L2-normalized), M classes
+        max_iters: maximum iterations
+        tol: convergence tolerance on label change ratio
+        device: 'cuda' or 'cpu'
+
+    Returns:
+        Q: [d, d] orthogonal alignment matrix
+        metrics: dict with iteration info
+    """
+    X_c = X_c.to(device)
+    Y = Y.to(device)
+    N, d = X_c.shape
+    M, d_y = Y.shape
+
+    assert d == d_y, f"Dimension mismatch: X_c {d} != Y {d_y}"
+
+    # L2 normalize
+    X_c = F.normalize(X_c, p=2, dim=1)
+    Y_norm = F.normalize(Y, p=2, dim=1)
+
+    # --- Iterative pseudo-label alignment ---
+    Q = torch.eye(d, device=device, dtype=X_c.dtype)
+    prev_labels = None
+
+    for it in range(max_iters):
+        # 1. Apply current Q to features
+        X_aligned = X_c @ Q if it > 0 else X_c
+
+        # 2. Cosine similarity → pseudo-labels
+        sim = X_aligned @ Y_norm.T  # [N, M], both normalized so dot = cosine
+        pseudo_labels = sim.argmax(dim=1)  # [N]
+
+        # 3. Check convergence
+        if prev_labels is not None:
+            changed = (pseudo_labels != prev_labels).float().mean().item()
+            if changed < tol:
+                break
+        prev_labels = pseudo_labels.clone()
+
+        # 4. Compute Q using label-based Procrustes
+        Q_new, _ = compute_procrustes_Q_cuda_with_labels(X_c, Y_norm, pseudo_labels)
+
+        # 5. Update Q
+        Q = Q_new
+
+    # Final alignment check
+    X_final = X_c @ Q
+    sim_before = (X_c @ Y_norm.T).mean().item()
+    sim_after = (X_final @ Y_norm.T).mean().item()
+
+    metrics = {
+        'iters': it + 1,
+        'label_change_last': changed if prev_labels is not None else 0.0,
+        'mean_cosine_before': sim_before,
+        'mean_cosine_after': sim_after,
+        'det_Q': float(torch.det(Q).cpu()),
     }
 
     return Q, metrics

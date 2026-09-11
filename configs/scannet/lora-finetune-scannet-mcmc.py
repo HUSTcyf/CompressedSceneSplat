@@ -3,7 +3,7 @@
 
 _base_ = [
     "../_base_/default_runtime.py",
-    "../_base_/dataset/scannet.py",
+    "../_base_/dataset/scannetpp.py",
 ]
 
 # Model configuration - use pretrained model as base

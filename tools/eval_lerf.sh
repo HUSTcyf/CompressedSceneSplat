@@ -14,10 +14,10 @@
 #   3. Custom dimension: Set SRC_DIM and appropriate USE_CLIP flag
 
 # Base paths
-FEAT_BASE_PATH="/new_data/cyf/projects/OccamLGS/output/LERF"
-GT_BASE_PATH="/new_data/cyf/projects/OccamLGS/datasets/lerf_ovs/label"
-TRAIN_DATA_ROOT="/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train"
-FEAT_BASE_PATH="/new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs"
+FEAT_BASE_PATH="/home/isom/cyf/SceneSplat/projects/OccamLGS/output/LERF"
+GT_BASE_PATH="/home/isom/cyf/SceneSplat/projects/OccamLGS/datasets/lerf_ovs/label"
+TRAIN_DATA_ROOT="/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train"
+FEAT_BASE_PATH="/home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs"
 
 # Feature level to use (0, 1, 2, or 3)
 # Note: The actual directories are named with level suffix (e.g., ours_30000_langfeat_1)
@@ -36,7 +36,7 @@ SRC_DIM=768
 # Text embeddings path (optional, only needed for Procrustes alignment)
 # For 768-dim SigLIP2: use lerf_ovs_text_embeddings_siglip2.pt
 # For CLIP modes: use lerf_ovs_text_embeddings_clip_no_prefix.pt
-TEXT_EMBEDDINGS_PATH="/new_data/cyf/projects/SceneSplat/datasets/lerf_ovs_text_embeddings_siglip2.pt"
+TEXT_EMBEDDINGS_PATH="/home/isom/cyf/SceneSplat/datasets/lerf_ovs_text_embeddings_siglip2.pt"
 
 # Evaluation parameters
 STABILITY_THRESH=0.5  # Default stability threshold (relaxed from 0.3 to 0.5)

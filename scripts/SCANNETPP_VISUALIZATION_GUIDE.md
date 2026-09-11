@@ -4,14 +4,14 @@
 
 ## 场景信息
 
-- **场景路径**: `/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be`
+- **场景路径**: `/home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be`
 - **场景名称**: `0d2ee665be`
 - **类别数量**: 100 (top100 类别)
 
 ## 预训练权重
 
 - **模型**: SceneSplat PT-v3m1 (768维语言特征)
-- **权重路径**: `/new_data/cyf/projects/SceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth`
+- **权重路径**: `/home/isom/cyf/CompressedSceneSplat/checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth`
 - **推理配置**: `configs/inference/lang-pretrain-pt-v3m1-3dgs.py`
 
 ## 快速开始
@@ -20,14 +20,14 @@
 
 ```bash
 # 进入项目目录
-cd /new_data/cyf/projects/SceneSplat
+cd /home/isom/cyf/CompressedSceneSplat
 
 # 运行完整流程
 CUDA_VISIBLE_DEVICES=0 python scripts/visualize_scannetpp_example.py
 
 # 或者指定自定义参数
 CUDA_VISIBLE_DEVICES=0 python scripts/visualize_scannetpp_example.py \
-    --scene_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+    --scene_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
     --checkpoint /path/to/your/checkpoint.pth \
     --output_dir ./my_output \
     --gpu_id 0
@@ -36,7 +36,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/visualize_scannetpp_example.py \
 ### 方法 2: 使用 Shell 脚本
 
 ```bash
-cd /new_data/cyf/projects/SceneSplat
+cd /home/isom/cyf/CompressedSceneSplat
 
 CUDA_VISIBLE_DEVICES=0 bash scripts/visualize_scannetpp_example.sh
 ```
@@ -49,7 +49,7 @@ CUDA_VISIBLE_DEVICES=0 bash scripts/visualize_scannetpp_example.sh
 CUDA_VISIBLE_DEVICES=0 python tools/batch_predict_inference.py \
     --config configs/inference/lang-pretrain-pt-v3m1-3dgs.py \
     --checkpoint checkpoints/lang-pretrain-concat-scan-ppv2-matt-mcmc-wo-normal-contrastive.pth \
-    --input-root /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val \
+    --input-root /home/isom/cyf/SceneSplat/scannetpp_v2/val \
     --output-dir ./output_inference \
     --scene 0d2ee665be \
     --device cuda
@@ -64,7 +64,7 @@ import numpy as np
 import torch
 
 # 加载数据
-scene_path = "/new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be"
+scene_path = "/home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be"
 coord = np.load(f"{scene_path}/coord.npy")
 gt_labels = np.load(f"{scene_path}/segment.npy")
 
@@ -99,14 +99,14 @@ print(f"Accuracy: {accuracy:.2f}%")
 ```bash
 # 可视化 GT
 CUDA_VISIBLE_DEVICES=0 python tools/visualize_semantic_segmentation.py \
-    --data_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+    --data_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
     --mode gt \
     --output_path ./output/gt.ply \
     --dataset scannetpp
 
 # 可视化预测
 CUDA_VISIBLE_DEVICES=0 python tools/visualize_semantic_segmentation.py \
-    --data_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+    --data_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
     --pred_path ./output_inference/0d2ee665be/predictions.npy \
     --mode pred \
     --output_path ./output/pred.ply \
@@ -114,7 +114,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/visualize_semantic_segmentation.py \
 
 # 对比可视化
 CUDA_VISIBLE_DEVICES=0 python tools/visualize_semantic_segmentation.py \
-    --data_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+    --data_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
     --pred_path ./output_inference/0d2ee665be/predictions.npy \
     --mode compare \
     --output_path ./output/compare \
@@ -158,7 +158,7 @@ cloudcompare output/gt.ply
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python tools/visualize_semantic_segmentation.py \
-    --data_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+    --data_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
     --mode gt \
     --interactive \
     --dataset scannetpp

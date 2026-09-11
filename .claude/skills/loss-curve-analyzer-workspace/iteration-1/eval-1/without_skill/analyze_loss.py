@@ -318,7 +318,7 @@ class LossAnalyzer:
 
 def main():
     """Main analysis function."""
-    loss_dir = "/new_data/cyf/projects/SceneSplat/exp/lite-16-gridsvd/loss_curves"
+    loss_dir = "/home/isom/cyf/CompressedSceneSplat/exp/lite-16-gridsvd/loss_curves"
 
     print("Analyzing loss curves...")
     print(f"Input directory: {loss_dir}\n")
@@ -328,7 +328,7 @@ def main():
     report = analyzer.generate_report(results)
 
     # Save report
-    output_dir = Path("/new_data/cyf/projects/SceneSplat/.claude/skills/loss-curve-analyzer-workspace/iteration-1/eval-1/without_skill/outputs")
+    output_dir = Path("/home/isom/cyf/CompressedSceneSplat/.claude/skills/loss-curve-analyzer-workspace/iteration-1/eval-1/without_skill/outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_file = output_dir / "issue_report.md"

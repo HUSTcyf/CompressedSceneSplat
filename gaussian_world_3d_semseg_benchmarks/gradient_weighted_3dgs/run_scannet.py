@@ -16,7 +16,7 @@ def get_arguments():
     parser.add_argument(
         "--split",
         type=str,
-        default="/insait/qimaqi/workspace/3dgs-gradient-backprojection-benchmark/splits/scannet_mini_val.txt",
+        default="/home/isom/cyf/gaussian_world_3d_semseg_benchmarks/splits/scannet_mini_val.txt",
         help="Split name",
     )
     parser.add_argument("--rescale", type=int, default=0, help="rescale custom")

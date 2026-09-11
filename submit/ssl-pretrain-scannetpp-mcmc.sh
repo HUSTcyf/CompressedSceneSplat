@@ -12,7 +12,7 @@
 source ~/.bashrc
 conda activate gscept
 echo "Running on $(hostname)"
-cd /insait/qimaqi/workspace/SceneSplat_release/
+cd /home/isom/cyf/CompressedSceneSplat/
 export PYTHONPATH=./
 
 gpu_num=1

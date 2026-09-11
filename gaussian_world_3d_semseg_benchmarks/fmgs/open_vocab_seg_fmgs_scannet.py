@@ -132,32 +132,32 @@ def parse_args():
     parser.add_argument(
         "--val_split_path",
         type=str,
-        default="/home/yli7/projects/yue/language_feat_exps/splits/scannet_mini_val.txt",
+        default="/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/scannet_mini_val.txt",
     )
     parser.add_argument(
         "--preprocessed_root",
         type=str,
-        default="/home/yli7/scratch2/datasets/ptv3_preprocessed/scannet_preprocessed",
+        default="/home/isom/cyf/SceneSplat/scannet_preprocessed",
     )
     parser.add_argument(
         "--gs_root",
         type=str,
-        default="/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/scannet",
+        default="/home/isom/cyf/SceneSplat/outputs/ludvig/scannet",
     )
     parser.add_argument(
         "--langfeat_root",
         type=str,
-        default="/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/scannet",
+        default="/home/isom/cyf/SceneSplat/outputs/ludvig/scannet",
     )
     parser.add_argument(
         "--label20_path",
         type=str,
-        default="/home/yli7/scratch2/datasets/scannet/metadata/semantic_benchmark/label20.txt",
+        default="/home/isom/cyf/SceneSplat/datasets/scannet/metadata/semantic_benchmark/label20.txt",
     )
     parser.add_argument(
         "--label200_path",
         type=str,
-        default="/home/yli7/scratch2/datasets/scannet/metadata/semantic_benchmark/label200.txt",
+        default="/home/isom/cyf/SceneSplat/datasets/scannet/metadata/semantic_benchmark/label200.txt",
     )
     parser.add_argument(
         "--use_dot_similarity",

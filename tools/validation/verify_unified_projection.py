@@ -303,13 +303,13 @@ def main():
     parser.add_argument(
         "--data-root",
         type=str,
-        default="/new_data/cyf/Datasets/SceneSplat7k/matterport3d/train_grid1.0cm_chunk6x6x4_stride4x4x4",
+        default="/home/isom/cyf/SceneSplat/matterport3d/train_grid1.0cm_chunk6x6x4_stride4x4x4",
         help="Path to Matterport3D data directory (for learning projection)"
     )
     parser.add_argument(
         "--test-root",
         type=str,
-        default="/new_data/cyf/Datasets/SceneSplat7k/matterport3d/val_grid1.0cm_chunk6x6x4_stride4x4x4",
+        default="/home/isom/cyf/SceneSplat/matterport3d/val_grid1.0cm_chunk6x6x4_stride4x4x4",
         help="Path to test data directory"
     )
     parser.add_argument(

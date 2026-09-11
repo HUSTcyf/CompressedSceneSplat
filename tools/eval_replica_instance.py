@@ -27,7 +27,7 @@ Usage:
         --mode 3d
 
 Reference:
-    Based on /new_data/cyf/projects/Gaga/eval.py
+    Based on /home/isom/cyf/SceneSplat/projects/Gaga/eval.py
 """
 
 import os
@@ -389,7 +389,7 @@ Examples:
   # 2D evaluation with Replica dataset
   python tools/eval_replica_instance.py \\
       --mode 2d \\
-      --gt-masks /new_data/cyf/projects/Gaga/datasets/replica/office_0/semantic_instance \\
+      --gt-masks /home/isom/cyf/SceneSplat/projects/Gaga/datasets/replica/office_0/semantic_instance \\
       --pred-masks /path/to/predicted/masks \\
       --dataset-type replica
 

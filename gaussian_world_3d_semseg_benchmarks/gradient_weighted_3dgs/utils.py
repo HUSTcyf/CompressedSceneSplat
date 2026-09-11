@@ -449,7 +449,7 @@ def prune_by_gradients_opencv(splats, inverse_extrinsics=True):
             # output_debug = np.clip(output_debug, 0, 1)
             # output_debug = (output_debug * 255).astype(np.uint8)
             # output_debug_img = Image.fromarray(output_debug)
-            # output_debug_img.save(f"/insait/qimaqi/workspace/3dgs-gradient-backprojection-benchmark/debug/scannet_debug_output_{frame_idx}.png")
+            # output_debug_img.save(f"/home/isom/cyf/gaussian_world_3d_semseg_benchmarks/debug/scannet_debug_output_{frame_idx}.png")
 
             # raise NotImplementedError("Debugging, remove this line to continue")
 

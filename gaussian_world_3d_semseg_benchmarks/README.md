@@ -19,9 +19,9 @@ The scripts for each method evaluate zero-shot semantic segmentation performance
 ```bash
 python open_vocab_seg_ludvig_scannet.py \
     --val_split_path ./splits/scannetpp_mini_val.txt \
-    --preprocessed_root /home/yli7/scratch2/datasets/ptv3_preprocessed/scannet_preprocessed \
-    --gs_root /home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/scannet \
-    --label20_path /home/yli7/scratch2/datasets/scannet/metadata/semantic_benchmark/label20.txt \
+    --preprocessed_root /home/isom/cyf/SceneSplat/scannet_preprocessed \
+    --gs_root /home/isom/cyf/SceneSplat/outputs/ludvig/scannet \
+    --label20_path /home/isom/cyf/SceneSplat/datasets/scannet/metadata/semantic_benchmark/label20.txt \
     --model_name clip \
     --save_pred
 ```

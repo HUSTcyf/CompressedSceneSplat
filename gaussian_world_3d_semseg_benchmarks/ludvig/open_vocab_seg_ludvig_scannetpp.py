@@ -127,27 +127,27 @@ def parse_args():
     parser.add_argument(
         "--val_split_path",
         type=str,
-        default="/home/yli7/projects/yue/language_feat_exps/splits/scannetpp_mini_val.txt",
+        default="/home/isom/cyf/CompressedSceneSplat/yue/language_feat_exps/splits/scannetpp_mini_val.txt",
     )
     parser.add_argument(
         "--preprocessed_root",
         type=str,
-        default="/home/yli7/scratch2/datasets/ptv3_preprocessed/scannetpp_v2_preprocessed",
+        default="/home/isom/cyf/SceneSplat/scannetpp_v2_preprocessed",
     )
     parser.add_argument(
         "--gs_root",
         type=str,
-        default="/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/scannetpp",
+        default="/home/isom/cyf/SceneSplat/outputs/ludvig/scannetpp",
     )
     parser.add_argument(
         "--langfeat_root",
         type=str,
-        default="/home/yli7/scratch/datasets/gaussian_world/outputs/ludvig/scannetpp",
+        default="/home/isom/cyf/SceneSplat/outputs/ludvig/scannetpp",
     )
     parser.add_argument(
         "--label_path",
         type=str,
-        default="/home/yli7/scratch2/datasets/scannetpp_v2/metadata/semantic_benchmark/top100.txt",
+        default="/home/isom/cyf/SceneSplat/datasets/scannetpp_v2/metadata/semantic_benchmark/top100.txt",
     )
     parser.add_argument(
         "--use_dot_similarity",

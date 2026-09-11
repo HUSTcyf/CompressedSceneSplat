@@ -34,9 +34,9 @@ except ImportError:
     print("Warning: gsplat not available, will try alternative rendering")
 
 # Default paths
-CHECKPOINT_ROOT = "/new_data/cyf/projects/SceneSplat/gaussian_results/lerf_ovs"
-EVAL_RESULTS_ROOT = "/new_data/cyf/projects/SceneSplat/eval_results/LERF-SceneSplat"
-OUTPUT_ROOT = "/new_data/cyf/projects/SceneSplat/output_rendered_with_mask"
+CHECKPOINT_ROOT = "/home/isom/cyf/CompressedSceneSplat/gaussian_results/lerf_ovs"
+EVAL_RESULTS_ROOT = "/home/isom/cyf/CompressedSceneSplat/eval_results/LERF-SceneSplat"
+OUTPUT_ROOT = "/home/isom/cyf/CompressedSceneSplat/output_rendered_with_mask"
 
 
 def load_checkpoint(scene: str, checkpoint_name: str = "chkpnt30000_langfeat_0.pth") -> dict:

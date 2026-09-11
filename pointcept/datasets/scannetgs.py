@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from pointcept.utils.cache import shared_dict
+from pointcept.utils.svd_sign import canonicalize_svd_sign, remove_scene_mean
 from .builder import DATASETS
 from .defaults import DefaultDataset
 from .preprocessing.scannet.meta_data.scannet200_constants import (
@@ -41,6 +42,7 @@ class ScanNetGSDataset(DefaultDataset):
         is_train=True,
         load_compressed_lang_feat=False,
         svd_rank=16,
+        svd_center=False,
         **kwargs,
     ):
         self.lr = np.loadtxt(lr_file, dtype=str) if lr_file is not None else None
@@ -49,6 +51,7 @@ class ScanNetGSDataset(DefaultDataset):
         self.is_train = is_train
         self.load_compressed_lang_feat = load_compressed_lang_feat
         self.svd_rank = svd_rank
+        self.svd_center = svd_center
         super().__init__(**kwargs)
 
     def get_data_list(self, **kwargs):
@@ -130,6 +133,9 @@ class ScanNetGSDataset(DefaultDataset):
                 try:
                     svd_data = np.load(svd_file)
                     compressed = svd_data['compressed']  # [M, rank]
+                    compressed = canonicalize_svd_sign(compressed)  # 每列最大绝对值取正，消除逐场景基符号歧义
+                    if self.svd_center:
+                        compressed = remove_scene_mean(compressed)
                     indices = svd_data['indices']  # [N] - point to grid mapping
 
                     # Add point_to_grid mapping to data_dict (for density-invariant training)

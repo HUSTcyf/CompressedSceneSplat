@@ -88,7 +88,8 @@ param_dicts = [dict(keyword="block", lr=0.0006)]
 # Dataset settings
 # ============================================================================
 dataset_type = "ScanNetGSDataset"
-data_root = "/path/to/scannet_3dgs_data"  # Update this path
+data_root = "/home/isom/cyf/SceneSplat/scannet"
+train_split = "train_grid1.0cm_chunk6x6_stride3x3"
 
 data = dict(
     num_classes=20,
@@ -96,7 +97,7 @@ data = dict(
     names=CLASS_LABELS_20,
     train=dict(
         type=dataset_type,
-        split="train",
+        split=train_split,
         data_root=data_root,
         sample_tail_classes=False,
         transform=[

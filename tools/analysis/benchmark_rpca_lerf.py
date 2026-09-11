@@ -75,7 +75,7 @@ def clear_gpu_cache():
 
 
 def load_lerf_features(scene_name: str = "figurines",
-                       data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> np.ndarray:
+                       data_root: str = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train") -> np.ndarray:
     """
     Load LERF features from original lang_feat.npy (768-dim).
 
@@ -110,7 +110,7 @@ def load_lerf_features(scene_name: str = "figurines",
 
 def prepare_structured_rpca_data(features: np.ndarray,
                                   scene_name: str = "figurines",
-                                  svd_data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                  svd_data_root: str = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Prepare data for StructuredRPCA_GPU using real grid structure from SVD file.
 
@@ -365,7 +365,7 @@ def benchmark_structure_rpca(features: np.ndarray,
                               max_iter: int = 30,
                               tol: float = 1e-7,
                               device: str = 'cuda:0',
-                              svd_data_root: str = "/new_data/cyf/projects/SceneSplat/gaussian_train/lerf_ovs/train") -> BenchmarkResult:
+                              svd_data_root: str = "/home/isom/cyf/SceneSplat/gaussian_train/lerf_ovs/train") -> BenchmarkResult:
     """Benchmark StructuredRPCA_GPU (weighted SVD, all GPU)."""
     if not CUDA_AVAILABLE:
         raise RuntimeError("CUDA not available for StructuredRPCA_GPU")

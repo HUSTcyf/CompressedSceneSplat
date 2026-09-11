@@ -414,7 +414,7 @@ def render_top_view(mesh, output_path, width=1920, height=1080, tight_bbox=True)
         print(f"  ✗ Render failed: {e}")
 
 
-def find_scene_paths(scene_id, base_path="/new_data/cyf/Datasets/ScanNet/scans"):
+def find_scene_paths(scene_id, base_path="/home/isom/cyf/SceneSplat/Datasets/ScanNet/scans"):
     """Auto-detect mesh paths from scene ID"""
     base_path = Path(base_path)
     scene_dir = base_path / scene_id
@@ -460,7 +460,7 @@ def main():
     parser.add_argument(
         "--scannet_base_path",
         type=str,
-        default="/new_data/cyf/Datasets/ScanNet/scans",
+        default="/home/isom/cyf/SceneSplat/Datasets/ScanNet/scans",
         help="Base path for ScanNet scans directory"
     )
 

@@ -12,14 +12,14 @@ It can:
 Usage:
     # Visualize as sphere mesh (from Gaussian data)
     python tools/visualize_mesh_segmentation.py \
-        --scannetpp_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+        --scannetpp_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
         --mode gt \
         --output output/mesh_gt.ply \
         --render_as_sphere
 
     # Visualize with predictions
     python tools/visualize_mesh_segmentation.py \
-        --scannetpp_path /new_data/cyf/Datasets/SceneSplat7k/scannetpp_v2/val/0d2ee665be \
+        --scannetpp_path /home/isom/cyf/SceneSplat/scannetpp_v2/val/0d2ee665be \
         --labels_path /path/to/predictions.npy \
         --mode pred \
         --output output/mesh_pred.ply \
@@ -320,8 +320,8 @@ def find_scannet_mesh(scannetpp_scene_id: str, scannet_base_path: str) -> Option
 
     # Option 1: Check if there's a mapping file
     mapping_files = [
-        Path("/new_data/cyf/projects/SceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/scans.txt"),
-        Path("/new_data/cyf/Datasets/SceneSplat7k/data_splits/scannetpp_v2/scans_mapping.txt"),
+        Path("/home/isom/cyf/CompressedSceneSplat/pointcept/datasets/preprocessing/scannetpp/metadata/semantic_benchmark/scans.txt"),
+        Path("/home/isom/cyf/SceneSplat/data_splits/scannetpp_v2/scans_mapping.txt"),
     ]
 
     for mapping_file in mapping_files:
@@ -484,7 +484,7 @@ def main():
     parser.add_argument("--labels_path", type=str,
                         help="Path to labels/predictions file (.npy)")
     parser.add_argument("--scannet_path", type=str,
-                        default="/new_data/cyf/Datasets/ScanNet/scans",
+                        default="/home/isom/cyf/SceneSplat/Datasets/ScanNet/scans",
                         help="Path to ScanNet scans directory (for finding original mesh)")
 
     # Mode
