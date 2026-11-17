@@ -1,0 +1,15 @@
+@InProceedings{pmlr-v229-rashid23a,
+  title = 	 {Language Embedded Radiance Fields for Zero-Shot Task-Oriented Grasping},
+  author =       {Rashid, Adam and Sharma, Satvik and Kim, Chung Min and Kerr, Justin and Chen, Lawrence Yunliang and Kanazawa, Angjoo and Goldberg, Ken},
+  booktitle = 	 {Proceedings of The 7th Conference on Robot Learning},
+  pages = 	 {178--200},
+  year = 	 {2023},
+  editor = 	 {Tan, Jie and Toussaint, Marc and Darvish, Kourosh},
+  volume = 	 {229},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {06--09 Nov},
+  publisher =    {PMLR},
+  pdf = 	 {https://proceedings.mlr.press/v229/rashid23a/rashid23a.pdf},
+  url = 	 {https://proceedings.mlr.press/v229/rashid23a.html},
+  abstract = 	 {Grasping objects by a specific subpart is often crucial for safety and for executing downstream tasks. We propose LERF-TOGO, Language Embedded Radiance Fields for Task-Oriented Grasping of Objects, which uses vision-language models zero-shot to output a grasp distribution over an object given a natural language query. To accomplish this, we first construct a LERF of the scene, which distills CLIP embeddings into a multi-scale 3D language field queryable with text. However, LERF has no sense of object boundaries, so its relevancy outputs often return incomplete activations over an object which are insufficient for grasping. LERF-TOGO mitigates this lack of spatial grouping by extracting a 3D object mask via DINO features and then conditionally querying LERF on this mask to obtain a semantic distribution over the object to rank grasps from an off-the-shelf grasp planner. We evaluate LERF-TOGO’s ability to grasp task-oriented object parts on 31 physical objects, and find it selects grasps on the correct part in $81%$ of trials and grasps successfully in $69%$. Code, data, appendix, and details are available at: lerftogo.github.io}
+}

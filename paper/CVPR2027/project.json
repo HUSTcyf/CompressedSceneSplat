@@ -1,0 +1,13 @@
+{
+  "name": "LangZip-CVPR2027",
+  "main_doc": "main.tex",
+  "engine": "xetex",
+  "color": "",
+  "kind": "",
+  "exports": [],
+  "hidden": false,
+  "forked_from": null,
+  "checkpoints": {
+    "mode": "engine_dependencies"
+  }
+}

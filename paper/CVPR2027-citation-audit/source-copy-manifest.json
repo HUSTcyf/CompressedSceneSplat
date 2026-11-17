@@ -1,0 +1,469 @@
+[
+  {
+    "key": "cai2010singular",
+    "source": "publisher-bibtex/cai2010singular.bib",
+    "source_sha256": "0904bb7ce4ac9bda11bc38772420f685135188bfeb3c32c2ccf57a52f53122f5",
+    "original_key": "Cai_2010",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "RPCA",
+    "source": "publisher-bibtex/RPCA.bib",
+    "source_sha256": "d518694ae01d7aa45bd81ac67729c7635013d1db5064bd5f06195c1386eed878",
+    "original_key": "Cand_s_2011",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "chang2017matterport3d",
+    "source": "arxiv-bibtex/chang2017matterport3d.bib",
+    "source_sha256": "1fd869b0125e4306242312af92d75487b51a329ea20d13c94cde6113730d5612",
+    "original_key": "chang2017matterport3dlearningrgbddata",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "cheng2024occamslgssimpleapproach",
+    "source": "venue-bibtex/cheng2024occamslgssimpleapproach.bib",
+    "source_sha256": "901ccff3fdd481cae251f2144e743d3f01fedd5d00a1ea85daec33d795e0326e",
+    "original_key": "Cheng_2025_BMVC",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "chiang2025uniql",
+    "source": "venue-bibtex/chiang2025uniql.bib",
+    "source_sha256": "64d51da6a3356645855d9f04dad7a2886b918dc55d6caf0ead4a84441722775d",
+    "original_key": "ICLR2026_370fa2e6",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "pointcept2023",
+    "source": "venue-bibtex/pointcept2023.bib",
+    "source_sha256": "fc7de5eaa2939b93233d3890a25aeee386133a6ab48a018b7511f3145a2c897a",
+    "original_key": "pointcept2023",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "dai2017scannet",
+    "source": "cvf-bibtex/dai2017scannet.bib",
+    "source_sha256": "6fe35dd7fc4c8bfb65d2ec0d9dfb99478379fceef94dae405292661a35cf40ea",
+    "original_key": "Dai_2017_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "dehghan2021arkitscenes",
+    "source": "venue-bibtex/dehghan2021arkitscenes.bib",
+    "source_sha256": "462b1ae3c2fec484aa3feb45b2605c86e8087f9b94518087bc8194ea2a8037b9",
+    "original_key": "dehghan2021arkitscenes",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "ding2022language",
+    "source": "cvf-bibtex/ding2022language.bib",
+    "source_sha256": "f465d36e1cbee3e6968c214af9d16d68f103f22995d44cdefd71e3f5c4d712ce",
+    "original_key": "Ding_2023_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "engelmann2024opennerf",
+    "source": "arxiv-bibtex/engelmann2024opennerf.bib",
+    "source_sha256": "811b582b6c07796deeefdf238284dc976b7e7432e10568849cb3cb228afdf533",
+    "original_key": "engelmann2024opennerfopenset3d",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "SVD",
+    "source": "publisher-bibtex/SVD.bib",
+    "source_sha256": "473bad277d69c7e7baec98af375da60b6cf1fea84034640ae4a61b5b13beefb7",
+    "original_key": "Golub_1965",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "guo2024semantic",
+    "source": "arxiv-bibtex/guo2024semantic.bib",
+    "source_sha256": "07019b0f889c2ba118bf7e57836e2ce1210b3778b0309edf33ce609abdd9b00d",
+    "original_key": "guo2024semanticgaussiansopenvocabularyscene",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "gupta2015indoor",
+    "source": "publisher-bibtex/gupta2015indoor.bib",
+    "source_sha256": "6397f30f17fbc58b2220d7c70758887c6f302271105811cf791bce324b5e3707",
+    "original_key": "Gupta_2014",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "jiang2024open",
+    "source": "cvf-bibtex/jiang2024open.bib",
+    "source_sha256": "f588a13148d488c2be13d4c09d44b87c47ff523ba2e67ec12baf0ed7a280b4d7",
+    "original_key": "Jiang_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "jiang2025votesplat",
+    "source": "cvf-bibtex/jiang2025votesplat.bib",
+    "source_sha256": "93df863bcbc81f50cefb405b962d70553fc0a46c8043cc17f096427df44a9c4f",
+    "original_key": "Jiang_2025_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "drsplat25",
+    "source": "cvf-bibtex/drsplat25.bib",
+    "source_sha256": "6148b74c6908faac05ef3f3f5f45e180bc46baf7381101035003fb8acb1ffed4",
+    "original_key": "Jun-Seong_2025_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "kerbl3Dgaussians",
+    "source": "arxiv-bibtex/kerbl3Dgaussians.bib",
+    "source_sha256": "836b4e0512816947f0a010fb4a3db8dc40eb11dcc38824854a6ab5c09c4b0730",
+    "original_key": "kerbl20233dgaussiansplattingrealtime",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "lerf2023",
+    "source": "cvf-bibtex/lerf2023.bib",
+    "source_sha256": "bbfeb676fc20bafcb197badc28d056b20bb33e39a76a0526ecbb55c3597aa9fe",
+    "original_key": "Kerr_2023_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "kirillov2023segany",
+    "source": "cvf-bibtex/kirillov2023segany.bib",
+    "source_sha256": "72af6fe2e5b19eac07111caee5984e0f342bc0c3ff28e7a2e49a39d06d9cf8b7",
+    "original_key": "Kirillov_2023_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "lee2025mosaic3d",
+    "source": "cvf-bibtex/lee2025mosaic3d.bib",
+    "source_sha256": "01727c66ef441f581e2f1211f5a24656f67a835b0ffa88c7fe277bed5f8e97eb",
+    "original_key": "Lee_2025_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "li2025instancegaussian",
+    "source": "cvf-bibtex/li2025instancegaussian.bib",
+    "source_sha256": "e51e86084a448c36438b2821fd5f7e5b0970ad68270eaa6c5d4cc69a5808b6bb",
+    "original_key": "Li_2025_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "li2025langsplatv2",
+    "source": "venue-bibtex/li2025langsplatv2.bib",
+    "source_sha256": "fbac51c64438d15899b6d11f1a1d98727408091a1a184a99dace1800241a8034",
+    "original_key": "NEURIPS2025_feb14cd8",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "li2025scenesplat",
+    "source": "cvf-bibtex/li2025scenesplat.bib",
+    "source_sha256": "6b1fbeab36df6c093c69e6941800c1f9c3ba9d6e829f9af238fc4c84e519e2b2",
+    "original_key": "Li_2025_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "liang2024supergseg",
+    "source": "arxiv-bibtex/liang2024supergseg.bib",
+    "source_sha256": "0dfbe636251cfdd8104e14301a54bad42de946eea27559a9e1e8e69968b2c676",
+    "original_key": "liang2026supergsegopenvocabulary3dsegmentation",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "liu2023weakly",
+    "source": "venue-bibtex/liu2023weakly.bib",
+    "source_sha256": "ae66c309b7ecf8d861a2d3cc937ff83d45bad98f0f416e854e8de72437d1376a",
+    "original_key": "NEURIPS2023_a76b693f",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "ma2025scenesplatpp",
+    "source": "arxiv-bibtex/ma2025scenesplatpp.bib",
+    "source_sha256": "09e08789b561c7a512d0261171c08ab97170734e4a4f5f8f9f8cff56f3cc312a",
+    "original_key": "ma2026scenesplatlargedatasetcomprehensive",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "marrie2025ludvig",
+    "source": "cvf-bibtex/marrie2025ludvig.bib",
+    "source_sha256": "d12a2956cfff3bf9485104673268bce708692a8e5abd2244110b0f0f6f2b78ea",
+    "original_key": "Marrie_2025_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "mikaelyan2025deltallm",
+    "source": "arxiv-bibtex/mikaelyan2025deltallm.bib",
+    "source_sha256": "35ea513d656f1addcd9db45f1a57161ee16dc74c66c701daf1734eeb6e350713",
+    "original_key": "mikaelyan2025deltallmcompressllmslowrank",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "mildenhall2020nerf",
+    "source": "arxiv-bibtex/mildenhall2020nerf.bib",
+    "source_sha256": "9bea9c9f5862891ebee0b0e5e0e38f6ff2d69c7b43ec59ef7e0a53ebbb802ae2",
+    "original_key": "mildenhall2020nerfrepresentingscenesneural",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "neal2011distributed",
+    "source": "publisher-bibtex/neal2011distributed.bib",
+    "source_sha256": "2ba18a9a5da515da2aafe1167220e5d9433ffac5c6887f626fb524454d0add6c",
+    "original_key": "Boyd_2011",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "oquab2023dinov2",
+    "source": "arxiv-bibtex/oquab2023dinov2.bib",
+    "source_sha256": "2f9e79326f7928a6a8cb9ca990336169dad87bf50310a62df70b8a6461f4a193",
+    "original_key": "oquab2024dinov2learningrobustvisual",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "Proximal",
+    "source": "publisher-bibtex/Proximal.bib",
+    "source_sha256": "6d1f75d9ffe6ba6a6c197f3d2a11e8235e7a7e4acc5b3d61ae4f5498d22245d6",
+    "original_key": "Parikh_2014",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "peng2023openscene",
+    "source": "cvf-bibtex/peng2023openscene.bib",
+    "source_sha256": "1ff22d1b5b5093e596eb1c3e91f349136ec03e9331361667251bcf8752621540",
+    "original_key": "Peng_2023_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "piekenbrinck2025opensplat3d",
+    "source": "arxiv-bibtex/piekenbrinck2025opensplat3d.bib",
+    "source_sha256": "4d6b92b2cf970d7fa2dda466d2ccbcb2c304b06ab86507e76edc7a39a6b17b06",
+    "original_key": "piekenbrinck2025opensplat3dopenvocabulary3dinstance",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "qin2024langsplat",
+    "source": "cvf-bibtex/qin2024langsplat.bib",
+    "source_sha256": "57295eb06f8f0eea9254b6a5f3efa4965f7b596cea87315051bcbbabbf5ca4ef",
+    "original_key": "Qin_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "qu2024goi",
+    "source": "arxiv-bibtex/qu2024goi.bib",
+    "source_sha256": "38fc27c087a4dac9c0a29e0320b49f019463d5e6b1c859d9908353a410e98b88",
+    "original_key": "qu2024goi3dgaussiansoptimizable",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "radford2021learning",
+    "source": "venue-bibtex/radford2021learning.bib",
+    "source_sha256": "d11f3d5b890d9446f5fb417aabe0c13528fe111d1f88037663dc4eaa79f27474",
+    "original_key": "pmlr-v139-radford21a",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "rashid2023language",
+    "source": "venue-bibtex/rashid2023language.bib",
+    "source_sha256": "92c26c3988a812a2672917431c5e9d5874b7cae65a7a5a8b951ecbae4439ca7a",
+    "original_key": "pmlr-v229-rashid23a",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "ravi2024sam2",
+    "source": "arxiv-bibtex/ravi2024sam2.bib",
+    "source_sha256": "f904653f809d67c188d226a681b051b5e9631a1b19a8f7509ab65a3a2da223dd",
+    "original_key": "ravi2024sam2segmentimages",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "roberts2021hypersim",
+    "source": "cvf-bibtex/roberts2021hypersim.bib",
+    "source_sha256": "85d8981a6c6a41552311027830619974943dab9533ce4fc0d22d70dbc3a4bc62",
+    "original_key": "Roberts_2021_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "rosinol20203d",
+    "source": "arxiv-bibtex/rosinol20203d.bib",
+    "source_sha256": "ab1c078e75de3461add11674452364d902bed5410ea0858a9f1b3d77ac7e1667",
+    "original_key": "rosinol20203ddynamicscenegraphs",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "shi2024language",
+    "source": "cvf-bibtex/shi2024language.bib",
+    "source_sha256": "c203d8b84cbfa22342c69a0ce6255011be1fd55d581b8d1d2052b787459767ef",
+    "original_key": "Shi_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "straub2019replica",
+    "source": "arxiv-bibtex/straub2019replica.bib",
+    "source_sha256": "811ab569cd6b2d020d151977452856bd70d0f9e0c6bcae2e99eaeae076507f9e",
+    "original_key": "straub2019replicadatasetdigitalreplica",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "tian2025ccl",
+    "source": "cvf-bibtex/tian2025ccl.bib",
+    "source_sha256": "1566d641cc21432e23d586731b026baa4c25e2806f3fa73fefd85bbba590b127",
+    "original_key": "Tian_2025_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "tian2024drivevlm",
+    "source": "arxiv-bibtex/tian2024drivevlm.bib",
+    "source_sha256": "b921b787379765f45240510279ef574b9d3298edebd4f555d6d155fb50521bff",
+    "original_key": "tian2024drivevlmconvergenceautonomousdriving",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "tschannen2025siglip",
+    "source": "arxiv-bibtex/tschannen2025siglip.bib",
+    "source_sha256": "950a34b608f4ceedb528f96a0fb41bdaaf0b5500a1689565ae970b94e4d5f931",
+    "original_key": "tschannen2025siglip2multilingualvisionlanguage",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "lu2025nsvd",
+    "source": "arxiv-bibtex/lu2025nsvd.bib",
+    "source_sha256": "890692911951d79d6b10b4a10493a72c9c9e91c5953b1288ff1a96ead0dbaeb6",
+    "original_key": "lu2025largelanguagemodelcompression",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "vonNeumann1937",
+    "action": "retained existing entry",
+    "reason": "no downloaded source in audit archive"
+  },
+  {
+    "key": "wald20193rscan",
+    "source": "venue-bibtex/wald20193rscan.bib",
+    "source_sha256": "9450a205e59b73d49719ef59e1e282dbcb4e963394946e13d92af4e9420fb153",
+    "original_key": "Wald_2019_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wang2025dobi",
+    "source": "venue-bibtex/wang2025dobi.bib",
+    "source_sha256": "2cea5638948ba280e3f2555a41036bf2db7053ec9a2f3bdf82c9249a6c6bb67e",
+    "original_key": "ICLR2025_218ca0d9",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wang2025vala",
+    "source": "arxiv-bibtex/wang2025vala.bib",
+    "source_sha256": "dcf374a167654825d727cfbce23dee55540f27e075c563fbf52343c4f067bc0a",
+    "original_key": "wang2026visibilityawarelanguageaggregationopenvocabulary",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wang2025qsvd",
+    "source": "venue-bibtex/wang2025qsvd.bib",
+    "source_sha256": "66b6e2446e5ed052d0fa8af5906e64de2e13249f20ef66073a1320999ae7ed95",
+    "original_key": "NEURIPS2025_028ef7e6",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wu2022ptv2",
+    "source": "venue-bibtex/wu2022ptv2.bib",
+    "source_sha256": "961e7f0c18e8285357a5817ed5a20c9a970ebcfaccee2f545a9f63e63d7af108",
+    "original_key": "NEURIPS2022_d78ece66",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wu2024ptv3",
+    "source": "cvf-bibtex/wu2024ptv3.bib",
+    "source_sha256": "44bf62c93048e243f42f2c72c0369c87debcf13af6de8d72bc2651e307bd0e90",
+    "original_key": "Wu_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wu2024ppt",
+    "source": "cvf-bibtex/wu2024ppt.bib",
+    "source_sha256": "97809ffd92858e32bd4af2b4f3aa0a31063bee1d7957136f9ff96eb418e0cd20",
+    "original_key": "Wu_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "wu2024opengaussian",
+    "source": "venue-bibtex/wu2024opengaussian.bib",
+    "source_sha256": "b4801f4b21809e1e5eab0e83ae3d1ad265a72d1683651e11547163c46c7b4f02",
+    "original_key": "NEURIPS2024_21f7b745",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "yang2024regionplc",
+    "source": "cvf-bibtex/yang2024regionplc.bib",
+    "source_sha256": "7b8cc9bd8adb9f6da9f7aaf768cd0ec2655db2ab8b6f2dc77129d56443fd1a8b",
+    "original_key": "Yang_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "ye2024gaussian",
+    "source": "arxiv-bibtex/ye2024gaussian.bib",
+    "source_sha256": "3cf397ca850cf6de1c3d1bff90a92c2b8c1a0022cec4e54718f1cb1166460e0f",
+    "original_key": "ye2024gaussiangroupingsegmentedit",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "yeshwanth2023scannet++",
+    "source": "cvf-bibtex/yeshwanth2023scannet++.bib",
+    "source_sha256": "f05554148368da9e5ba7f5395ef08e5355000ba70f2b0dc797b22ef965b23dfb",
+    "original_key": "Yeshwanth_2023_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "yu2023compressing",
+    "source": "publisher-bibtex/yu2023compressing.bib",
+    "source_sha256": "f2a5ecaa062d0a7be4e80670c4fcef648620fbef1ac1c1300f05c58880364dcf",
+    "original_key": "Yu_2023",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "yuelitept2026",
+    "source": "cvf-bibtex/yuelitept2026.bib",
+    "source_sha256": "ecd11417176f64df235df09eee82a6a2cfcba8b4f5bbdce372b18e484e9301a1",
+    "original_key": "Yue_2026_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "zhai2023sigmoid",
+    "source": "cvf-bibtex/zhai2023sigmoid.bib",
+    "source_sha256": "1a803fc23ae263c659a870251661b78fbf2675562ef7fabc00c6a34a99017433",
+    "original_key": "Zhai_2023_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "zhan2025hi",
+    "source": "arxiv-bibtex/zhan2025hi.bib",
+    "source_sha256": "30ed011084cbd4b9c6df13878fd3c79d85be822f8fa9cdcb85036881ddcaf1b8",
+    "original_key": "zhan2025hilsplathierarchical3dlanguage",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "caron2021dino",
+    "source": "venue-bibtex/caron2021dino.bib",
+    "source_sha256": "01dc8a2c63607de19fd93ed97ff0214f6c60bc80ed66ba5bef888c1c869efa5d",
+    "original_key": "Caron_2021_ICCV",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "zhou2020cylinder3d",
+    "source": "arxiv-bibtex/zhou2020cylinder3d.bib",
+    "source_sha256": "eae172a6c643c1c7e54eb12f3ac55185b401d0f2628aa39ea86d29c57c3ba45e",
+    "original_key": "zhou2020cylinder3deffective3dframework",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "zhou2024feature",
+    "source": "cvf-bibtex/zhou2024feature.bib",
+    "source_sha256": "bde718200a1894e7747b716f690eacfe245bd5ed7290c994a047e88a895e200d",
+    "original_key": "Zhou_2024_CVPR",
+    "action": "copied source entry; adapted key only"
+  },
+  {
+    "key": "zuo2025fmgs",
+    "source": "arxiv-bibtex/zuo2025fmgs.bib",
+    "source_sha256": "d6db46cbb8acf1f4c93be185996fb5294ffe01071ca01b484712a51703b980fd",
+    "original_key": "zuo2024fmgsfoundationmodelembedded",
+    "action": "copied source entry; adapted key only"
+  }
+]

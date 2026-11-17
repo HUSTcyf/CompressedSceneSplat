@@ -1,0 +1,7 @@
+# Keep manuscript inputs despite the repository-wide asset exclusions.
+!**/figs/
+!**/figs/**
+!**/*.png
+!**/*.json
+.oleafly/
+**/.oleafly/

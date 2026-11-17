@@ -1,0 +1,32 @@
+[
+  {
+    "key": "ma2025scenesplatpp",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/6b9628a5da76f5f1d6ec025f4b493686-Abstract-Datasets_and_Benchmarks_Track.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/33062-/bibtex"
+  },
+  {
+    "key": "wang2025qsvd",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/028ef7e68a5ea25fc26cd6abf3a5c147-Abstract-Conference.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/29250-/bibtex"
+  },
+  {
+    "key": "liu2023weakly",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2023/hash/a76b693f36916a5ed84d6e5b39a0dc03-Abstract-Conference.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/22945-/bibtex"
+  },
+  {
+    "key": "li2025langsplatv2",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/feb14cd8a37e800f38edba497e847363-Abstract-Conference.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/30418-/bibtex"
+  },
+  {
+    "key": "wu2024opengaussian",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2024/hash/21f7b745f73ce0d1f9bcea7f40b1388e-Abstract-Conference.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/24423-/bibtex"
+  },
+  {
+    "key": "wu2022ptv2",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2022/hash/d78ece6613953f46501b958b7bb4582f-Abstract-Conference.html",
+    "bibtex": "https://proceedings.neurips.cc/paper_files/paper/18109-/bibtex"
+  }
+]

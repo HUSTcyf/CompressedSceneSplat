@@ -1,0 +1,140 @@
+[
+  {
+    "key": "dai2017scannet",
+    "title": "ScanNet: Richly-annotated 3D Reconstructions of Indoor Scenes",
+    "source_index": "https://openaccess.thecvf.com/CVPR2017.py?day=all",
+    "bibtex_file": "cvf-bibtex/dai2017scannet.bib"
+  },
+  {
+    "key": "ding2022language",
+    "title": "PLA: Language-Driven Open-Vocabulary 3D Scene Understanding",
+    "source_index": "https://openaccess.thecvf.com/CVPR2023?day=all",
+    "bibtex_file": "cvf-bibtex/ding2022language.bib"
+  },
+  {
+    "key": "jiang2024open",
+    "title": "Open-vocabulary 3d semantic segmentation with foundation models",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/jiang2024open.bib"
+  },
+  {
+    "key": "jiang2025votesplat",
+    "title": "VoteSplat: Hough Voting Gaussian Splatting for 3D Scene Understanding",
+    "source_index": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "bibtex_file": "cvf-bibtex/jiang2025votesplat.bib"
+  },
+  {
+    "key": "drsplat25",
+    "title": "Dr. Splat: Directly Referring 3D Gaussian Splatting via Direct Language Embedding Registration",
+    "source_index": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "bibtex_file": "cvf-bibtex/drsplat25.bib"
+  },
+  {
+    "key": "lerf2023",
+    "title": "LERF: Language Embedded Radiance Fields",
+    "source_index": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "bibtex_file": "cvf-bibtex/lerf2023.bib"
+  },
+  {
+    "key": "kirillov2023segany",
+    "title": "Segment Anything",
+    "source_index": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "bibtex_file": "cvf-bibtex/kirillov2023segany.bib"
+  },
+  {
+    "key": "lee2025mosaic3d",
+    "title": "Mosaic3D: Foundation Dataset and Model for Open-Vocabulary 3D Segmentation",
+    "source_index": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "bibtex_file": "cvf-bibtex/lee2025mosaic3d.bib"
+  },
+  {
+    "key": "li2025instancegaussian",
+    "title": "InstanceGaussian: Appearance-Semantic Joint Gaussian Representation for 3D Instance-Level Perception",
+    "source_index": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "bibtex_file": "cvf-bibtex/li2025instancegaussian.bib"
+  },
+  {
+    "key": "li2025scenesplat",
+    "title": "SceneSplat: Gaussian Splatting-based Scene Understanding with Vision-Language Pretraining",
+    "source_index": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "bibtex_file": "cvf-bibtex/li2025scenesplat.bib"
+  },
+  {
+    "key": "marrie2025ludvig",
+    "title": "LUDVIG: Learning-Free Uplifting of 2D Visual Features to Gaussian Splatting Scenes",
+    "source_index": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "bibtex_file": "cvf-bibtex/marrie2025ludvig.bib"
+  },
+  {
+    "key": "peng2023openscene",
+    "title": "OpenScene: 3D Scene Understanding with Open Vocabularies",
+    "source_index": "https://openaccess.thecvf.com/CVPR2023?day=all",
+    "bibtex_file": "cvf-bibtex/peng2023openscene.bib"
+  },
+  {
+    "key": "qin2024langsplat",
+    "title": "LangSplat: 3D Language Gaussian Splatting",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/qin2024langsplat.bib"
+  },
+  {
+    "key": "roberts2021hypersim",
+    "title": "Hypersim: A Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding",
+    "source_index": "https://openaccess.thecvf.com/ICCV2021?day=all",
+    "bibtex_file": "cvf-bibtex/roberts2021hypersim.bib"
+  },
+  {
+    "key": "shi2024language",
+    "title": "Language Embedded 3D Gaussians for Open-Vocabulary Scene Understanding",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/shi2024language.bib"
+  },
+  {
+    "key": "tian2025ccl",
+    "title": "CCL-LGS: Contrastive Codebook Learning for 3D Language Gaussian Splatting",
+    "source_index": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "bibtex_file": "cvf-bibtex/tian2025ccl.bib"
+  },
+  {
+    "key": "wu2024ptv3",
+    "title": "Point Transformer V3: Simpler, Faster, Stronger",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/wu2024ptv3.bib"
+  },
+  {
+    "key": "wu2024ppt",
+    "title": "Towards Large-scale 3D Representation Learning with Multi-dataset Point Prompt Training",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/wu2024ppt.bib"
+  },
+  {
+    "key": "yang2024regionplc",
+    "title": "RegionPLC: Regional Point-Language Contrastive Learning for Open-World 3D Scene Understanding",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/yang2024regionplc.bib"
+  },
+  {
+    "key": "yeshwanth2023scannet++",
+    "title": "ScanNet++: A High-Fidelity Dataset of 3D Indoor Scenes",
+    "source_index": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "bibtex_file": "cvf-bibtex/yeshwanth2023scannet++.bib"
+  },
+  {
+    "key": "yuelitept2026",
+    "title": "LitePT: Lighter Yet Stronger Point Transformer",
+    "source_index": "https://openaccess.thecvf.com/CVPR2026?day=all",
+    "bibtex_file": "cvf-bibtex/yuelitept2026.bib"
+  },
+  {
+    "key": "zhai2023sigmoid",
+    "title": "Sigmoid Loss for Language Image Pre-Training",
+    "source_index": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "bibtex_file": "cvf-bibtex/zhai2023sigmoid.bib"
+  },
+  {
+    "key": "zhou2024feature",
+    "title": "Feature 3DGS: Supercharging 3D Gaussian Splatting to Enable Distilled Feature Fields",
+    "source_index": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "bibtex_file": "cvf-bibtex/zhou2024feature.bib"
+  }
+]

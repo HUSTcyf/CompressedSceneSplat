@@ -1,0 +1,73 @@
+diff --git a/libs/pointrope/pointrope.py b/libs/pointrope/pointrope.py
+index 6b1e6b0..4ac1a86 100644
+--- a/libs/pointrope/pointrope.py
++++ b/libs/pointrope/pointrope.py
+@@ -1,10 +1,30 @@
+-
++import importlib.util
++import os
++import sys
+ import torch
+ 
+-try:
+-    import pointrope as _kernels # run `python setup.py install`
+-except ModuleNotFoundError:
+-    from . import pointrope as _kernels # run `python setup.py build_ext --inplace`
++
++def _load_kernels():
++    # The compiled pointrope CUDA extension is installed as a top-level
++    # "pointrope" module (see setup.py). When LitePT/libs is on sys.path the
++    # directory package shadows it, so load the extension .so directly.
++    candidates = []
++    for p in sys.path:
++        if not p:
++            continue
++        cand = os.path.join(p, "pointrope.cpython-311-x86_64-linux-gnu.so")
++        if os.path.exists(cand):
++            candidates.append(cand)
++    if not candidates:
++        raise RuntimeError("pointrope compiled extension not found")
++    spec = importlib.util.spec_from_file_location("pointrope", candidates[0])
++    mod = importlib.util.module_from_spec(spec)
++    sys.modules["pointrope"] = mod
++    spec.loader.exec_module(mod)
++    return mod
++
++
++_kernels = _load_kernels()
+ 
+ 
+ class PointROPE_func(torch.autograd.Function):
+@@ -14,15 +34,14 @@ class PointROPE_func(torch.autograd.Function):
+         ctx.save_for_backward(positions)
+         ctx.saved_base = base
+         ctx.saved_F0 = F0
+-        # tokens = tokens.clone() # uncomment this if inplace doesn't work
+-        _kernels.pointrope( tokens, positions, base, F0 )
++        _kernels.pointrope(tokens, positions, base, F0)
+         ctx.mark_dirty(tokens)
+         return tokens
+ 
+     @staticmethod
+     def backward(ctx, grad_res):
+         positions, base, F0 = ctx.saved_tensors[0], ctx.saved_base, ctx.saved_F0
+-        _kernels.pointrope( grad_res, positions, base, -F0 )
++        _kernels.pointrope(grad_res, positions, base, -F0)
+         ctx.mark_dirty(grad_res)
+         return grad_res, None, None, None
+ 
+@@ -30,9 +49,9 @@ class PointROPE_func(torch.autograd.Function):
+ class PointROPE(torch.nn.Module):
+     def __init__(self, freq=100.0, F0=1.0):
+         super().__init__()
+-        self.base = freq 
++        self.base = freq
+         self.F0 = F0
+ 
+-    def forward(self, tokens, positions): 
+-        PointROPE_func.apply(tokens.transpose(1,2), positions, self.base, self.F0)
+-        return tokens
+\ No newline at end of file
++    def forward(self, tokens, positions):
++        PointROPE_func.apply(tokens.transpose(1, 2).contiguous(), positions, self.base, self.F0)
++        return tokens

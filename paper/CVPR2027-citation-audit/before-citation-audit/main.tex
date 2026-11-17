@@ -1,0 +1,561 @@
+% CVPR 2027 review manuscript, migrated from neurips_2026.tex.
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage[review]{cvpr}
+\usepackage[T1]{fontenc}
+\usepackage{booktabs,amsfonts,amsmath,amssymb,nicefrac,microtype}
+\usepackage{graphicx,multirow,makecell,algorithm,algorithmicx}
+\usepackage[noend]{algpseudocode}
+\usepackage{colortbl}
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+\hypersetup{hypertexnames=false}
+\def\confName{CVPR}
+\def\confYear{2027}
+\title{LangZip: Lightweight Language Feature Compression for 3D Gaussian Splatting}
+\author{Anonymous authors}
+\begin{document}
+\maketitle
+\begin{abstract}
+  3D Gaussian Splatting (3DGS) is an efficient scene representation, but open-vocabulary 3D understanding remains costly because high-dimensional language features dominate storage and training. In SceneSplat-7k, these features occupy over 97\% of the total footprint. We introduce LangZip, a lightweight compression framework for 3D language features. LangZip combines Grid-based Feature Approximation to reduce spatial redundancy with Structured RPCA to compress the feature dimension while preserving semantic separability in a low-dimensional space. We further propose Grid-Guided Density-Invariant Learning for robustness under varying input densities. LangZip achieves about $100\times$ compression on language features and reduces total storage by more than one order of magnitude. With the compressed representation, we train a lighter model that remains competitive on standard open-vocabulary 3D scene understanding benchmarks while requiring less storage, training time, and inference cost.
+\end{abstract}
+
+
+\section{Introduction}
+\label{sec:intro}
+% 三维语义理解使机器能够解析三维环境，应用于机器人、导航、增强现实和交互系统等领域。传统的三维场景理解主要提取几何结构和预定义类别，而近期研究通过融入自然语言，催生了三维语言理解这一新兴方向。在此基础上，一个关键局限仍然存在：现有系统大多局限于闭集识别，难以泛化到多样化场景和开放式查询。这推动了对开放词汇三维场景理解的关注，其目标是通过自然语言解析任意物体与概念，从而支持真实场景中的灵活交互。
+3D semantic understanding supports robotics, navigation, AR, and interactive systems \cite{rosinol20203d,tian2024drivevlm,zhou2020cylinder3d}. Traditional methods use predefined categories \cite{dai2017scannet,yeshwanth2023scannet++,gupta2015indoor}, while integrating language enables open-vocabulary queries \cite{jiang2024open}.
+% This area aims to connect linguistic expressions with 3D representations, such as point clouds and meshes, to support richer scene interpretation.
+Open-vocabulary 3D understanding uses natural language to interpret diverse objects and concepts in real-world scenes.
+
+% 三维场景表示领域正快速发展。近年来，基于辐射场的方法极大地推动了该领域的进步，其中，3D高斯溅射（3DGS）作为一种新兴的高效表示方法脱颖而出，在视图合成与几何建模任务上达到了最先进的性能。它通过紧凑的高斯参数融合了几何与外观信息，为三维场景理解提供了独特的表征基础。
+% 然而，将语义能力融入3DGS面临挑战，尤其缺乏适用于开放词汇理解的大规模场景数据。为此，研究界推出了 SceneSplat 数据集。该数据集整合了多个权威来源的数千个高质量3DGS场景，构建了一个包含数百亿高斯点、覆盖室内外环境的大规模开源基准。作为该领域目前最全面、最多样的资源之一，SceneSplat 为训练可泛化的3DGS场景理解模型提供了关键的数据基础，有力推动了开放词汇语义理解的研究。
+3D scene representation has advanced rapidly in recent years, driven in large part by radiance-field methods. Among these, 3D Gaussian Splatting \cite{kerbl3Dgaussians} has emerged as an efficient representation with strong performance in view synthesis and geometry modeling. Its compact Gaussian parameterization naturally combines geometry and appearance, making it a strong foundation for 3D scene understanding.
+Bringing semantic reasoning into 3DGS remains difficult, largely because open-vocabulary learning requires large-scale scene data. To bridge this gap, the research community has developed SceneSplat \cite{li2025scenesplat,ma2025scenesplatpp}---a large-scale, open-source benchmark that aggregates thousands of high-quality 3DGS scenes from multiple sources. Spanning indoor and outdoor environments with hundreds of billions of Gaussians, it provides large-scale supervision for training generalizable 3DGS understanding models and has accelerated progress in open-vocabulary 3D scene understanding.
+
+% 尽管得益于大规模3D场景数据集丰富的语义标注，SceneSplat实现了当前最先进的零样本3D语义分割和开放词汇场景理解性能，其预训练数据规模庞大，占用大量存储空间的同时，也使训练流程变得十分漫长和消耗计算资源，这成为了快速微调与部署该模型的一大障碍。我们发现SceneSplat-7k的预训练数据集中，语言特征文件占用了总体约97%的存储，如图x所示。这是因为语言特征维度很高，如CLIP特征为512维，SceneSplat使用的SigLip2特征为768/1152维。尽管以往的工作尝试过将特征降维，却需要训练per-scene的auto encoder，这一过程十分耗时，不利于快速部署与推理。
+SceneSplat performs well on open-vocabulary scene understanding, but its large-scale pretraining data comes with a substantial storage footprint and long, computationally intensive training. That cost makes rapid fine-tuning and deployment difficult. We observe that in the SceneSplat-7k pretraining dataset, the language feature files account for approximately 97\% of the total storage, as shown in Fig. \ref{fig:Dataset-Compose}. This is due to the high dimensionality of features, for instance, 512-dim CLIP \cite{big_vision} features or 768/1152-dim SigLip2 \cite{tschannen2025siglip} features used in SceneSplat. Although prior work has attempted feature dimensionality reduction, it typically requires training per-scene autoencoders, a time-consuming process ill-suited for fast deployment and inference.
+
+% 为了解决以上问题，我们首先通过在小规模开放词汇理解数据集上的实验验证了语言特征矩阵的冗余性。随后我们提出 Grid-based Feature Approximation方法从空间上聚合并近似相似的语言特征，并进一步通过我们的 Structured RPCA 算法鲁棒的提取主成分，从特征维度进一步压缩矩阵。
+To address this bottleneck, we first show experimentally that these language feature matrices contain substantial redundancy. We then introduce a two-stage compression pipeline: Grid-based Feature Approximation compresses features spatially by aggregating nearby similar points, and Structured RPCA further reduces redundancy along the feature dimension.
+% 此外，我们提出Grid-Guided Density-Invariant Learning策略，通过密度一致性损失对齐不同采样策略下模型的输出特征，增强模型对密度各异的输入，尤其是下采样稀疏输入的鲁棒性。
+In addition, we propose Grid-Guided Density-Invariant Learning, which uses a density consistency loss to align output features under different sampling strategies. In our experiments, this improves robustness to inputs of varying densities, especially sparse inputs produced by downsampling.
+% 基于以上方法，我们得到高度压缩的语言预训练数据集SceneSplat-Compact，并在低维特征空间训练了更轻量化的3DGS开放词汇感知模型。
+% 我们的方法直接在低维特征空间进行推理，每场景推理仅需数秒，且无需训练per-scene的auto encoder，实现了高效的开放词汇场景理解。
+Based on these components, we build SceneSplat-Compact, a compressed language pretraining set, and train a lighter 3DGS-based open-vocabulary perception model directly in the low-dimensional space. The construction of SceneSplat-Compact is a one-time offline preprocessing step that can be amortized across repeated downstream training, fine-tuning, and inference runs. Our method performs inference directly in the low-dimensional space, requires only seconds per scene, and avoids per-scene autoencoder training. We emphasize that the main objective is efficiency: we seek to preserve as much open-vocabulary performance as possible under aggressive compression, rather than to outperform the strongest task-specific models on every benchmark.
+
+Our contributions are threefold:
+\begin{enumerate}
+    \item We show that large 3D language feature matrices contain substantial redundancy and present an efficiency-oriented compression pipeline that combines Grid-based Feature Approximation with Structured RPCA.
+    \item We propose Grid-Guided Density-Invariant Learning to improve robustness to input-density variation, especially under sparse inference inputs.
+    \item We compress the language-feature portion of SceneSplat-7k by nearly two orders of magnitude and reduce the total dataset size by more than one order of magnitude. On top of SceneSplat-Compact, we train a lighter model that offers a favorable efficiency--accuracy trade-off.
+\end{enumerate}
+
+% 我们验证了原始3D语言特征矩阵的冗余性，并提出Grid-based Feature Approximation与Structured RPCA算法从空间和特征维度进行高效压缩，在不影响不同类别间可分性的前提下大幅节省存储空间。
+% 我们提出Grid-Guided Density-Invariant Learning，以提升模型对不同密度输入的鲁棒性，从而更好的处理下采样输入以提升效率。
+% 我们将SceneSplat-7k中的语言预训练数据压缩了将近100倍，存储需求从10T级别骤降至100G，并基于压缩后的SceneSplat-Compact数据集训练更轻量化的开放词汇感知模型，在不损失精度的前提下拥有更低的训练和推理延迟。
+
+
+% SceneSplat-7k语言预训练数据集上的特征空间降维前后的存储占用对比。
+\begin{figure*}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{figs/Statistics.pdf}
+  \caption{Storage footprint before (upper) and after (lower) feature space dimensionality reduction on SceneSplat-7k language pre-training dataset.}
+  \label{fig:Dataset-Compose}
+\end{figure*}
+
+\begin{table*}[tb]
+  \caption{Comparison of language feature storage and compressed results across datasets. We demonstrate the size of language features and the entire dataset when compressed to 8, 16, and 32 dimensions, respectively.}
+  \label{tab:storage_comparison}
+  \centering
+  \resizebox{\textwidth}{!}{
+  \begin{tabular}{@{}l|l|ccc|c@{}}
+    \toprule
+    Metric & Methods 
+    & Matterport3D & ScanNet++ & ScanNet & SceneSplat-7k (All) \\
+    \midrule
+    \multirow{4}{*}{\textbf{LangFeat(GB)}} 
+        & Original & 2341.20 & 3310.64 & 2267.69 & 7919.52 \\
+        & Ours-rank8 & 15.85(\textcolor{blue}{$0.68\%$}) & 32.81(\textcolor{blue}{$0.99\%$}) & 22.67(\textcolor{blue}{$1.00\%$}) & 71.34(\textcolor{blue}{$0.90\%$}) \\
+        & Ours-rank16 & 27.64(\textcolor{blue}{$1.18\%$}) & 56.98(\textcolor{blue}{$1.72\%$}) & 39.44(\textcolor{blue}{$1.74\%$}) & 124.07(\textcolor{blue}{$1.57\%$}) \\
+        & Ours-rank32 & 51.22(\textcolor{blue}{$2.19\%$}) & 105.33(\textcolor{blue}{$3.18\%$}) & 72.97(\textcolor{blue}{$3.22\%$}) & 229.52(\textcolor{blue}{$2.90\%$}) \\
+    \midrule
+    \multirow{4}{*}{\textbf{Total(GB)}} 
+        & Original & 2392.76 & 3417.11 & 2355.27 & 8165.14 \\
+        & Ours-rank8 & 67.41 & 139.28 & 110.25 & 316.94 \\
+        & Ours-rank16 & 79.20 & 163.45 & 127.02 & 369.67 \\
+        & Ours-rank32 & 102.78 & 211.80 & 160.55 & 475.13 \\
+    \bottomrule
+  \end{tabular}}
+\end{table*}
+
+% 我们提出(a) Feature Compression Pipeline 用于压缩高维度的3D语言特征矩阵，以及(b) Grid-Guided Density-Invariant Learning，用于监督模型对于不同密度输入的输出一致性。
+\begin{figure*}[tb]
+  \centering
+  \includegraphics[width=\textwidth]{figs/Method.pdf}
+  \caption{\textbf{Overview.} We introduce \textbf{(a)} a Feature Compression Pipeline to reduce redundancy in 3D language features, and \textbf{(b)} Grid-Guided Density-Invariant Learning for more stable representations under varying input densities.}
+  \label{fig:Method}
+\end{figure*}
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Open Vocabulary Scene Understanding}
+% 近年来，开放词汇模型的进展显著扩展了视觉-语言理解的能力。基础模型[81, 43, 26, 52, 49, 80, 65]实现了大规模的视觉特征提取，有效支持检测、分割等任务。为将这一能力延伸至3D领域，研究者通过将2D视觉-语言特征嵌入3D场景表示来实现开放词汇理解。早期基于NeRF的先行工作（如LERF[14, 24]和OpenNeRF[6]）采用CLIP[29]嵌入和对齐像素的特征，虽支持开放词汇查询，但因NeRF[21]本身计算密集，面临可扩展性和效率瓶颈。因此，后续研究重点转向了更高效的3D高斯泼溅（3DGS）框架[23, 30, 40, 42]。
+Recent progress in open-vocabulary models has substantially expanded vision-language understanding. Foundation models \cite{big_vision,zhai2023sigmoid,radford2021learning,ravi2024sam2,kirillov2023segany,oquab2023dinov2,zhang2022dino} enable large-scale visual feature extraction, supporting tasks like detection and segmentation. To extend these capabilities to 3D, researchers embed 2D vision-language features into 3D scene representations for open-vocabulary understanding. Early NeRF-based methods, such as LERF \cite{lerf2023,rashid2023language} and OpenNeRF \cite{engelmann2024opennerf}, used CLIP \cite{radford2021learning} embeddings and pixel-aligned features to enable open-vocabulary queries. However, due to the high computational cost of NeRF \cite{mildenhall2020nerf}, they face scalability and efficiency limitations. This has shifted research focus toward the more efficient 3D Gaussian Splatting framework \cite {kerbl3Dgaussians, shi2024language, zhou2024feature, zuo2025fmgs}.
+
+% 现有3DGS方法主要沿4个方向发展：
+Existing 3DGS-based methods primarily evolve along four directions:
+% 基于单场景优化的方法最先出现，其核心是将2D特征注入3DGS并针对每个场景进行优化。例如，LangSplat[27, 47]利用SAM[15]提取多层CLIP特征，再通过自编码器降维以构建紧凑的3D语言场；Feature3DGS[40]则使用卷积神经网络（CNN）提升特征维度。这些方法旨在压缩监督信号，但降维不可避免导致信息损失。另一类方法（如GOI[28]和CCL-LGS[35]）采用单一可训练特征码本存储语言嵌入，通过MLP预测渲染出的2D特征图的离散码本索引，实现了空间上的语义压缩并保留了丰富性，但其性能仍受限于对2D渲染特征图的依赖。
+Per-scene optimization methods first inject and optimize 2D features per scene, often employing dimensionality reduction which leads to information loss \cite{qin2024langsplat, zhou2024feature, guo2024semantic, qu2024goi, peng2023openscene, wu2024opengaussian, zuo2025fmgs}. Other approaches use a trainable codebook for spatial compression to preserve semantics, but their 3D understanding remains limited by a reliance on 2D rendering \cite{qu2024goi,li2025instancegaussian,tian2025ccl}.
+% 基于语义聚类的方法引入了显式的离散分组步骤作为先验语义结构。这类方法先将3D高斯聚合成有语义的簇（通常对应物体或部件），再为每个簇整体分配语言特征[11,17,19,25,28,37]。例如，OpenGaussian[37]基于空间邻近性和特征相似性进行由粗到细的聚类；SuperGSeg[19]和InstanceGaussian[17]则利用神经高斯建模实例级特征------前者将高斯聚合成``超级高斯''以便分配语言，后者直接为簇分配融合的语义特征；VoteSplat[11]和OpenSplat3D[25]旨在缓解直接蒸馏带来的像素级歧义。此类方法生成的簇图结构支持更高级的推理[19,39]，但通常依赖复杂的三阶段流程，增加了计算复杂度，且因整簇共享同一特征而丢失细粒度细节。
+Semantic clustering methods introduce explicit discrete grouping as a prior structure, aggregating 3D Gaussians into semantic clusters (e.g., objects or parts) and assigning a shared language feature to each cluster \cite{jiang2025votesplat,li2025instancegaussian,liang2024supergseg,piekenbrinck2025opensplat3d,qu2024goi,wu2024opengaussian}. These cluster graphs enable higher-level reasoning \cite{liang2024supergseg,zhan2025hi}, but often rely on multi-stage pipelines that increase complexity and lose fine-grained details due to feature sharing.
+% 免-单场景优化的方法进一步追求极致效率，致力于绕过耗时的每场景优化或聚类过程。例如，Occam‘s LGS[3, 9]、LUDVIG[38]、梯度加权3DGS[20]以及Dr.Splat[12]采用特征提升或直接注入技术，将所有2D特征投影到3DGS中，从而将计算时间从数小时大幅减少到数秒，在免训练状态下实现快速、准确的开放词汇分割。然而，这类直接特征聚合方法往往不加区分地将2D特征传播给每条相机光线相交的每个高斯，可能忽略场景的几何结构与遮挡关系。
+Optimization-free methods bypass per-scene optimization or clustering for extreme efficiency. Approaches like  \cite{cheng2024occamslgssimpleapproach,drsplat25,marrie2025ludvig} project all 2D features into 3DGS \cite{kerbl3Dgaussians} via direct injection, enabling fast open-vocabulary segmentation in seconds without training, but may neglect scene geometry by uniformly propagating features along rays \cite{wang2025vala}.
+% 通用化方法则寻求在新场景上实现快速、强大的开放词汇理解。其中，SceneSplat[29]是首个通用化的语言高斯泼溅方法，它直接在3D数据上进行训练和评估，在新场景上实现了显著更快的推理速度，并取得了性能上的重大提升。然而，这类方法依赖大量3D语言预训练数据，这占用了大量存储空间，严重限制了训练和推理效率。因此，我们提出SceneSplat-Compact数据集，在不损失特征质量的条件下大幅压缩存储需求，实现了更高效的训练和推理。
+Generalizable approaches aim to achieve fast and robust open-vocabulary understanding on novel scenes. For instance, SceneSplat \cite{li2025scenesplat} is trained directly on 3D data and supports rapid inference with strong results. However, its reliance on massive 3D language-pretraining data incurs high storage costs and limits efficiency. To address this, we introduce SceneSplat-Compact, a compressed dataset that greatly reduces storage while retaining useful feature quality, enabling more efficient training \& inference.
+\subsection{Learning Compressed Features for Model Compression}
+% 在模型压缩领域，基于特征的压缩范式因其直接作用于模型激活而非权重矩阵而受到广泛关注。该方向的开创性研究指出，Transformer架构中的特征（激活）呈现显著的低秩特性，而权重矩阵本身并不低秩，这为直接压缩权重矩阵的传统低秩近似方法提供了重要的理论反思 [Compressing Transformers: Features Are Low-Rank, but Weights Are Not!]。后续工作进一步从理论上论证了对激活进行结构化截断相较于权重压缩的优越性，并提出了可微分的奇异值分解框架，以实现自适应的压缩结构学习 [DOBI-SVD: DIFFERENTIABLE SVD FOR LLM COMPRESSION AND SOME NEW PERSPECTIVES]。
+In model compression, feature-based methods have gained prominence by targeting model activations instead of weights. Foundational work shows that Transformer activations are intrinsically low-rank, while the weight matrices are not, challenging traditional low-rank weight approximation \cite{yu2023compressing}. Later research further establishes the advantage of truncating activations over compressing weights, and introduces a differentiable SVD framework for adaptive compression \cite{wang2025dobi}.
+% 近年来，这一范式得到了多维度的拓展与深化。在低秩分解方向，研究重点转向了更精细的联合分解与动态机制。例如，对注意力模块中Q,K,V权重的联合低秩分解能有效减少键值缓存 [QSVD]；层选择性压缩机制能动态识别并压缩冗余矩阵，与非结构化剪枝协同工作 [LS-PRISM]；而嵌套的、感知激活的分解方法则通过管理异常值提升了逼近精度 [NSVD]。在高效微调与适配方面，将低秩适配器与动态稀疏化相结合，能在保持参数效率的同时增强模型能力 [LoSA]。混合压缩框架的探索也日益活跃，例如统一的后训练量化与低秩压缩框架支持对多种模型架构进行可配置的压缩 [UniQL]；而通过在层级间共享权重并添加低秩差分矩阵，可以大幅降低内存占用 [DeltaLLM]。此外，面向高效推理的预训练压缩方法，通过嵌入式的上下文压缩技术，为长序列处理提供了新的解决方案 [PCC]。
+Recent work extends the paradigm in multiple directions. For low-rank decomposition, methods employ refined joint factorizations and dynamic mechanisms, such as jointly decomposing attention Q,K,V matrices to reduce KV-cache \cite{wang2025qsvd} and using activation-aware decomposition to handle outliers \cite{tsitsikas2020nsvd}. Hybrid frameworks that unify quantization with low-rank compression have also been studied \cite{chiang2025uniql,mikaelyan2025deltallm}.
+
+% 然而，目前还没有将低秩分解技术应用于大规模3DGS预训练语言特征的工作。同时，尽管已经有部分工作尝试使用稀疏表示[LangSplatV2]、字典学习[OpenGaussian]、特征降维[OccamLGS]以及量化[Dr. Splat]等技术路径提升效率，针对3D开放词汇语言特征的通用压缩表示仍有待探索。
+% 据我们所知，我们是首个将低秩分解技术应用于3D开放词汇语言特征的通用压缩表示的工作。
+Low-rank decomposition has not been applied to large-scale 3DGS pretrained language features. Meanwhile, methods like sparse representation \cite{li2025langsplatv2}, dictionary learning \cite{wu2024opengaussian}, feature dimensionality reduction \cite{cheng2024occamslgssimpleapproach}, and quantization \cite{drsplat25} have been explored for efficiency, yet a general compression scheme for 3D open-vocabulary language features remains an open problem.
+
+\section{Method}
+\label{sec:method}
+For completeness, we defer the background on SVD and RPCA to Appendix~\ref{sec:preliminaries}. Throughout this section, $\mathbf{F}$ denotes the original language-feature matrix, $\tilde{\mathbf{F}}$ its spatially aggregated version, and symbols with bars or hats denote grid averages or network predictions when needed.
+
+\subsection{Grid-based Feature Approximation}
+% LERF与3DOVS数据集上的Grid内特征相似度分析。我们计算了原始SceneSplat的768维语言特征以及通过SVD压缩到16维后特征的L1、L2距离以及余弦相似度等指标，所有场景中的Grid内特征间都具有很高的相似度，说明了语言特征矩阵在空间维度上的冗余性。
+\begin{table*}[tb]
+  \caption{Analysis of feature similarity within grids on the LERF and 3DOVS datasets. We compute metrics such as L1, L2 distance, and cosine similarity for both the original 768-dim SceneSplat language features and the corresponding features compressed to 16 dimensions via SVD. High similarity is consistently observed within grids across all scenes, indicating substantial spatial redundancy in the language feature matrix.}
+  \label{tab:gridsim}
+  \centering
+  \resizebox{\textwidth}{!}{
+  \begin{tabular}{@{}l|c|cccc|ccccc|c@{}}
+    \toprule
+    % 表头行：用 \multicolumn 覆盖竖线
+    \multicolumn{1}{c}{\multirow{2}{*}{Setting}} & \multicolumn{1}{c}{\multirow{2}{*}{Metrics}} & \multicolumn{4}{c}{LERF} & \multicolumn{5}{c}{3D-OVS} & \multicolumn{1}{c}{\multirow{2}{*}{Avg}}\\
+    \cmidrule(lr){3-6} \cmidrule(lr){7-11}
+    \multicolumn{1}{c}{} & & Ramen & Figurines & Teatime & Kitchen & Bed & Bench & Room & Sofa & Lawn & \\
+    \midrule
+    & L1 & 1.7299 & 1.8044 & 1.9874 & 2.4004 & 0.4819 & 1.3564 & 0.7954 & 1.6470 & 1.1471 & 1.4833\\
+    origin & L2 & 0.0822 & 0.0855 & 0.0940 & 0.1135 & 0.0223 & 0.0638 & 0.0373 & 0.0783 & 0.0530 & 0.0700\\
+    & Cos & 0.9943 & 0.9935 & 0.9923 & 0.9895 & 0.9993 & 0.9964 & 0.9985 & 0.9927 & 0.9976 & 0.9949\\
+    \midrule
+    & L1 & 0.1577 & 0.1400 & 0.1768 & 0.1806 & 0.0497 & 0.1605 & 0.0802 & 0.1576 & 0.1327 & 0.1373\\
+    SVD-16D & L2 & 0.0501 & 0.0446 & 0.0577 & 0.0577 & 0.0168 & 0.0523 & 0.0256 & 0.0546 & 0.0454 & 0.0450\\
+    & Cos & 0.9975 & 0.9976 & 0.9964 & 0.9965 & 0.9995 & 0.9972 & 0.9991 & 0.9949 & 0.9981 & 0.9974\\
+    \bottomrule
+  \end{tabular}}
+\end{table*}
+
+
+
+
+
+
+
+% 之前的工作仅关注针对完整数据矩阵的压缩，忽略了某些低秩矩阵的固有特性。例如，开放词汇场景理解中的3D语言特征矩阵，其行与行之间的特征往往是相似的，这是因为在稠密点云条件下，空间中相邻的两个点往往对应相同的语义。由此，我们假设空间上相邻的两个点具有近似相同的语言特征。
+% Existing research has predominantly concentrated on compressing the complete data matrix, while neglecting the inherent characteristics of certain low-rank structures. In open-vocabulary scene understanding, for example, the 3D language feature matrix demonstrates strong inter-row similarity, owing to the fact that neighboring points in dense point clouds commonly share the same semantic label. This observation motivates the hypothesis that spatially adjacent points exhibit nearly equivalent language features.
+Existing work typically compresses the full data matrix, often overlooking its inherent low-rank structure. In open-vocabulary scene understanding, for instance, the 3D language-feature matrix exhibits strong row-wise similarity because neighboring points in a dense cloud usually share the same semantic label. This motivates the approximation that spatially adjacent points have nearly identical language features.
+
+% 如何判断两个点在空间中相邻？参考PTV3的点云序列化流程，我们将同一个Grid内的点云视为相邻，且具有相同serialized encoding。具体而言，将3D点云坐标p归一化后除以网格大小g并向下取整，得到离散化的整数网格坐标p/g，随后映射到特定space-filling curve上的序列化编码\phi^{-1}(p/g).
+% 然而，离散化后的网格中很大一部分只含一个点云，称为稀疏网格。为了进一步聚合并压缩相似的点云特征，我们提出一种基于余弦相似度的网格聚合策略。具体而言，针对每个稀疏网格p_i \in \mathcal{P}_{sparse}，我们选出与其距离最近的k个网格\mathcal{P}_{k}，随后于每个网格的平均语言特征计算余弦相似度，选择相似度最高的网格进行合并。
+% How can we determine whether two points are spatially adjacent? Following the point cloud serialization procedure of PTv3\cite{wu2024ptv3,wu2022ptv2,wu2024ppt,pointcept2023}, we consider points belonging to the same grid as neighbors and assign them identical serialized encoding. Specifically, after normalizing the 3D point cloud $\mathcal{X} \in \mathbb{R}^{N \times 3}$, we divide it by the grid size $g \in \mathbb{R}$ and take the floor to obtain the discretized integer grid coordinate $\lfloor \mathbf{x}_i/g \rfloor \in \mathbb{R}^{3}$. This coordinate is then mapped to a serialized encoding $\varphi^{-1}(\lfloor \mathbf{x}_i/g \rfloor)$ on a specific space-filling curve.
+% However, a large portion of the discretized grids contain only a single point cloud, referred to as sparse grids. To further aggregate and compress similar point cloud features, we introduce a similarity-based grid merging strategy. Specifically, for each sparse grid $p_i \in \mathcal{P}_\text{sparse}^i$, we first select the k nearest neighboring grids $\mathcal{P}_k^i$ in spatial distance. Then, we compute the cosine similarity between the average language features of $p_i$ and each grid in $\mathcal{P}_k$, and merge $p_i$ with the grid $p_*$ that yields the highest similarity.
+
+To identify spatially adjacent points, we adopt the point-cloud serialization of PTv3 \cite{wu2024ptv3,wu2022ptv2,wu2024ppt,pointcept2023}. Points that fall into the same grid are treated as neighbors and share the same serialization. Concretely, after normalizing the point cloud $\mathcal{X} \in \mathbb{R}^{N \times 3}$, we discretize it by the grid size $g \in \mathbb{R}$ and take the floor to obtain integer grid coordinates $\lfloor \mathbf{x}_i/g \rfloor \in \mathbb{R}^{3}$.
+Many of the resulting grids, however, contain only a single point, called sparse grids. To aggregate them, we introduce a similarity-based merging strategy. For each sparse grid $p_i \in \mathcal{P}_\text{sparse}^i$, we first find its k nearest neighboring grids $\mathcal{P}_k^i$ in spatial distance, then compute the cosine similarity between the average language features of $p_i$ and each grid in $\mathcal{P}_k^i$, and finally merge $p_i$ with the grid $p_*$ that achieves the highest similarity. The grid size therefore controls a trade-off: coarser grids yield stronger compression, whereas finer grids better preserve boundaries and small structures.
+
+\begin{equation}
+    \mathcal{P}_k^i = \underset{p_j \in \mathcal{P},\, |\mathcal{P}_k|=k}{\arg\min} \|p_j - p_i\|_2, \quad p_j = \lfloor \mathbf{x}_j/g \rfloor
+\end{equation}
+
+\begin{equation}
+    p_* = \underset{p_j \in \mathcal{P}_k^i} {\arg\max} \text{ sim}(p_i, p_j), \quad\text{sim}(p_i, p_j) = \frac{\bar{\mathbf{f}}_i \cdot \bar{\mathbf{f}}_j}{\|\bar{\mathbf{f}}_i\| \|\bar{\mathbf{f}}_j\|}
+\end{equation}
+where $\bar{\mathbf{f}_i} = \frac{1}{N_i} \sum_{j=1}^{N_i} \mathbf{f}_j$ denotes the average language feature of all point clouds within grid $p_i$, and $N_i$ denotes the number of point clouds in $p_i$. 
+% 当p_i与p_*合并后，新的网格将加入含多个点云的网格集合，随后继续遍历\mathcal{P}_\text{sparse}^i，直至所有稀疏网格都被合并到其他网格中。最后，将每个网格内的语言特征替换为该网格的平均语言特征，得到原始语言特征矩阵F的近似F'。整套流程可以概括为算法1.
+After $p_i$ is merged with $p_*$, the new grid is added to the set of grids containing multiple point clouds. Then, the traversal of $\mathcal{P}_\text{sparse}^i$ continues until all sparse grids have been merged into others. 
+
+Finally, the language features within each grid are replaced by the average language feature $\bar{\mathbf{f}_i'}$, yielding an approximation $\tilde{\mathbf{F}}$ of the original language feature matrix $\mathbf{F}$. Algorithm~\ref{alg:algorithm} summarizes the procedure.
+\begin{equation}
+    \tilde{\mathbf{F}} = [(\bar{\mathbf{f}}_1')^T, (\bar{\mathbf{f}}_2')^T, \dots, (\bar{\mathbf{f}}_{N'}')^T]
+\end{equation}
+
+% 我们在LERF与3DOVS数据集上分析了网格化特征聚合算法后，在将所有语言特征近似为平均特征之前，每个Grid内对应的平均特征相似度指标，如表x所示。所有场景的平均余弦相似度都接近1，且具有较小的平均L2距离。在执行SVD分解并压缩到16维特征矩阵后，Grid内特征相似度还有进一步显著提升。这验证了3D语言特征矩阵的行间是高度冗余的。
+Table~\ref{tab:gridsim} reports within-grid feature similarity on LERF \cite{lerf2023} and 3DOVS \cite{liu2023weakly}, before replacing features with grid averages. The near-unit cosine similarity and small L2 distances indicate spatial redundancy. The 16-D SVD features show higher cosine similarity.
+
+
+
+
+\begin{algorithm}[tb]
+\caption{Grid feature aggregation.}
+\label{alg:algorithm}
+\begin{algorithmic}[1]
+\Require Points $\mathcal{X}$, features $\mathbf{F}$, grid size $g$, number of neighbors $k$
+\Ensure Approximate features $\tilde{\mathbf{F}}$
+\State Initialize $N_p\gets0$, $\bar{\mathbf{f}}_p\gets\mathbf{0}$, $\mathcal{P}_{\text{dense}}\gets\emptyset$, $\mathcal{P}_{\text{sparse}}\gets\mathcal{P}$
+\For{each point $\mathbf{x}_i\in\mathcal{X}$ with feature $\mathbf{f}_i$}
+    \State $p\gets\lfloor\mathbf{x}_i/g\rfloor$, $N_p\gets N_p+1$
+    \State $\bar{\mathbf{f}}_p\gets(1-1/N_p)\bar{\mathbf{f}}_p+\mathbf{f}_i/N_p$
+    \If{$N_p=2$}
+        \State $\mathcal{P}_{\text{sparse}}\gets\mathcal{P}_{\text{sparse}}\setminus\{p\}$
+        \State $\mathcal{P}_{\text{dense}}\gets\mathcal{P}_{\text{dense}}\cup\{p\}$
+    \EndIf
+\EndFor
+\While{$\mathcal{P}_{\text{sparse}}\ne\emptyset$}
+    \State Pick $p_i\in\mathcal{P}_{\text{sparse}}$ and find its $k$ nearest grids $\mathcal{P}_k^i$
+    \State $p_*\gets\arg\max_{p_j\in\mathcal{P}_k^i}\operatorname{sim}(\bar{\mathbf{f}}_{p_i},\bar{\mathbf{f}}_{p_j})$
+    \State $N_{p_*}\gets N_{p_*}+1$
+    \State $\bar{\mathbf{f}}_{p_*}\gets(1-1/N_{p_*})\bar{\mathbf{f}}_{p_*}+\bar{\mathbf{f}}_{p_i}/N_{p_*}$
+    \State $\mathcal{P}_{\text{sparse}}\gets\mathcal{P}_{\text{sparse}}\setminus\{p_i,p_*\}$
+    \State $\mathcal{P}_{\text{dense}}\gets\mathcal{P}_{\text{dense}}\cup\{p_*\}$
+\EndWhile
+\For{each grid $p\in\mathcal{P}_{\text{dense}}$ and point $\mathbf{x}_i\in p$}
+    \State $\tilde{\mathbf{f}}_i\gets\bar{\mathbf{f}}_p$
+\EndFor
+\State \Return $\tilde{\mathbf{F}}$ constructed from all $\tilde{\mathbf{f}}_i$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Structured RPCA}
+% 在验证了特征矩阵的冗余性后，我们通过网格化特征聚合算法，以F'近似F实现矩阵压缩。值得注意的是，空间维度上的压缩并不影响F'在特征维度上的冗余，可以进一步通过SVD压缩F'的特征。然而，聚合算法改变了矩阵F的奇异值。因此，本节将探究F与F'间奇异值分解的关系，并将其应用到RPCA算法中，以进一步实现F'在特征维度上的压缩。
+% After verifying the redundancy of the feature matrix, we employ the grid-based feature aggregation algorithm to approximate $\mathbf{F}$ with $\tilde{\mathbf{F}}$, thereby compressing the matrix. Notably, compression along the spatial dimension does not eliminate the redundancy of $\tilde{\mathbf{F}}$ along the feature dimension, which can be further compressed via SVD. However, the aggregation algorithm alters the singular values of matrix $\mathbf{F}$. Thus, this section investigates the relationship between the singular value decompositions of $\mathbf{F}$ and $\tilde{\mathbf{F}}$, and applies it to the RPCA framework to achieve additional compression of $\tilde{\mathbf{F}}$ in the feature dimension.
+After confirming the redundancy of the feature matrix, we first apply grid-based aggregation to spatially compress $\mathbf{F}$ into $\tilde{\mathbf{F}}$. While this reduces spatial redundancy, $\tilde{\mathbf{F}}$ remains redundant along the feature dimension and can be further compressed via SVD. However, the aggregation changes the singular values of the original matrix. We therefore analyze the relationship between the SVDs of $\mathbf{F}$ and $\tilde{\mathbf{F}}$, and incorporate this insight into an RPCA framework to achieve additional, structured compression in the feature dimension.
+
+% 我们首先分析矩阵奇异值分解的变化。
+We begin by analyzing how the singular value decomposition of the matrix changes. Let $\mathbf{A} \in \mathbb{R}^{m \times n}$ be the original matrix containing duplicate rows, and let  $\tilde{\mathbf{A}} \in \mathbb{R}^{r \times n}, r \leq m$ be the matrix composed of all its distinct rows. Define a selection matrix  $S \in \{0,1\}^{m \times r}$ such that:
+\begin{equation}
+    \mathbf{A} = \mathbf{S} \tilde{\mathbf{A}}, \quad\sum_{j=1}^{r} \mathbf{S}_{ij} = 1, \text{ for } \forall i = 1,\ldots,m
+    \label{eq:3.31}
+\end{equation}
+where each row of the selection matrix $\mathbf{S}$ is a one-hot vector. We further define the diagonal weight matrix $\mathbf{D} \in \mathbb{R}^{r \times r}$ as:
+\begin{equation}
+    \mathbf{D} = \mathbf{S}^T \mathbf{S} = \operatorname{diag}(d_1, d_2, \ldots, d_r)
+    \label{eq:3.32}
+\end{equation}
+where $d_j$ denotes the number of occurrences of the j-th row of $\tilde{\mathbf{A}}$ in $\mathbf{A}$. Then construct the weighted matrix $\mathbf{A}_w \in \mathbb{R}^{r \times n}$: 
+% \begin{equation}
+%     \mathbf{A_w} = \mathbf{D}^{1/2} \tilde{\mathbf{A}}
+%     \label{eq:3.33}
+% \end{equation}
+\begin{equation}
+    \mathbf{A_w} = \mathbf{D}^{1/2} \tilde{\mathbf{A}}, \quad \mathbf{A_w}^T \mathbf{A_w} = \tilde{\mathbf{A}}^T \mathbf{D} \tilde{\mathbf{A}} = \mathbf{A}^T \mathbf{A}
+    \label{eq:3.34}
+\end{equation}
+Consequently, $\mathbf{A}_w$ and $\mathbf{A}$ share the same Gram matrix, and thus have identical singular values. Hence, we perform the compact singular value decomposition on the weighted matrix: $\mathbf{A_w} = \mathbf{U_w} \mathbf{\Sigma} \mathbf{V}^T$. Combining Eq. \eqref{eq:3.31} \& Eq. \eqref{eq:3.34} yields the following equation:
+\begin{equation}
+    \mathbf{A} = \mathbf{S} \mathbf{D}^{-1/2} \mathbf{A_w} = (\mathbf{S} \mathbf{D}^{-1/2} \mathbf{U_w}) \mathbf{\Sigma} \mathbf{V}^T
+    \label{eq:3.35}
+\end{equation}
+Let $\mathbf{U} = \mathbf{S} \mathbf{D}^{-1/2} \mathbf{U_w} \in \mathbb{R}^{m \times r}$. It can be proved that the columns of $\mathbf{U}$ are orthonormal, and thus $\mathbf{A} = \mathbf{U}\mathbf{\Sigma}\mathbf{V}^T$ is the compact SVD of $\mathbf{A}$.
+
+% 下面分析如何将方程13应用到RPCA算法中对矩阵F进行分解。
+We now analyze how Eq. \eqref{eq:3.35} can be applied to the RPCA algorithm for decomposing matrix $\mathbf{F}$. Based on the structural assumption in Eq. \eqref{eq:3.31}, we can rewrite the RPCA problem Eq. \eqref{eq:RPCA-approx} as:
+\begin{equation}
+    \min_{\tilde{\mathbf{L}}, \tilde{\mathbf{E}}} \|\mathbf{S} \tilde{\mathbf{L}}\|_* + \lambda \|\mathbf{S} \tilde{\mathbf{E}}\|_1 \quad \text{s.t.} \quad \tilde{\mathbf{F}} = \tilde{\mathbf{L}} + \tilde{\mathbf{E}}
+    \label{eq:3.36}
+\end{equation}
+where $\mathbf{L} = \mathbf{S}\tilde{\mathbf{L}}$, $\mathbf{E} = \mathbf{S}\tilde{\mathbf{E}}$. Analogously, we construct the weighted matrix $\mathbf{L_w}=\mathbf{D}^{1/2} \tilde{\mathbf{L}}$. From Eq. \eqref{eq:3.34}, we know that $\mathbf{L}$ and $\mathbf{L_w}$ share the same singular values and therefore have identical nuclear norms.
+\begin{equation}
+    \|\mathbf{L}\|_* = \|\mathbf{L_w}\|_* = \|\mathbf{D}^{1/2} \tilde{\mathbf{L}}\|_*
+    \label{eq:3.37}
+\end{equation}
+
+Given that each row of $\mathbf{S}$ contains exactly one nonzero element, we have for the L1-norm of matrix $\mathbf{E}$:
+\begin{equation}
+    \|\mathbf{E}\|_1 = \sum_{i=1}^m \sum_{j=1}^n |\mathbf{E}_{ij}| = \sum_{i=1}^m \sum_{j=1}^n \left| \sum_{k=1}^r \mathbf{S}_{ik} \tilde{\mathbf{E}}_{kj} \right| = \sum_{k=1}^r d_k \|\tilde{\mathbf{E}}_{k}\|_1
+    \label{eq:3.38}
+\end{equation}
+where $\tilde{\mathbf{E}}_{k}$ is the k-th row of $\tilde{\mathbf{E}}$, and $\|\tilde{\mathbf{E}}_{k}\|_1$ denotes the L1-norm of the row vector.
+
+Combining Eq. \eqref{eq:3.37} and Eq. \eqref{eq:3.38}, we can transform problem Eq. \eqref{eq:3.36} into:
+\begin{equation}
+    \min_{\tilde{\mathbf{L}}, \tilde{\mathbf{E}}} \|\mathbf{D}^{1/2} \tilde{\mathbf{L}}\|_* + \lambda \sum_{k=1}^r d_k \|\tilde{\mathbf{E}}_{k}\|_1 \quad \text{s.t.} \quad \tilde{\mathbf{F}} = \tilde{\mathbf{L}} + \tilde{\mathbf{E}}
+    \label{eq:3.39}
+\end{equation}
+
+
+
+
+% 在处理实际的3D语言特征矩阵时，一般有$m>r>>n$，因此标准RPCA的计算复杂度为。相比之下，我们的结构化RPCA算法计算复杂度为，效率大约提升至原来的m/r倍。
+% In practical applications involving 3D language feature matrices, the relationship typically satisfies $m > r \gg n$. Consequently, the computational complexity of standard RPCA is $O(mn \cdot min(m,n)) = O(m \cdot n^2)$, whereas that of our structured RPCA algorithm is $O(r \cdot n^2)$. This yields an efficiency improvement by approximately a factor of $m/r$.
+
+% 此外，我们最终存储的并非低秩矩阵L_*，而是其经过SVD分解后压缩至低维的部分。具体而言，根据方程13，假设加权矩阵的SVD分解为\mathbf{L_w}^* = \mathbf{U_w} \mathbf{\Sigma} \mathbf{V}^T，则L_*的SVD分解为\mathbf{L}^* = (\mathbf{S} \mathbf{D}^{-1/2} \mathbf{U_w}) \mathbf{\Sigma} \mathbf{V}^T。因此，我们实际需要存储的数据仅为选择矩阵S以及压缩特征：
+Furthermore, what we ultimately store is not the low-rank matrix $\mathbf{L}^*$ itself, but its compressed low-dimensional components obtained via SVD. Specifically, following Eq. \eqref{eq:3.35}, given the SVD of the weighted matrix as $\mathbf{L_w}^* = \mathbf{U_w} \mathbf{\Sigma} \mathbf{V}^T$, the SVD of $\mathbf{L}^*$ can be expressed as $\mathbf{L}^* = (\mathbf{S} \mathbf{D}^{-1/2} \mathbf{U_w}) \mathbf{\Sigma} \mathbf{V}^T$. Hence, the actual data we need to store are only the selection matrix $\mathbf{S}$ and the compressed features:
+\begin{equation}
+    \hat{\mathbf{U}} = \mathbf{D}^{-1/2} \mathbf{U_w}[:,:n'] \mathbf{\Sigma}[:n'] \in \mathbb{R}^{r \times n'}
+     \label{eq:3.310}
+\end{equation}
+where $\mathbf{U_w}[:,:n']$ and $\mathbf{\Sigma}[:n']$ denote the first $n'$ columns of $\mathbf{U_w}$ and the diagonal matrix composed of the first $n'$ singular values of $\mathbf{\Sigma}$, respectively, and $n' \ll n$.
+% 由于S的每一行都是onehot向量，因此可以压缩成一个m维度的索引向量。最终的存储量减少至：m+rn'，压缩比达到mn / (m+rn').
+Since each row of $\mathbf{S}$ is one-hot, it can be compressed into an m-dimensional index vector. As a result, the final storage is reduced to $m + rn'$, and the compression ratio reaches $mn / (m + rn')$.
+Detailed derivations and the structured RPCA algorithm are provided in the supplement.
+
+
+
+
+
+
+
+\begin{figure*}[tb]
+  \centering
+  \includegraphics[width=0.90\textwidth]{figs/JM-Visual.pdf}
+  \caption{UMAP visualizations of 768-D features and their 16-D SVD projections in LERF Waldo Kitchen and 3D-OVS Room.}
+  \label{fig:JM-visual}
+\end{figure*}
+
+\begin{table*}[tb]
+  \caption{Inter-class Jeffries--Matusita (JM) distances before and after 16-D compression, using Gaussian, arithmetic-mean (AM), and geometric-mean (GM) estimates. Higher values indicate greater separability. Avg averages the nine scenes.}
+  \label{tab:jm-dist}
+  \centering
+  \resizebox{\textwidth}{!}{
+  \begin{tabular}{@{}l|c|cccc|ccccc|c@{}}
+    \toprule
+    % 表头行：用 \multicolumn 覆盖竖线
+    \multicolumn{1}{c}{\multirow{2}{*}{Setting}} & \multicolumn{1}{c}{\multirow{2}{*}{Metrics}} & \multicolumn{4}{c}{LERF} & \multicolumn{5}{c}{3D-OVS} & \multicolumn{1}{c}{\multirow{2}{*}{Avg}}\\
+    \cmidrule(lr){3-6} \cmidrule(lr){7-11}
+    \multicolumn{1}{c}{} & & Ramen & Figurines & Teatime & Kitchen & Bed & Bench & Room & Sofa & Lawn & \\
+    \midrule
+    & gaussian & 1.4128 & 1.4139 & 1.4110 & 1.4139 & 1.4142 & 1.4141 & 1.4142 & 1.4115 & 1.3875 & 1.4103\\
+    origin & AM & 0.8061 & 0.9071 & 0.9522 & 0.9413 & 1.1786 & 1.0659 & 1.1303 & 1.1031 & 0.9342 & 1.0021\\
+    & GM & 0.8506 & 0.9949 & 1.0322 & 1.0291 & 1.2492 & 1.1393 & 1.1987 & 1.1901 & 0.9702 & 1.0727\\
+    \midrule
+    & gaussian & 1.3887 & 1.4119 & 1.3994 & 1.4119 & 1.4142 & 1.4110 & 1.4137 & 1.4097 & 1.3013 & 1.3958($\textcolor{green}{-1.0\%}$)\\
+    ours-16D & AM & 0.8992 & 1.0819 & 1.0661 & 1.1069 & 0.9475 & 1.0429 & 1.0045 & 1.0006 & 0.9539 & 1.0115($\textcolor{red}{+0.9\%}$)\\
+    & GM & 0.9466 & 1.1829 & 1.1586 & 1.2319 & 1.1235 & 1.1397 & 1.1203 & 1.1649 & 0.9932 & 1.1179($\textcolor{red}{+4.2\%}$)\\
+    \bottomrule
+  \end{tabular}}
+\end{table*}
+
+\begin{figure*}[tb]
+  \centering
+  \includegraphics[width=0.95\textwidth]{figs/Visualize-All.pdf}
+  \caption{\textbf{Left:} PCA visualization of semantic features on the LERF dataset. \textbf{Right:} Qualitative results of 3D semantic segmentation on ScanNet++ scenes.}
+  \label{fig:Visualize}
+\end{figure*}
+
+\begin{table*}[tb]
+\caption{3D Semantic Segmentation on the Fine-Grained ScanNet++ (100 classes), Matterport3D (160 classes) and ScanNet200 (200 classes) Benchmarks.}
+  \label{tab:scene-splat}
+  \centering
+  \resizebox{\textwidth}{!}{
+\begin{tabular}{l|l|c|cc|cc|cc}
+\toprule
+ \multirow{2}{*}{Method} & \multirow{2}{*}{Training Source} & Model & \multicolumn{2}{c|}{ScanNet200} & \multicolumn{2}{c|}{Matterport3D} & \multicolumn{2}{c}{ScanNet++} \\
+ & & Params & f-mIoU & f-mAcc & f-mIoU & f-mAcc & f-mIoU & f-mAcc \\
+ \midrule
+ OpenScene\cite{peng2023openscene} & SN & 14.69M & 6.4 & 12.2 & 5.7 & 10.7 & 8.8 & 14.7 \\
+ PLA\cite{ding2022language} & SN & \underline{11.73M} & 1.8 & 3.1 & - & - & - & - \\
+ RegionPLC\cite{yang2024regionplc} & SN & 46.72M & 9.2 & 16.4 & 6.2 & 13.3 & 11.3 & 20.1 \\
+ OV3D\cite{jiang2024open} & SN & - & 8.7 & - & - & - & - & - \\
+ Mosaic3D\cite{lee2025mosaic3d} & SN & 683.72M & 13.0 & 24.5 & 8.6 & 17.8 & \textbf{16.2} & \textbf{27.1} \\
+ SceneSplat\cite{li2025scenesplat} & SN & 91.72M & \underline{18.9} & \underline{31.7} & \textbf{10.8} & \textbf{18.7} & \underline{14.7} & 24.7 \\
+ Ours & SN & \textbf{9.58M} & \textbf{19.0} & \textbf{31.9} & \underline{10.6} & \underline{18.3} & \underline{14.7} & \underline{24.9} \\
+ % Ours(PTv3) & SN & -M & - & - & - & - & - & - \\
+ \midrule
+ Mosaic3D & SN, SN++, ARKitS, MP3D, S3D & 683.72M & 15.7 & 28.3 & \underline{13.1} & 27.7 & 18.0 & 29.0 \\
+ SceneSplat & SN++ & 91.72M & 11.8 & 19.2 & 10.6 & 18.6 & 26.8 & 45.3 \\
+ SceneSplat & SN, SN++, MP3D & 91.72M & \textbf{21.4} & \textbf{38.7} & \textbf{13.8} & \underline{31.8} & \textbf{28.4} & \textbf{50.0} \\
+ Ours & SN, SN++, MP3D & \textbf{9.58M} & \underline{21.2} & \underline{38.6} & \textbf{13.8} & \textbf{31.9} & \underline{28.0} & \underline{49.6} \\
+ % Ours(PTv3) & SN, SN++, MP3D & -M & - & - & - & - & - & - \\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[tb]
+\centering
+\caption{Performance of open vocabulary 3D object selection and rendering on LERF. Accuracy is measured by mAcc@0.25. $*$ indicates officially provided pre-trained weights. }
+\label{tab:lerf-ovs}
+% We observe that the SceneSplat checkpoint suffers from severe mode collapse, resulting in only foreground-background separation in LERF.
+% \setlength{\tabcolsep}{3.5mm}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{@{}l|cccccccc|cc|c}
+\toprule
+\multirow{2}{*}{Methods} &
+\multicolumn{2}{c} {figurines} & 
+\multicolumn{2}{c} {ramen} & 
+\multicolumn{2}{c} {teatime} & 
+\multicolumn{2}{c|} {waldo-kitchen} & 
+\multicolumn{2}{c|} {Average} & \multirow{2}{*}{Time}\\ 
+& mIoU$\uparrow$ & mAcc$\uparrow$ & mIoU$\uparrow$ & mAcc$\uparrow$ & mIoU$\uparrow$ & mAcc$\uparrow$ & mIoU$\uparrow$ & mAcc$\uparrow$ & mIoU$\uparrow$ & mAcc$\uparrow$ \\
+\midrule 
+% \specialrule{0.4pt}{0pt}{0pt}
+LangSplat\cite{qin2024langsplat} & 10.16 & 8.93 & 7.92 & 11.27 & 11.38 & 20.34 & 9.18 & 9.09 & 9.66 & 12.41 & >1h\\
+LEGaussians\cite{shi2024language} & 17.99 & 23.21 & 15.79 & 26.76 & 19.27 & 27.12 & 11.78 & 18.18 & 16.21 & 23.82 & >4h\\
+GSGrouping\cite{ye2024gaussian} & 55.38 & 76.61 & 32.58 & 54.45 & 33.82 & 52.21 & 30.02 & 50.23 & 37.95 & 58.38 & >2h\\
+OpenGaussian\cite{wu2024opengaussian} & 39.29 & 55.36 & 31.01 & 42.25 & 60.44 & 76.27 & 22.70 & 31.82 & 38.36 & 51.43 & >1h\\
+InstanceGS\cite{li2025instancegaussian} & 52.04 & 69.64 & 22.36 & 38.03 & 53.35 & 71.19 & 37.07 & 54.55 & 41.21 & 58.35 & >2h\\
+Dr.Splat\cite{drsplat25} & 54.42 & 80.36 & 24.33 & 35.21 & 57.35 & 77.97 & 37.05 & 63.64 & 43.29 & \underline{64.30} & 0.57min\\
+% CAGS & 60.85 & 82.14 & 36.29 & 46.48 & 68.40 & 86.44 & 37.62 & 63.64 & 50.79 & 69.62 \\
+% SLAG & 48.10 & 69.95 & 24.76 & 64.77 & 56.12 & 81.68 & 27.55 & 48.88 & 39.13 & 66.32 \\
+LUDVIG\cite{marrie2025ludvig} & 54.43 & - & 50.11 & - & 69.01 & - & 56.03 & - & \textbf{57.40} & - & 10min\\
+OccamLGS\cite{cheng2024occamslgssimpleapproach} & 56.12 & 75.00 & 42.26 & 45.07 & 68.66 & 79.66 & 55.92 & 81.82 & \underline{55.74} & \textbf{70.39} & 2min \\
+\midrule
+% \specialrule{0.4pt}{0pt}{0pt}
+SceneSplat* & 45.58 & 67.86 & 26.75 & 38.03 & 49.02 & 62.71 & 38.75 & 50.00 & 40.03 & 54.65 & \underline{0.18min} \\
+Ours & 41.87 & 60.71 & 39.22 & 42.25 & 67.83 & 81.36 & 47.74 & 68.18 & 49.17 & 63.13 & \textbf{0.04min}\\
+\bottomrule
+\end{tabular}}
+\end{table*}
+
+\begin{table*}[tb]
+    \centering
+    \caption{Ablation study on module design and compressed feature dimensions. Left: component ablation on ScanNet200 and LERF using 16-dim features. Right: accuracy--latency trade-off with varying feature dimensions on LERF.}
+    \label{tab:ablation-main}
+    \centering
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{@{}lcccc|lcccc@{}}
+        \toprule
+        \multirow{2}{*}{Method} & \multicolumn{2}{c}{ScanNet200} & \multicolumn{2}{c|}{LERF} & \multirow{2}{*}{Rank} & \multicolumn{2}{c}{LERF} & \multicolumn{2}{c@{}}{Latency} \\
+        \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){7-8} \cmidrule(lr){9-10}
+        & mIoU & mAcc & mIoU & mAcc & & mIoU & mAcc & sec & Speedup \\
+        \midrule
+        Full Method (Ours) & 19.0 & 31.9 & 49.2 & 63.1 & 768 & - & - & 10.98 & 1.00$\times$ \\
+        w/o Density-Invariant & 18.4 & 31.2 & 44.1 & 60.9 & 32 & 55.82 & 67.52 & 3.39 & 2.95$\times$ \\
+        w/o RPCA & 18.7 & 31.5 & 46.2 & 61.3 & 16 & 49.17 & 63.13 & 2.44 & 4.50$\times$ \\
+        Only SVD & 18.2 & 30.8 & 41.3 & 59.2 & 8 & 43.64 & 57.15 & 2.15 & 4.65$\times$ \\
+        \bottomrule
+      \end{tabular}}
+\end{table*}
+
+\subsection{Grid-Guided Density-Invariant Learning}
+% 以往绝大部分开放词汇场景理解的工作都是以完整的点云或高斯场景为输入。然而，实际应用场景中往往对输入稠密点云下采样以提升效率。我们发现以往的前馈式方法中存在一定的对稠密点云输入的过拟合现象，当输入下采样的稀疏点云时模型的输出结果会更加不稳定。为了缓解这个问题，我们提出Grid-Guided Density-Invariant Learning以提升模型对任意密度点云输入的鲁棒性。
+% Most existing works on open-vocabulary scene understanding take a complete point cloud or Gaussian scene as input. In practical deployments, however, the input may be downsampled for efficiency, which can make feed-forward predictions less stable. To mitigate this issue, we propose Grid-Guided Density-Invariant Learning to improve robustness across a range of input densities.
+Most open-vocabulary 3D understanding methods assume dense point-cloud inputs, yet in practice the data are often down-sampled for efficiency. We find that feed-forward models tend to overfit to dense inputs, becoming unstable on sparse point clouds. To improve robustness to arbitrary input densities, we introduce Grid-Guided Density-Invariant Learning.
+
+% 3.2节中的网格聚合算法已经将输入点云聚合于固定大小的网格中，这天然有利于基于网格的下采样方法。我们遍历聚合后的网格集合$\mathcal{P}_{final}$并从每个网格中分别随机采样1个点和50%的点，构成下采样点云集合$\mathcal{X}_{single}$和$\mathcal{X}_{half}$。随后，输入以\theta为参数的网络$G_{\theta}(\cdot)$中得到预测的语言特征$\hat{F} = G_{\theta}(\mathcal{X})$.由此，我们提出Grid-Aligned Cross-Density Consistency Loss以约束不同密度点云输入下预测的特征一致性。
+The grid aggregation algorithm groups the input point cloud into fixed-size grids, which naturally lends itself to grid-based down-sampling. We traverse the aggregated grid set $\mathcal{P}_{\text{final}}$ and randomly sample one point from each grid to form the down-sampled point set $\mathcal{X}_{\text{single}}$, and sample 50\% of the points from each grid to form $\mathcal{X}_{\text{half}}$. These down-sampled sets are then fed into the network $G_{\theta}(\cdot)$ parameterized by $\theta$, yielding the predicted language features $\hat{F} = G_{\theta}(\mathcal{X})$. Let $\mathcal{S} = \{s_1, s_2, s_3\}$ denote the set of three sampling scenarios: dense, half-density, and single-point per-grid. $\mathcal{P}^{(s_i,s_j)} = \mathcal{P}^{(s_i)} \cap \mathcal{P}^{(s_j)}$ denotes the set of common grids between scenarios $s_i$ and $s_j$. We compute the feature consistency loss $\mathcal{L}_{\text{dense}}^{(s_i,s_j)}$ between different sampling scenarios as follows.
+
+\begin{equation}
+    \begin{aligned}
+    \mathcal{L}_{\text{dense}}^{(s_i,s_j)} &= \frac{1}{|\mathcal{P}^{(s_i,s_j)}|} \sum_{k \in \mathcal{P}^{(s_i,s_j)}} \|\bar{F}_k^{(s_i)} - \bar{F}_k^{(s_j)}\|_2^2, \\
+    \bar{F}_k^{(s)} &= \frac{1}{|N_k^{(s)}|} \sum_{l \in N_k^{(s)}} f_l^{(s)}.
+    \end{aligned}
+     \label{eq:loss-dense-perscene}
+\end{equation}
+  
+\begin{equation}
+    \mathcal{L}_{\text{dense}} = \frac{2}{K(K-1)} \sum_{i < j} \mathcal{L}_{\text{dense}}^{(s_i,s_j)}
+\end{equation}
+where $\bar{F}_k^{(s)}$ denotes the average language feature of the k-th grid in scenario $s$, $N_k^{(s)}$ is the number of point clouds, and $f_l^{(s)}$ is the l-th language feature in the k-th grid. The overall consistency constraint loss $\mathcal{L}_{\text{dense}}$ is the mean of the consistency losses between all scenario pairs. 
+% We set $K=3$ in this paper.
+
+% 我们在Vision-Language pretraining损失的基础上增加密度一致性约束项，得到如下的训练损失函数。
+On top of the Vision-Language pretraining loss\cite{li2025scenesplat}, we incorporate a density consistency constraint, yielding the following training loss function.
+\begin{equation}
+    \mathcal{L}_{total} = \lambda_{cos}\mathcal{L}_{cos} + \lambda_{L1}\mathcal{L}_{L1} + \lambda_{con}\mathcal{L}_{contrast} + \lambda_{dense}\mathcal{L}_{dense}
+    \label{eq:total-loss}
+\end{equation}
+% \section{Analysis of Language Feature Redundancy}
+
+
+
+
+
+
+
+
+
+
+\section{Experiments}
+\label{sec:experiment}
+We evaluate feature separability, downstream performance, and efficiency, and examine the roles of the backbone and compression.
+
+% 
+
+
+\subsection{Setup}
+\noindent\textbf{Datasets.}
+% 我们遵循 SceneSplat 的评估协议，在涵盖 超300个语义类别 的 ScanNet（20 类与 200 类划分）、ScanNet++（100 类）以及 Matterport3D（160 类）三个数据集上进行训练与评估。该协议在三维空间中综合衡量几何一致性、语义准确性（如前景平均交并比 f-mIoU 与前景平均准确率 f-mAcc）以及计算效率。我们设置的查询物体涵盖从鼠标到床等多种尺度，以检验模型对不同规模物体的开放词汇理解能力。
+Following SceneSplat's splits and metrics, we evaluate ScanNet (20/200 classes), ScanNet++ (100 classes), and Matterport3D (160 classes), together covering over 300 semantic categories. We report foreground mIoU, mAcc, and computational efficiency. The 160-class Matterport3D setting evaluates fine-grained recognition of long-tail objects. 
+% Our object queries span scales from a mouse to a bed, assessing open-vocabulary understanding across sizes.
+% 我们同样遵循LERF与3DOVS的评估协议，在2D渲染图上评估语义性能。
+% LERF数据集包含多样物体的日常室内场景，我们根据LERF评估协议[13]，在常用场景Ramen、Figurines、Teatime和Waldo Kitchen上进行了定量评估。在这些场景中，我们评估了开放词汇分割任务（mIoU）与定位精度。
+% 3D-OVS数据集涵盖多样背景下的长尾物体，我们在sofa、lawn、bed、room和bench五个场景中评估分割性能。评估时，我们采用[23]为这两个数据集提供的标注。
+Following the LERF\cite{lerf2023} protocol, we report open-vocabulary segmentation mIoU and localization accuracy on its standard everyday indoor scenes.
+% For the 3D-OVS dataset, which includes long-tail objects in varied backgrounds, we evaluate segmentation performance on five scenes: sofa, lawn, bed, room, and bench. 
+% The annotations used for both datasets are those provided by \cite{qin2024langsplat}.
+The annotations are provided by \cite{qin2024langsplat}.
+
+\noindent\textbf{Baselines.}
+% 在SceneSplat数据集上，我们与SceneSplat等[Mosaic3D，OV3D，RegionPLC，PLA，OpenScene]当前最先进的通用3D开放词汇分割方法进行比较。在LERF与3DOVS数据集上，我们与当前最先进的Per-Scene方法进行比较，同时也和SceneSplat比较。对于大多数方法，我们直接报告其已发表的最佳定量结果。
+On the SceneSplat dataset, we compare with general 3D open-vocabulary segmentation methods, including SceneSplat \cite{li2025scenesplat,lee2025mosaic3d,jiang2024open,yang2024regionplc,ding2022language,peng2023openscene}. On LERF and 3D-OVS, we compare with representative per-scene methods \cite{drsplat25,cheng2024occamslgssimpleapproach} and SceneSplat. For most methods, we report their published results.
+
+\noindent\textbf{Implementations.} We train LitePT with a frozen encoder and adapted decoder on 16-D features by default. A PTv3 variant changes the decoder output dimension for architecture ablations. We train for 800 data epochs on four RTX 4090 GPUs using AdamW (learning rate $0.001$, weight decay $0.05$) and cosine OneCycle scheduling. Cosine, L1, contrastive, and density-consistency losses have weights $0.1$, $1.0$, $0.02$, and $1.0$, respectively. The contrastive term uses temperature $0.2$ during the final 75\% of training. Augmentations include rotation, scaling, flipping, jitter, and elastic distortion. Inference uses one RTX 4090. For LERF, we extract 768-D SigLIP2-SAM2 features from training views following SceneSplat. See Appendix~\ref{sec:exp_details}.
+
+\subsection{Feature Separability}
+Nearby Gaussians often share object semantics and similar features, while correlated embedding channels create redundancy across feature dimensions. In Table~\ref{tab:gridsim}, the original features have a mean within-grid cosine similarity of 0.9949 across nine scenes. We evaluate collected features on LERF and 3D-OVS using pseudo-labels from back-projected 2D annotations. Fig.~\ref{fig:JM-visual} visualizes original 768-D features and their 16-D SVD projections. Table~\ref{tab:jm-dist} reports Jeffries--Matusita (JM) distances, where larger values indicate better inter-class separability. Across nine scenes, the 16-D representation increases the average arithmetic-mean JM distance from 1.0021 to 1.0115 and geometric-mean distance from 1.0727 to 1.1179. Individual scenes show both increases and decreases. This analysis measures separability before regression. Downstream results also depend on the learned regressor. Details appear in Appendix~\ref{sec:analysis}.
+
+
+
+\subsection{Comparison}
+
+
+
+
+
+
+
+% 表4展示了在细粒度数据集ScanNet++（100类）、Matterport3D（160类）和ScanNet200（200类）上的零样本3D语义分割结果。我们使用压缩后的数据集训练PTv3的轻量化变体，关于网络架构的消融将在附录中展示。
+% 当仅在ScanNet上训练时，我们的方法在ScanNet200上达到了最优，同时在另两个数据集上达到了与SceneSplat相近的性能。
+% 在扩展训练数据后，我们的方法在Matterport3D数据集上取得了领先，而在其他数据集上同样取得了与SceneSplat接近的性能。值得注意的是，我们的方法使用了最轻量化的模型，相比SceneSplat小将近10倍，其中一大原因是我们大幅压缩了特征维度，使decoder的参数量大大减小。
+Table~\ref{tab:scene-splat} compares 3D segmentation across three datasets. With ScanNet training, our lightweight point transformer\cite{wu2024ptv3,yuelitept2026} is comparable to SceneSplat. Expanded training improves both models. Ours has nearly $10\times$ fewer parameters, partly due to its smaller decoder. The comparison combines representation and backbone changes. Architecture ablations appear in Appendix~\ref{sec:ablation_details}.
+
+% 表5展示了我们的方法在LERF数据集上的open vocabulary 3D object selection性能。SceneSplat和我们的方法主要由3D特征监督，在2D分割指标上相比其他直接基于2D语义监督的方法稍有劣势，但是我们的方法实现了最快的推理速度，实现了准实时的开放词汇语义推理。
+Table~\ref{tab:lerf-ovs} reports open-vocabulary object selection on LERF. SceneSplat and our method are primarily supervised by 3D features, whereas several other methods use direct 2D supervision. Our method achieves 49.17 mIoU and 63.13 mAcc, compared with 40.03 and 54.65 for SceneSplat, and has the lowest reported inference time among the compared methods.
+
+% 如图4所示，我们的方法在2D和3D开放词汇分割评估体系下均实现了与SceneSplat接近的性能，实现了准确的开放词汇分割与物体查询。值得注意的是，我们的特征图可视化与SceneSplat和GT略有区别，这是因为我们已经将特征投影到低维空间，此时通过PCA进行可视化会与直接对原始特征PCA存在差异。然而，可以直观感受到，即使在低维空间中，不同物体间特征依旧保持良好的可分性，这印证了第4章的分析。此外，得益于SVD分解的线性特性，我们能够通过简单的线性投影将原始特征与压缩后的特征在低维空间中重新对齐，从而在低维空间直接进行查询，详细的步骤将在附录中展示。每场景特征对齐的用时均在毫秒级别，相比基于Auto encoder的特征降维方法，我们能节省大量per scene优化成本。
+Figure~\ref{fig:Visualize} shows that compressed features retain separation between objects. Their PCA visualizations differ from those of the original features, and some fine detail is lost near semantic boundaries or between related categories. We compute SVD targets independently for each scene or chunk, and the shared regressor learns these local coordinates using a sign convention applied during loading. At inference, text embeddings for a fixed query set use a separate SVD basis. For our reported results, the per-scene alignment uses ground-truth class assignments from the evaluated scene and takes milliseconds per scene, avoiding per-scene autoencoder training. Further discussion of basis consistency and alignment appears in Appendix~\ref{sec:future}.
+
+\subsection{Ablation Study}
+% 表6展示了我们在Scannet200和LERF数据集上的消融，我们提出的方法相比仅使用SVD压缩特征均有显著提升，这是因为RPCA对特征维度的噪声具有鲁棒性，Density-Invariant learning对空间维度的噪声具有鲁棒性。
+Table~\ref{tab:ablation-main} shows gains from RPCA and density-invariant learning over SVD-only compression. These results suggest that RPCA improves robustness to feature noise, while density-invariant learning helps with changes in input density. On LERF, ranks 8, 16, and 32 yield mIoU of 43.64, 49.17, and 55.82. Rank 16 balances accuracy and latency. Lower ranks retain dominant variation but may suppress weaker semantic directions important for rare classes and boundaries, making the target geometry more difficult to learn across scenes.
+% 表8展示了我们的Structured RPCA算法在效率上相比普通RPCA快了3个数量级，误差尽管增大却在可接受范围内，其原因是对原始矩阵中相似行的近似。
+\begin{table}[t]
+  \centering
+  \caption{RPCA ablations on LERF.}
+  \label{tab:ablation_latency}
+  \begin{tabular}{@{}l|cc@{}}
+    \toprule
+    Method & Error & Latency \\
+    \midrule
+    RPCA-CPU & $6.28 \times 10^{-6}$ & >2h \\
+    RPCA-GPU & $6.28 \times 10^{-6}$ & 330.55s \\
+    Structured RPCA & $9.37 \times 10^{-3}$ & 0.18s \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+A matched comparison of original, compressed, and regressed features would further separate compression effects from regression. Table~\ref{tab:ablation_latency} compares RPCA variants on LERF. Structured RPCA reduces latency from 330.55 s on GPU to 0.18 s, with error increasing from $6.28\times10^{-6}$ to $9.37\times10^{-3}$.
+
+\section{Conclusion}
+We address the storage and computational inefficiency of open-vocabulary 3D Gaussian Splatting. We propose a two-stage compression pipeline, Grid-based Feature Approximation and Structured RPCA, that jointly exploits redundancy in 3D language features while largely preserving semantic separability in a compact feature space. Coupled with Grid-Guided Density-Invariant Learning for input-density robustness, our approach compresses SceneSplat-7k language features by $\sim100\times$. The resulting lightweight model maintains competitive open-vocabulary performance with lower storage and latency, making compressed 3D language features more practical for training and deployment.
+
+
+
+\clearpage
+\section*{LLM Usage Statement}
+During the preparation of this work, OpenAI Codex was used to assist with writing and improve the clarity and readability of the manuscript. The authors are responsible for reviewing and editing the manuscript and take full responsibility for its content.
+{\small
+\bibliographystyle{ieeenat_fullname}
+\bibliography{references,supp_only}
+}
+\clearpage
+\setcounter{page}{1}
+\maketitlesupplementary
+\appendix
+\numberwithin{equation}{section}
+\makeatletter
+\@addtoreset{figure}{section}
+\@addtoreset{table}{section}
+\renewcommand\thefigure{\thesection.\arabic{figure}}
+\renewcommand\thetable{\thesection.\arabic{table}}
+\renewcommand\theHfigure{\thesection.\arabic{figure}}
+\renewcommand\theHtable{\thesection.\arabic{table}}
+\makeatother
+\input{supp.tex}
+\end{document}

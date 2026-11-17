@@ -1,0 +1,337 @@
+[
+  {
+    "key": "cai2010singular",
+    "arxiv": "0810.3286",
+    "status": "downloaded"
+  },
+  {
+    "key": "chang2017matterport3d",
+    "arxiv": "1709.06158",
+    "status": "downloaded"
+  },
+  {
+    "key": "big_vision",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "cheng2024occamslgssimpleapproach",
+    "arxiv": "2412.01807",
+    "status": "downloaded"
+  },
+  {
+    "key": "pointcept2023",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "dehghan2021arkitscenes",
+    "arxiv": "2111.08897",
+    "status": "downloaded"
+  },
+  {
+    "key": "chiang2025uniql",
+    "arxiv": "2512.03383",
+    "status": "downloaded"
+  },
+  {
+    "key": "dai2017scannet",
+    "arxiv": "1702.04405",
+    "status": "downloaded"
+  },
+  {
+    "key": "SVD",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "guo2024semantic",
+    "arxiv": "2403.15624",
+    "status": "downloaded"
+  },
+  {
+    "key": "gupta2015indoor",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "jiang2024open",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "ding2022language",
+    "arxiv": "2211.16312",
+    "status": "downloaded"
+  },
+  {
+    "key": "engelmann2024opennerf",
+    "arxiv": "2404.03650",
+    "status": "downloaded"
+  },
+  {
+    "key": "jiang2025votesplat",
+    "arxiv": "2506.22799",
+    "status": "downloaded"
+  },
+  {
+    "key": "RPCA",
+    "arxiv": "0912.3599",
+    "status": "downloaded"
+  },
+  {
+    "key": "drsplat25",
+    "arxiv": "2502.16652",
+    "status": "downloaded"
+  },
+  {
+    "key": "lerf2023",
+    "arxiv": "2303.09553",
+    "status": "downloaded"
+  },
+  {
+    "key": "kerbl3Dgaussians",
+    "arxiv": "2308.04079",
+    "status": "downloaded"
+  },
+  {
+    "key": "kirillov2023segany",
+    "arxiv": "2304.02643",
+    "status": "downloaded"
+  },
+  {
+    "key": "lee2025mosaic3d",
+    "arxiv": "2502.02548",
+    "status": "downloaded"
+  },
+  {
+    "key": "li2025instancegaussian",
+    "arxiv": "2411.19235",
+    "status": "downloaded"
+  },
+  {
+    "key": "li2025scenesplat",
+    "arxiv": "2503.18052",
+    "status": "downloaded"
+  },
+  {
+    "key": "li2025langsplatv2",
+    "arxiv": "2507.07136",
+    "status": "downloaded"
+  },
+  {
+    "key": "liang2024supergseg",
+    "arxiv": "2412.10231",
+    "status": "downloaded"
+  },
+  {
+    "key": "liu2023weakly",
+    "arxiv": "2305.14093",
+    "status": "downloaded"
+  },
+  {
+    "key": "ma2025scenesplatpp",
+    "arxiv": "2506.08710",
+    "status": "downloaded"
+  },
+  {
+    "key": "neal2011distributed",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "marrie2025ludvig",
+    "arxiv": "2410.14462",
+    "status": "downloaded"
+  },
+  {
+    "key": "Proximal",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "mildenhall2020nerf",
+    "arxiv": "2003.08934",
+    "status": "downloaded"
+  },
+  {
+    "key": "oquab2023dinov2",
+    "arxiv": "2304.07193",
+    "status": "downloaded"
+  },
+  {
+    "key": "peng2023openscene",
+    "arxiv": "2211.15654",
+    "status": "downloaded"
+  },
+  {
+    "key": "mikaelyan2025deltallm",
+    "arxiv": "2501.18596",
+    "status": "downloaded"
+  },
+  {
+    "key": "piekenbrinck2025opensplat3d",
+    "arxiv": "2506.07697",
+    "status": "downloaded"
+  },
+  {
+    "key": "qin2024langsplat",
+    "arxiv": "2312.16084",
+    "status": "downloaded"
+  },
+  {
+    "key": "DBLP:journals/corr/abs-2103-00020",
+    "arxiv": "2103.00020",
+    "status": "[Errno 2] No such file or directory: '/home/cyf/CompressedSceneSplat/paper/CVPR2027-citation-audit/arxiv-bibtex/DBLP_journals/corr/abs-2103-00020.bib'"
+  },
+  {
+    "key": "qu2024goi",
+    "arxiv": "2405.17596",
+    "status": "downloaded"
+  },
+  {
+    "key": "radford2021learning",
+    "arxiv": "2103.00020",
+    "status": "downloaded"
+  },
+  {
+    "key": "ravi2024sam2",
+    "arxiv": "2408.00714",
+    "status": "downloaded"
+  },
+  {
+    "key": "roberts2021hypersim",
+    "arxiv": "2011.02523",
+    "status": "downloaded"
+  },
+  {
+    "key": "rosinol20203d",
+    "arxiv": "2002.06289",
+    "status": "downloaded"
+  },
+  {
+    "key": "rashid2023language",
+    "arxiv": "2309.07970",
+    "status": "downloaded"
+  },
+  {
+    "key": "shi2024language",
+    "arxiv": "2311.18482",
+    "status": "downloaded"
+  },
+  {
+    "key": "straub2019replica",
+    "arxiv": "1906.05797",
+    "status": "downloaded"
+  },
+  {
+    "key": "tsitsikas2020nsvd",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "vonNeumann1937",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "tian2025ccl",
+    "arxiv": "2505.20469",
+    "status": "downloaded"
+  },
+  {
+    "key": "tian2024drivevlm",
+    "arxiv": "2402.12289",
+    "status": "downloaded"
+  },
+  {
+    "key": "tschannen2025siglip",
+    "arxiv": "2502.14786",
+    "status": "downloaded"
+  },
+  {
+    "key": "wang2025vala",
+    "arxiv": "2509.05515",
+    "status": "downloaded"
+  },
+  {
+    "key": "wang2025qsvd",
+    "arxiv": "2510.16292",
+    "status": "downloaded"
+  },
+  {
+    "key": "wald20193rscan",
+    "arxiv": "1908.06109",
+    "status": "downloaded"
+  },
+  {
+    "key": "wang2025dobi",
+    "arxiv": "2502.02723",
+    "status": "downloaded"
+  },
+  {
+    "key": "wu2022ptv2",
+    "arxiv": "2210.05666",
+    "status": "downloaded"
+  },
+  {
+    "key": "wu2024ptv3",
+    "arxiv": "2312.10035",
+    "status": "downloaded"
+  },
+  {
+    "key": "wu2024opengaussian",
+    "arxiv": "2406.02058",
+    "status": "downloaded"
+  },
+  {
+    "key": "wu2024ppt",
+    "arxiv": "2308.09718",
+    "status": "downloaded"
+  },
+  {
+    "key": "yu2023compressing",
+    "status": "no_arxiv_id"
+  },
+  {
+    "key": "yang2024regionplc",
+    "arxiv": "2304.00962",
+    "status": "downloaded"
+  },
+  {
+    "key": "yeshwanth2023scannet++",
+    "arxiv": "2308.11417",
+    "status": "downloaded"
+  },
+  {
+    "key": "ye2024gaussian",
+    "arxiv": "2312.00732",
+    "status": "downloaded"
+  },
+  {
+    "key": "yuelitept2026",
+    "arxiv": "2512.13689",
+    "status": "downloaded"
+  },
+  {
+    "key": "zhai2023sigmoid",
+    "arxiv": "2303.15343",
+    "status": "downloaded"
+  },
+  {
+    "key": "zhan2025hi",
+    "arxiv": "2506.06822",
+    "status": "downloaded"
+  },
+  {
+    "key": "zhang2022dino",
+    "arxiv": "2203.03605",
+    "status": "downloaded"
+  },
+  {
+    "key": "zhou2020cylinder3d",
+    "arxiv": "2008.01550",
+    "status": "downloaded"
+  },
+  {
+    "key": "zuo2025fmgs",
+    "arxiv": "2401.01970",
+    "status": "downloaded"
+  },
+  {
+    "key": "zhou2024feature",
+    "arxiv": "2312.03203",
+    "status": "downloaded"
+  }
+]

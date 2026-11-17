@@ -1,0 +1,2350 @@
+[
+  {
+    "key": "cheng2024occamslgssimpleapproach",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "pointcept2023",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "big_vision",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "chiang2025uniql",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "dehghan2021arkitscenes",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "dai2017scannet",
+    "doi": "10.1109/cvpr.2017.261",
+    "status": "429 Client Error: Too Many Requests for url: https://api.crossref.org/works/10.1109/cvpr.2017.261"
+  },
+  {
+    "key": "engelmann2024opennerf",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "cai2010singular",
+    "doi": "10.1137/080738970",
+    "status": "found",
+    "title": [
+      "A Singular Value Thresholding Algorithm for Matrix Completion"
+    ],
+    "authors": [
+      {
+        "given": "Jian-Feng",
+        "family": "Cai"
+      },
+      {
+        "given": "Emmanuel J.",
+        "family": "Candès"
+      },
+      {
+        "given": "Zuowei",
+        "family": "Shen"
+      }
+    ],
+    "year": [
+      [
+        2010,
+        1
+      ]
+    ],
+    "venue": [
+      "SIAM Journal on Optimization"
+    ],
+    "pages": "1956-1982",
+    "article_number": null,
+    "volume": "20",
+    "issue": "4",
+    "url": "https://doi.org/10.1137/080738970",
+    "type": "journal-article"
+  },
+  {
+    "key": "RPCA",
+    "doi": "10.1145/1970392.1970395",
+    "status": "found",
+    "title": [
+      "Robust principal component analysis?"
+    ],
+    "authors": [
+      {
+        "given": "Emmanuel J.",
+        "family": "Candès"
+      },
+      {
+        "given": "Xiaodong",
+        "family": "Li"
+      },
+      {
+        "given": "Yi",
+        "family": "Ma"
+      },
+      {
+        "given": "John",
+        "family": "Wright"
+      }
+    ],
+    "year": [
+      [
+        2011,
+        5
+      ]
+    ],
+    "venue": [
+      "Journal of the ACM"
+    ],
+    "pages": "1-37",
+    "article_number": null,
+    "volume": "58",
+    "issue": "3",
+    "url": "https://doi.org/10.1145/1970392.1970395",
+    "type": "journal-article"
+  },
+  {
+    "key": "ding2022language",
+    "doi": "10.1109/cvpr52729.2023.00677",
+    "status": "found",
+    "title": [
+      "PLA: Language-Driven Open-Vocabulary 3D Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Runyu",
+        "family": "Ding"
+      },
+      {
+        "given": "Jihan",
+        "family": "Yang"
+      },
+      {
+        "given": "Chuhui",
+        "family": "Xue"
+      },
+      {
+        "given": "Wenqing",
+        "family": "Zhang"
+      },
+      {
+        "given": "Song",
+        "family": "Bai"
+      },
+      {
+        "given": "Xiaojuan",
+        "family": "Qi"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        6
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "7010-7019",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52729.2023.00677",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "chang2017matterport3d",
+    "doi": "10.1109/3dv.2017.00081",
+    "status": "found",
+    "title": [
+      "Matterport3D: Learning from RGB-D Data in Indoor Environments"
+    ],
+    "authors": [
+      {
+        "given": "Angel",
+        "family": "Chang"
+      },
+      {
+        "given": "Angela",
+        "family": "Dai"
+      },
+      {
+        "given": "Thomas",
+        "family": "Funkhouser"
+      },
+      {
+        "given": "Maciej",
+        "family": "Halber"
+      },
+      {
+        "given": "Matthias",
+        "family": "Niebner"
+      },
+      {
+        "given": "Manolis",
+        "family": "Savva"
+      },
+      {
+        "given": "Shuran",
+        "family": "Song"
+      },
+      {
+        "given": "Andy",
+        "family": "Zeng"
+      },
+      {
+        "given": "Yinda",
+        "family": "Zhang"
+      }
+    ],
+    "year": [
+      [
+        2017,
+        10
+      ]
+    ],
+    "venue": [
+      "2017 International Conference on 3D Vision (3DV)"
+    ],
+    "pages": "667-676",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/3dv.2017.00081",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "SVD",
+    "doi": "10.1137/0702016",
+    "status": "found",
+    "title": [
+      "Calculating the Singular Values and Pseudo-Inverse of a Matrix"
+    ],
+    "authors": [
+      {
+        "given": "G.",
+        "family": "Golub"
+      },
+      {
+        "given": "W.",
+        "family": "Kahan"
+      }
+    ],
+    "year": [
+      [
+        1965,
+        1
+      ]
+    ],
+    "venue": [
+      "Journal of the Society for Industrial and Applied Mathematics Series B Numerical Analysis"
+    ],
+    "pages": "205-224",
+    "article_number": null,
+    "volume": "2",
+    "issue": "2",
+    "url": "https://doi.org/10.1137/0702016",
+    "type": "journal-article"
+  },
+  {
+    "key": "guo2024semantic",
+    "doi": "10.1109/tcsvt.2026.3675320",
+    "status": "found",
+    "title": [
+      "Semantic Gaussians: Open-Vocabulary Scene Understanding With 3D Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Jun",
+        "family": "Guo"
+      },
+      {
+        "given": "Xiaojian",
+        "family": "Ma"
+      },
+      {
+        "given": "Yue",
+        "family": "Fan"
+      },
+      {
+        "given": "Huaping",
+        "family": "Liu"
+      },
+      {
+        "given": "Qing",
+        "family": "Li"
+      }
+    ],
+    "year": [
+      [
+        2026,
+        7
+      ]
+    ],
+    "venue": [
+      "IEEE Transactions on Circuits and Systems for Video Technology"
+    ],
+    "pages": "9265-9277",
+    "article_number": null,
+    "volume": "36",
+    "issue": "7",
+    "url": "https://doi.org/10.1109/tcsvt.2026.3675320",
+    "type": "journal-article"
+  },
+  {
+    "key": "gupta2015indoor",
+    "doi": "10.1007/s11263-014-0777-6",
+    "status": "found",
+    "title": [
+      "Indoor Scene Understanding with RGB-D Images: Bottom-up Segmentation, Object Detection and Semantic Segmentation"
+    ],
+    "authors": [
+      {
+        "given": "Saurabh",
+        "family": "Gupta"
+      },
+      {
+        "given": "Pablo",
+        "family": "Arbeláez"
+      },
+      {
+        "given": "Ross",
+        "family": "Girshick"
+      },
+      {
+        "given": "Jitendra",
+        "family": "Malik"
+      }
+    ],
+    "year": [
+      [
+        2014,
+        11,
+        21
+      ]
+    ],
+    "venue": [
+      "International Journal of Computer Vision"
+    ],
+    "pages": "133-149",
+    "article_number": null,
+    "volume": "112",
+    "issue": "2",
+    "url": "https://doi.org/10.1007/s11263-014-0777-6",
+    "type": "journal-article"
+  },
+  {
+    "key": "jiang2024open",
+    "doi": "10.1109/cvpr52733.2024.02011",
+    "status": "found",
+    "title": [
+      "Open-Vocabulary 3D Semantic Segmentation with Foundation Models"
+    ],
+    "authors": [
+      {
+        "given": "Li",
+        "family": "Jiang"
+      },
+      {
+        "given": "Shaoshuai",
+        "family": "Shi"
+      },
+      {
+        "given": "Bernt",
+        "family": "Schiele"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "21284-21294",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.02011",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "jiang2025votesplat",
+    "doi": "10.1109/iccv51701.2025.00609",
+    "status": "found",
+    "title": [
+      "Votesplat: Hough Voting Gaussian Splatting for 3D Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Minchao",
+        "family": "Jiang"
+      },
+      {
+        "given": "Shunyu",
+        "family": "Jia"
+      },
+      {
+        "given": "Jiaming",
+        "family": "Gu"
+      },
+      {
+        "given": "Xiaoyuan",
+        "family": "Lu"
+      },
+      {
+        "given": "Guangming",
+        "family": "Zhu"
+      },
+      {
+        "given": "Anqi",
+        "family": "Dong"
+      },
+      {
+        "given": "Liang",
+        "family": "Zhang"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        10,
+        19
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "6456-6465",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51701.2025.00609",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "drsplat25",
+    "doi": "10.1109/cvpr52734.2025.01319",
+    "status": "found",
+    "title": [
+      "Dr. Splat: Directly Referring 3D Gaussian Splatting via Direct Language Embedding Registration"
+    ],
+    "authors": [
+      {
+        "given": "Kim",
+        "family": "Jun-Seong"
+      },
+      {
+        "given": "GeonU",
+        "family": "Kim"
+      },
+      {
+        "given": "Kim",
+        "family": "Yu-Ji"
+      },
+      {
+        "given": "Yu-Chiang Frank",
+        "family": "Wang"
+      },
+      {
+        "given": "Jaesung",
+        "family": "Choe"
+      },
+      {
+        "given": "Tae-Hyun",
+        "family": "Oh"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        6,
+        10
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "14137-14146",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52734.2025.01319",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "kerbl3Dgaussians",
+    "doi": "10.1145/3592433",
+    "status": "found",
+    "title": [
+      "3D Gaussian Splatting for Real-Time Radiance Field Rendering"
+    ],
+    "authors": [
+      {
+        "given": "Bernhard",
+        "family": "Kerbl"
+      },
+      {
+        "given": "Georgios",
+        "family": "Kopanas"
+      },
+      {
+        "given": "Thomas",
+        "family": "Leimkuehler"
+      },
+      {
+        "given": "George",
+        "family": "Drettakis"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        7,
+        26
+      ]
+    ],
+    "venue": [
+      "ACM Transactions on Graphics"
+    ],
+    "pages": "1-14",
+    "article_number": null,
+    "volume": "42",
+    "issue": "4",
+    "url": "https://doi.org/10.1145/3592433",
+    "type": "journal-article"
+  },
+  {
+    "key": "lerf2023",
+    "doi": "10.1109/iccv51070.2023.01807",
+    "status": "found",
+    "title": [
+      "LERF: Language Embedded Radiance Fields"
+    ],
+    "authors": [
+      {
+        "given": "Justin",
+        "family": "Kerr"
+      },
+      {
+        "given": "Chung Min",
+        "family": "Kim"
+      },
+      {
+        "given": "Ken",
+        "family": "Goldberg"
+      },
+      {
+        "given": "Angjoo",
+        "family": "Kanazawa"
+      },
+      {
+        "given": "Matthew",
+        "family": "Tancik"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        10,
+        1
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "19672-19682",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51070.2023.01807",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "li2025langsplatv2",
+    "doi": "10.52202/085713-5798",
+    "status": "429 Client Error: Too Many Requests for url: https://api.crossref.org/works/10.52202/085713-5798"
+  },
+  {
+    "key": "kirillov2023segany",
+    "doi": "10.1109/iccv51070.2023.00371",
+    "status": "found",
+    "title": [
+      "Segment Anything"
+    ],
+    "authors": [
+      {
+        "given": "Alexander",
+        "family": "Kirillov"
+      },
+      {
+        "given": "Eric",
+        "family": "Mintun"
+      },
+      {
+        "given": "Nikhila",
+        "family": "Ravi"
+      },
+      {
+        "given": "Hanzi",
+        "family": "Mao"
+      },
+      {
+        "given": "Chloe",
+        "family": "Rolland"
+      },
+      {
+        "given": "Laura",
+        "family": "Gustafson"
+      },
+      {
+        "given": "Tete",
+        "family": "Xiao"
+      },
+      {
+        "given": "Spencer",
+        "family": "Whitehead"
+      },
+      {
+        "given": "Alexander C.",
+        "family": "Berg"
+      },
+      {
+        "given": "Wan-Yen",
+        "family": "Lo"
+      },
+      {
+        "given": "Piotr",
+        "family": "Dollár"
+      },
+      {
+        "given": "Ross",
+        "family": "Girshick"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        10,
+        1
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "3992-4003",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51070.2023.00371",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "lee2025mosaic3d",
+    "doi": "10.1109/cvpr52734.2025.01315",
+    "status": "found",
+    "title": [
+      "Mosaic3D: Foundation Dataset and Model for Open-Vocabulary 3D Segmentation"
+    ],
+    "authors": [
+      {
+        "given": "Junha",
+        "family": "Lee"
+      },
+      {
+        "given": "Chunghyun",
+        "family": "Park"
+      },
+      {
+        "given": "Jaesung",
+        "family": "Choe"
+      },
+      {
+        "given": "Yu-Chiang Frank",
+        "family": "Wang"
+      },
+      {
+        "given": "Jan",
+        "family": "Kautz"
+      },
+      {
+        "given": "Minsu",
+        "family": "Cho"
+      },
+      {
+        "given": "Chris",
+        "family": "Choy"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        6,
+        10
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "14089-14101",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52734.2025.01315",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "ma2025scenesplatpp",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "li2025instancegaussian",
+    "doi": "10.1109/cvpr52734.2025.01314",
+    "status": "found",
+    "title": [
+      "InstanceGaussian: Appearance-Semantic Joint Gaussian Representation for 3D Instance-Level Perception"
+    ],
+    "authors": [
+      {
+        "given": "Haijie",
+        "family": "Li"
+      },
+      {
+        "given": "Yanmin",
+        "family": "Wu"
+      },
+      {
+        "given": "Jiarui",
+        "family": "Meng"
+      },
+      {
+        "given": "Qiankun",
+        "family": "Gao"
+      },
+      {
+        "given": "Zhiyao",
+        "family": "Zhang"
+      },
+      {
+        "given": "Ronggang",
+        "family": "Wang"
+      },
+      {
+        "given": "Jian",
+        "family": "Zhang"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        6,
+        10
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "14078-14088",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52734.2025.01314",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "mikaelyan2025deltallm",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "li2025scenesplat",
+    "doi": "10.1109/iccv51701.2025.00472",
+    "status": "found",
+    "title": [
+      "SceneSplat: Gaussian Splatting-Based Scene Understanding with Vision-Language Pretraining"
+    ],
+    "authors": [
+      {
+        "given": "Yue",
+        "family": "Li"
+      },
+      {
+        "given": "Qi",
+        "family": "Ma"
+      },
+      {
+        "given": "Runyi",
+        "family": "Yang"
+      },
+      {
+        "given": "Huapeng",
+        "family": "Li"
+      },
+      {
+        "given": "Mengjiao",
+        "family": "Ma"
+      },
+      {
+        "given": "Bin",
+        "family": "Ren"
+      },
+      {
+        "given": "Nikola",
+        "family": "Popovic"
+      },
+      {
+        "given": "Nicu",
+        "family": "Sebe"
+      },
+      {
+        "given": "Ender",
+        "family": "Konukoglu"
+      },
+      {
+        "given": "Theo",
+        "family": "Gevers"
+      },
+      {
+        "given": "Luc",
+        "family": "Van Gool"
+      },
+      {
+        "given": "Martin R.",
+        "family": "Oswald"
+      },
+      {
+        "given": "Danda Pani",
+        "family": "Paudel"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        10,
+        19
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "4961-4972",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51701.2025.00472",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "liang2024supergseg",
+    "doi": "10.1109/3dv69130.2026.00157",
+    "status": "found",
+    "title": [
+      "SuperGSeg: Open-Vocabulary 3D Segmentation with Structured Super-Gaussians"
+    ],
+    "authors": [
+      {
+        "given": "Siyun",
+        "family": "Liang"
+      },
+      {
+        "given": "Sen",
+        "family": "Wang"
+      },
+      {
+        "given": "Kunyi",
+        "family": "Li"
+      },
+      {
+        "given": "Michael",
+        "family": "Niemeyer"
+      },
+      {
+        "given": "Stefano",
+        "family": "Gasperini"
+      },
+      {
+        "given": "Hendrik P.A.",
+        "family": "Lensch"
+      },
+      {
+        "given": "Nassir",
+        "family": "Navab"
+      },
+      {
+        "given": "Federico",
+        "family": "Tombari"
+      }
+    ],
+    "year": [
+      [
+        2026,
+        3,
+        20
+      ]
+    ],
+    "venue": [
+      "2026 International Conference on 3D Vision (3DV)"
+    ],
+    "pages": "1650-1659",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/3dv69130.2026.00157",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "oquab2023dinov2",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "liu2023weakly",
+    "doi": "10.52202/075280-2325",
+    "status": "found",
+    "title": [
+      "Weakly Supervised 3D Open-vocabulary Segmentation"
+    ],
+    "authors": [
+      {
+        "given": "Kunhao",
+        "family": "Liu"
+      },
+      {
+        "given": "Fangneng",
+        "family": "Zhan"
+      },
+      {
+        "given": "Jiahui",
+        "family": "Zhang"
+      },
+      {
+        "given": "Muyu",
+        "family": "Xu"
+      },
+      {
+        "given": "Yingchen",
+        "family": "Yu"
+      },
+      {
+        "given": "Abdulmotaleb El",
+        "family": "Saddik"
+      },
+      {
+        "given": "Christian",
+        "family": "Theobalt"
+      },
+      {
+        "given": "Eric",
+        "family": "Xing"
+      },
+      {
+        "given": "Shijian",
+        "family": "Lu"
+      }
+    ],
+    "year": [
+      [
+        2023
+      ]
+    ],
+    "venue": [
+      "Advances in Neural Information Processing Systems 36"
+    ],
+    "pages": "53433-53456",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.52202/075280-2325",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "marrie2025ludvig",
+    "doi": "10.1109/iccv51701.2025.00698",
+    "status": "found",
+    "title": [
+      "LUDVIG: Learning-Free Uplifting of 2D Visual Features to Gaussian Splatting Scenes"
+    ],
+    "authors": [
+      {
+        "given": "Juliette",
+        "family": "Marrie"
+      },
+      {
+        "given": "Romain",
+        "family": "Menegaux"
+      },
+      {
+        "given": "Michael",
+        "family": "Arbel"
+      },
+      {
+        "given": "Diane",
+        "family": "Larlus"
+      },
+      {
+        "given": "Julien",
+        "family": "Mairal"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        10,
+        19
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "7440-7450",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51701.2025.00698",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "mildenhall2020nerf",
+    "doi": "10.1145/3503250",
+    "status": "found",
+    "title": [
+      "NeRF"
+    ],
+    "authors": [
+      {
+        "given": "Ben",
+        "family": "Mildenhall"
+      },
+      {
+        "given": "Pratul P.",
+        "family": "Srinivasan"
+      },
+      {
+        "given": "Matthew",
+        "family": "Tancik"
+      },
+      {
+        "given": "Jonathan T.",
+        "family": "Barron"
+      },
+      {
+        "given": "Ravi",
+        "family": "Ramamoorthi"
+      },
+      {
+        "given": "Ren",
+        "family": "Ng"
+      }
+    ],
+    "year": [
+      [
+        2021,
+        12,
+        17
+      ]
+    ],
+    "venue": [
+      "Communications of the ACM"
+    ],
+    "pages": "99-106",
+    "article_number": null,
+    "volume": "65",
+    "issue": "1",
+    "url": "https://doi.org/10.1145/3503250",
+    "type": "journal-article"
+  },
+  {
+    "key": "neal2011distributed",
+    "doi": "10.1561/2200000016",
+    "status": "found",
+    "title": [
+      "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers"
+    ],
+    "authors": [
+      {
+        "given": "Stephen",
+        "family": "Boyd"
+      },
+      {
+        "given": "Neal",
+        "family": "Parikh"
+      },
+      {
+        "given": "Eric",
+        "family": "Chu"
+      },
+      {
+        "given": "Borja",
+        "family": "Peleato"
+      },
+      {
+        "given": "Jonathan",
+        "family": "Eckstein"
+      }
+    ],
+    "year": [
+      [
+        2011,
+        7,
+        26
+      ]
+    ],
+    "venue": [
+      "Foundations and Trends® in Machine Learning"
+    ],
+    "pages": "1-122",
+    "article_number": null,
+    "volume": "3",
+    "issue": "1",
+    "url": "https://doi.org/10.1561/2200000016",
+    "type": "journal-article"
+  },
+  {
+    "key": "piekenbrinck2025opensplat3d",
+    "doi": "10.1109/cvprw67362.2025.00520",
+    "status": "found",
+    "title": [
+      "OpenSplat3D: Open-Vocabulary 3D Instance Segmentation using Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Jens",
+        "family": "Piekenbrinck"
+      },
+      {
+        "given": "Christian",
+        "family": "Schmidt"
+      },
+      {
+        "given": "Alexander",
+        "family": "Hermans"
+      },
+      {
+        "given": "Narunas",
+        "family": "Vaskevicius"
+      },
+      {
+        "given": "Timm",
+        "family": "Linder"
+      },
+      {
+        "given": "Bastian",
+        "family": "Leibe"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        6,
+        11
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW)"
+    ],
+    "pages": "5246-5255",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvprw67362.2025.00520",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "DBLP:journals/corr/abs-2103-00020",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "radford2021learning",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "rashid2023language",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "ravi2024sam2",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "peng2023openscene",
+    "doi": "10.1109/cvpr52729.2023.00085",
+    "status": "found",
+    "title": [
+      "OpenScene: 3D Scene Understanding with Open Vocabularies"
+    ],
+    "authors": [
+      {
+        "given": "Songyou",
+        "family": "Peng"
+      },
+      {
+        "given": "Kyle",
+        "family": "Genova"
+      },
+      {
+        "given": "Chiyu",
+        "family": "Jiang"
+      },
+      {
+        "given": "Andrea",
+        "family": "Tagliasacchi"
+      },
+      {
+        "given": "Marc",
+        "family": "Pollefeys"
+      },
+      {
+        "given": "Thomas",
+        "family": "Funkhouser"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        6
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "815-824",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52729.2023.00085",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "Proximal",
+    "doi": "10.1561/2400000003",
+    "status": "found",
+    "title": [
+      "Proximal Algorithms"
+    ],
+    "authors": [
+      {
+        "given": "Neal",
+        "family": "Parikh"
+      },
+      {
+        "given": "Stephen",
+        "family": "Boyd"
+      }
+    ],
+    "year": [
+      [
+        2014,
+        1,
+        13
+      ]
+    ],
+    "venue": [
+      "Foundations and Trends® in Optimization"
+    ],
+    "pages": "127-239",
+    "article_number": null,
+    "volume": "1",
+    "issue": "3",
+    "url": "https://doi.org/10.1561/2400000003",
+    "type": "journal-article"
+  },
+  {
+    "key": "qin2024langsplat",
+    "doi": "10.1109/cvpr52733.2024.01895",
+    "status": "found",
+    "title": [
+      "LangSplat: 3D Language Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Minghan",
+        "family": "Qin"
+      },
+      {
+        "given": "Wanhua",
+        "family": "Li"
+      },
+      {
+        "given": "Jiawei",
+        "family": "Zhou"
+      },
+      {
+        "given": "Haoqian",
+        "family": "Wang"
+      },
+      {
+        "given": "Hanspeter",
+        "family": "Pfister"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "20051-20060",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.01895",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "straub2019replica",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "roberts2021hypersim",
+    "doi": "10.1109/iccv48922.2021.01073",
+    "status": "found",
+    "title": [
+      "Hypersim: A Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Mike",
+        "family": "Roberts"
+      },
+      {
+        "given": "Jason",
+        "family": "Ramapuram"
+      },
+      {
+        "given": "Anurag",
+        "family": "Ranjan"
+      },
+      {
+        "given": "Atulit",
+        "family": "Kumar"
+      },
+      {
+        "given": "Miguel Angel",
+        "family": "Bautista"
+      },
+      {
+        "given": "Nathan",
+        "family": "Paczan"
+      },
+      {
+        "given": "Russ",
+        "family": "Webb"
+      },
+      {
+        "given": "Joshua M.",
+        "family": "Susskind"
+      }
+    ],
+    "year": [
+      [
+        2021,
+        10
+      ]
+    ],
+    "venue": [
+      "2021 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "10892-10902",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv48922.2021.01073",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "tian2024drivevlm",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "tschannen2025siglip",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "qu2024goi",
+    "doi": "10.1145/3664647.3680852",
+    "status": "found",
+    "title": [
+      "GOI: Find 3D Gaussians of Interest with an Optimizable Open-vocabulary Semantic-space Hyperplane"
+    ],
+    "authors": [
+      {
+        "given": "Yansong",
+        "family": "Qu"
+      },
+      {
+        "given": "Shaohui",
+        "family": "Dai"
+      },
+      {
+        "given": "Xinyang",
+        "family": "Li"
+      },
+      {
+        "given": "Jianghang",
+        "family": "Lin"
+      },
+      {
+        "given": "Liujuan",
+        "family": "Cao"
+      },
+      {
+        "given": "Shengchuan",
+        "family": "Zhang"
+      },
+      {
+        "given": "Rongrong",
+        "family": "Ji"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        10,
+        28
+      ]
+    ],
+    "venue": [
+      "Proceedings of the 32nd ACM International Conference on Multimedia"
+    ],
+    "pages": "5328-5337",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1145/3664647.3680852",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "vonNeumann1937",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "rosinol20203d",
+    "doi": "10.15607/rss.2020.xvi.079",
+    "status": "found",
+    "title": [
+      "3D Dynamic Scene Graphs: Actionable Spatial Perception with Places, Objects, and Humans"
+    ],
+    "authors": [
+      {
+        "given": "Antoni",
+        "family": "Rosinol"
+      },
+      {
+        "given": "Arjun",
+        "family": "Gupta"
+      },
+      {
+        "given": "Marcus",
+        "family": "Abate"
+      },
+      {
+        "given": "Jingnan",
+        "family": "Shi"
+      },
+      {
+        "given": "Luca",
+        "family": "Carlone"
+      }
+    ],
+    "year": [
+      [
+        2020,
+        7,
+        12
+      ]
+    ],
+    "venue": [
+      "Robotics: Science and Systems XVI"
+    ],
+    "pages": null,
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.15607/rss.2020.xvi.079",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wang2025dobi",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "shi2024language",
+    "doi": "10.1109/cvpr52733.2024.00510",
+    "status": "found",
+    "title": [
+      "Language Embedded 3D Gaussians for Open-Vocabulary Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Jin-Chuan",
+        "family": "Shi"
+      },
+      {
+        "given": "Miao",
+        "family": "Wang"
+      },
+      {
+        "given": "Hao-Bin",
+        "family": "Duan"
+      },
+      {
+        "given": "Shao-Hua",
+        "family": "Guan"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "5333-5343",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.00510",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "tian2025ccl",
+    "doi": "10.1109/iccv51701.2025.00919",
+    "status": "found",
+    "title": [
+      "CCL-LGS: Contrastive Codebook Learning for 3D Language Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Lei",
+        "family": "Tian"
+      },
+      {
+        "given": "Xiaomin",
+        "family": "Li"
+      },
+      {
+        "given": "Liqian",
+        "family": "Ma"
+      },
+      {
+        "given": "Hao",
+        "family": "Yin"
+      },
+      {
+        "given": "Zirui",
+        "family": "Zheng"
+      },
+      {
+        "given": "Hefei",
+        "family": "Huang"
+      },
+      {
+        "given": "Taiqing",
+        "family": "Li"
+      },
+      {
+        "given": "Huchuan",
+        "family": "Lu"
+      },
+      {
+        "given": "Xu",
+        "family": "Jia"
+      }
+    ],
+    "year": [
+      [
+        2025,
+        10
+      ]
+    ],
+    "venue": [
+      "2025 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "9855-9864",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51701.2025.00919",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wang2025qsvd",
+    "doi": "10.52202/085713-0067",
+    "status": "found",
+    "title": [
+      "QSVD: Efficient Low-rank Approximation for Unified Query-Key-Value Weight Compression in Low-Precision Vision-Language Models"
+    ],
+    "authors": [
+      {
+        "given": "Yutong",
+        "family": "Wang"
+      },
+      {
+        "given": "Haiyu",
+        "family": "Wang"
+      },
+      {
+        "given": "Sai Qian",
+        "family": "Zhang"
+      }
+    ],
+    "year": [
+      [
+        2025
+      ]
+    ],
+    "venue": [
+      "Advances in Neural Information Processing Systems 38"
+    ],
+    "pages": "2066-2097",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.52202/085713-0067",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "tsitsikas2020nsvd",
+    "doi": "10.1089/big.2020.0074",
+    "status": "found",
+    "title": [
+      "<i>NSVD</i>\n                    : Normalized Singular Value Deviation Reveals Number of Latent Factors in Tensor Decomposition"
+    ],
+    "authors": [
+      {
+        "given": "Yorgos",
+        "family": "Tsitsikas"
+      },
+      {
+        "given": "Evangelos E.",
+        "family": "Papalexakis"
+      }
+    ],
+    "year": [
+      [
+        2020,
+        10,
+        1
+      ]
+    ],
+    "venue": [
+      "Big Data"
+    ],
+    "pages": "412-430",
+    "article_number": null,
+    "volume": "8",
+    "issue": "5",
+    "url": "https://doi.org/10.1089/big.2020.0074",
+    "type": "journal-article"
+  },
+  {
+    "key": "wang2025vala",
+    "doi": "10.1109/3dv69130.2026.00170",
+    "status": "found",
+    "title": [
+      "Visibility-Aware Language Aggregation for Open-Vocabulary Segmentation in 3D Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Sen",
+        "family": "Wang"
+      },
+      {
+        "given": "Kunyi",
+        "family": "Li"
+      },
+      {
+        "given": "Siyun",
+        "family": "Liang"
+      },
+      {
+        "given": "Elena",
+        "family": "Alegret"
+      },
+      {
+        "given": "Jing",
+        "family": "Ma"
+      },
+      {
+        "given": "Nassir",
+        "family": "Navab"
+      },
+      {
+        "given": "Stefano",
+        "family": "Gasperini"
+      }
+    ],
+    "year": [
+      [
+        2026,
+        3,
+        20
+      ]
+    ],
+    "venue": [
+      "2026 International Conference on 3D Vision (3DV)"
+    ],
+    "pages": "1791-1800",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/3dv69130.2026.00170",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wald20193rscan",
+    "doi": "10.1109/ICCV.2019.00775",
+    "status": "found",
+    "title": [
+      "RIO: 3D Object Instance Re-Localization in Changing Indoor Environments"
+    ],
+    "authors": [
+      {
+        "given": "Johanna",
+        "family": "Wald"
+      },
+      {
+        "given": "Armen",
+        "family": "Avetisyan"
+      },
+      {
+        "given": "Nassir",
+        "family": "Navab"
+      },
+      {
+        "given": "Federico",
+        "family": "Tombari"
+      },
+      {
+        "given": "Matthias",
+        "family": "Niessner"
+      }
+    ],
+    "year": [
+      [
+        2019,
+        10
+      ]
+    ],
+    "venue": [
+      "2019 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "7657-7666",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv.2019.00775",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wu2022ptv2",
+    "doi": "10.52202/068431-2415",
+    "status": "found",
+    "title": [
+      "Point Transformer V2: Grouped Vector Attention and Partition-Based Pooling"
+    ],
+    "authors": [
+      {
+        "given": "Xiaoyang",
+        "family": "Wu"
+      },
+      {
+        "given": "Yixing",
+        "family": "Lao"
+      },
+      {
+        "given": "Li",
+        "family": "Jiang"
+      },
+      {
+        "given": "Xihui",
+        "family": "Liu"
+      },
+      {
+        "given": "Hengshuang",
+        "family": "Zhao"
+      }
+    ],
+    "year": [
+      [
+        2022
+      ]
+    ],
+    "venue": [
+      "Advances in Neural Information Processing Systems 35"
+    ],
+    "pages": "33330-33342",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.52202/068431-2415",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wu2024ppt",
+    "doi": "10.1109/cvpr52733.2024.01849",
+    "status": "found",
+    "title": [
+      "Towards Large-Scale 3D Representation Learning with Multi-Dataset Point Prompt Training"
+    ],
+    "authors": [
+      {
+        "given": "Xiaoyang",
+        "family": "Wu"
+      },
+      {
+        "given": "Zhuotao",
+        "family": "Tian"
+      },
+      {
+        "given": "Xin",
+        "family": "Wen"
+      },
+      {
+        "given": "Bohao",
+        "family": "Peng"
+      },
+      {
+        "given": "Xihui",
+        "family": "Liu"
+      },
+      {
+        "given": "Kaicheng",
+        "family": "Yu"
+      },
+      {
+        "given": "Hengshuang",
+        "family": "Zhao"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "19551-19562",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.01849",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "wu2024ptv3",
+    "doi": "10.1109/cvpr52733.2024.00463",
+    "status": "found",
+    "title": [
+      "Point Transformer V3: Simpler, Faster, Stronger"
+    ],
+    "authors": [
+      {
+        "given": "Xiaoyang",
+        "family": "Wu"
+      },
+      {
+        "given": "Li",
+        "family": "Jiang"
+      },
+      {
+        "given": "Peng-Shuai",
+        "family": "Wang"
+      },
+      {
+        "given": "Zhijian",
+        "family": "Liu"
+      },
+      {
+        "given": "Xihui",
+        "family": "Liu"
+      },
+      {
+        "given": "Yu",
+        "family": "Qiao"
+      },
+      {
+        "given": "Wanli",
+        "family": "Ouyang"
+      },
+      {
+        "given": "Tong",
+        "family": "He"
+      },
+      {
+        "given": "Hengshuang",
+        "family": "Zhao"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "4840-4851",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.00463",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "yang2024regionplc",
+    "doi": "10.1109/cvpr52733.2024.01874",
+    "status": "found",
+    "title": [
+      "RegionPLC: Regional Point-Language Contrastive Learning for Open-World 3D Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Jihan",
+        "family": "Yang"
+      },
+      {
+        "given": "Runyu",
+        "family": "Ding"
+      },
+      {
+        "given": "Weipeng",
+        "family": "Deng"
+      },
+      {
+        "given": "Zhe",
+        "family": "Wang"
+      },
+      {
+        "given": "Q.",
+        "family": "Xiaojuan"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "19823-19832",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.01874",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "yuelitept2026",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "wu2024opengaussian",
+    "doi": "10.52202/079017-0604",
+    "status": "found",
+    "title": [
+      "OpenGaussian: Towards Point-Level 3D Gaussian-based Open Vocabulary Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Yanmin",
+        "family": "Wu"
+      },
+      {
+        "given": "Jiarui",
+        "family": "Meng"
+      },
+      {
+        "given": "Haijie",
+        "family": "Li"
+      },
+      {
+        "given": "Chenming",
+        "family": "Wu"
+      },
+      {
+        "given": "Yahao",
+        "family": "Shi"
+      },
+      {
+        "given": "Xinhua",
+        "family": "Cheng"
+      },
+      {
+        "given": "Chen",
+        "family": "Zhao"
+      },
+      {
+        "given": "Haocheng",
+        "family": "Feng"
+      },
+      {
+        "given": "Errui",
+        "family": "Ding"
+      },
+      {
+        "given": "Jingdong",
+        "family": "Wang"
+      },
+      {
+        "given": "Jian",
+        "family": "Zhang"
+      }
+    ],
+    "year": [
+      [
+        2024
+      ]
+    ],
+    "venue": [
+      "Advances in Neural Information Processing Systems 37"
+    ],
+    "pages": "19114-19138",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.52202/079017-0604",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "ye2024gaussian",
+    "doi": "10.1007/978-3-031-73397-0_10",
+    "status": "found",
+    "title": [
+      "Gaussian Grouping: Segment and Edit Anything in 3D Scenes"
+    ],
+    "authors": [
+      {
+        "given": "Mingqiao",
+        "family": "Ye"
+      },
+      {
+        "given": "Martin",
+        "family": "Danelljan"
+      },
+      {
+        "given": "Fisher",
+        "family": "Yu"
+      },
+      {
+        "given": "Lei",
+        "family": "Ke"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        11,
+        3
+      ]
+    ],
+    "venue": [
+      "Lecture Notes in Computer Science",
+      "Computer Vision – ECCV 2024"
+    ],
+    "pages": "162-179",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1007/978-3-031-73397-0_10",
+    "type": "book-chapter"
+  },
+  {
+    "key": "zhang2022dino",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "zhou2020cylinder3d",
+    "status": "no_registered_doi"
+  },
+  {
+    "key": "yeshwanth2023scannet++",
+    "doi": "10.1109/iccv51070.2023.00008",
+    "status": "found",
+    "title": [
+      "ScanNet++: A High-Fidelity Dataset of 3D Indoor Scenes"
+    ],
+    "authors": [
+      {
+        "given": "Chandan",
+        "family": "Yeshwanth"
+      },
+      {
+        "given": "Yueh-Cheng",
+        "family": "Liu"
+      },
+      {
+        "given": "Matthias",
+        "family": "Nießner"
+      },
+      {
+        "given": "Angela",
+        "family": "Dai"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        10,
+        1
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "12-22",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51070.2023.00008",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "zhai2023sigmoid",
+    "doi": "10.1109/iccv51070.2023.01100",
+    "status": "found",
+    "title": [
+      "Sigmoid Loss for Language Image Pre-Training"
+    ],
+    "authors": [
+      {
+        "given": "Xiaohua",
+        "family": "Zhai"
+      },
+      {
+        "given": "Basil",
+        "family": "Mustafa"
+      },
+      {
+        "given": "Alexander",
+        "family": "Kolesnikov"
+      },
+      {
+        "given": "Lucas",
+        "family": "Beyer"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        10,
+        1
+      ]
+    ],
+    "venue": [
+      "2023 IEEE/CVF International Conference on Computer Vision (ICCV)"
+    ],
+    "pages": "11941-11952",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/iccv51070.2023.01100",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "yu2023compressing",
+    "doi": "10.1609/aaai.v37i9.26304",
+    "status": "found",
+    "title": [
+      "Compressing Transformers: Features Are Low-Rank, but Weights Are Not!"
+    ],
+    "authors": [
+      {
+        "given": "Hao",
+        "family": "Yu"
+      },
+      {
+        "given": "Jianxin",
+        "family": "Wu"
+      }
+    ],
+    "year": [
+      [
+        2023,
+        6,
+        26
+      ]
+    ],
+    "venue": [
+      "Proceedings of the AAAI Conference on Artificial Intelligence"
+    ],
+    "pages": "11007-11015",
+    "article_number": null,
+    "volume": "37",
+    "issue": "9",
+    "url": "https://doi.org/10.1609/aaai.v37i9.26304",
+    "type": "journal-article"
+  },
+  {
+    "key": "zhan2025hi",
+    "doi": "10.1109/tvcg.2026.3669748",
+    "status": "found",
+    "title": [
+      "Hi-LSplat: Hierarchical 3D Language Gaussian Splatting"
+    ],
+    "authors": [
+      {
+        "given": "Chenlu",
+        "family": "Zhan"
+      },
+      {
+        "given": "Yufei",
+        "family": "Zhang"
+      },
+      {
+        "given": "Gaoang",
+        "family": "Wang"
+      },
+      {
+        "given": "Hongwei",
+        "family": "Wang"
+      }
+    ],
+    "year": [
+      [
+        2026,
+        7
+      ]
+    ],
+    "venue": [
+      "IEEE Transactions on Visualization and Computer Graphics"
+    ],
+    "pages": "5518-5535",
+    "article_number": null,
+    "volume": "32",
+    "issue": "7",
+    "url": "https://doi.org/10.1109/tvcg.2026.3669748",
+    "type": "journal-article"
+  },
+  {
+    "key": "zhou2024feature",
+    "doi": "10.1109/cvpr52733.2024.02048",
+    "status": "found",
+    "title": [
+      "Feature 3DGS: Supercharging 3D Gaussian Splatting to Enable Distilled Feature Fields"
+    ],
+    "authors": [
+      {
+        "given": "Shijie",
+        "family": "Zhou"
+      },
+      {
+        "given": "Haoran",
+        "family": "Chang"
+      },
+      {
+        "given": "Sicheng",
+        "family": "Jiang"
+      },
+      {
+        "given": "Zhiwen",
+        "family": "Fan"
+      },
+      {
+        "given": "Zehao",
+        "family": "Zhu"
+      },
+      {
+        "given": "Dejia",
+        "family": "Xu"
+      },
+      {
+        "given": "Pradyumna",
+        "family": "Chari"
+      },
+      {
+        "given": "Suya",
+        "family": "You"
+      },
+      {
+        "given": "Zhangyang",
+        "family": "Wang"
+      },
+      {
+        "given": "Achuta",
+        "family": "Kadambi"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        6,
+        16
+      ]
+    ],
+    "venue": [
+      "2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)"
+    ],
+    "pages": "21676-21685",
+    "article_number": null,
+    "volume": null,
+    "issue": null,
+    "url": "https://doi.org/10.1109/cvpr52733.2024.02048",
+    "type": "proceedings-article"
+  },
+  {
+    "key": "zuo2025fmgs",
+    "doi": "10.1007/s11263-024-02183-8",
+    "status": "found",
+    "title": [
+      "FMGS: Foundation Model Embedded 3D Gaussian Splatting for Holistic 3D Scene Understanding"
+    ],
+    "authors": [
+      {
+        "given": "Xingxing",
+        "family": "Zuo"
+      },
+      {
+        "given": "Pouya",
+        "family": "Samangouei"
+      },
+      {
+        "given": "Yunwen",
+        "family": "Zhou"
+      },
+      {
+        "given": "Yan",
+        "family": "Di"
+      },
+      {
+        "given": "Mingyang",
+        "family": "Li"
+      }
+    ],
+    "year": [
+      [
+        2024,
+        8,
+        12
+      ]
+    ],
+    "venue": [
+      "International Journal of Computer Vision"
+    ],
+    "pages": "611-627",
+    "article_number": null,
+    "volume": "133",
+    "issue": "2",
+    "url": "https://doi.org/10.1007/s11263-024-02183-8",
+    "type": "journal-article"
+  }
+]

@@ -1,0 +1,685 @@
+[
+  {
+    "key": "big_vision",
+    "action": "merged_or_removed",
+    "replacement": "radford2021learning"
+  },
+  {
+    "key": "cai2010singular",
+    "title": "A singular value thresholding algorithm for matrix completion",
+    "source": "https://doi.org/10.1137/080738970",
+    "arxiv": "0810.3286",
+    "kind": "article",
+    "authors": "Cai, Jian-Feng and Cand{\\`e}s, Emmanuel J and Shen, Zuowei",
+    "year": "2010",
+    "action": "checked"
+  },
+  {
+    "key": "RPCA",
+    "title": "Robust principal component analysis?",
+    "source": "https://doi.org/10.1145/1970392.1970395",
+    "arxiv": "0912.3599",
+    "kind": "article",
+    "authors": "Candès, Emmanuel J. and Li, Xiaodong and Ma, Yi and Wright, John",
+    "year": "2011",
+    "action": "checked"
+  },
+  {
+    "key": "chang2017matterport3d",
+    "title": "Matterport3D: Learning from RGB-D Data in Indoor Environments",
+    "source": "https://doi.org/10.1109/3dv.2017.00081",
+    "arxiv": "1709.06158",
+    "kind": "inproceedings",
+    "authors": "Angel Chang and Angela Dai and Thomas Funkhouser and Maciej Halber and Matthias Nießner and Manolis Savva and Shuran Song and Andy Zeng and Yinda Zhang",
+    "year": "2017",
+    "action": "checked"
+  },
+  {
+    "key": "cheng2024occamslgssimpleapproach",
+    "title": "Occam’s LGS: An Efficient Approach for Language Gaussian Splatting",
+    "source": "https://bmvc2025.bmva.org/proceedings/694/",
+    "arxiv": "2412.01807",
+    "kind": "inproceedings",
+    "authors": "Jiahuan Cheng and Jan-Nico Zaech and Luc Van Gool and Danda Pani Paudel",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "chiang2025uniql",
+    "title": "UniQL: Unified Quantization and Low-rank Compression for Adaptive Edge LLMs",
+    "source": "https://proceedings.iclr.cc/paper_files/paper/2026/hash/370fa2e691f57eb319bc263a07dad4a5-Abstract-Conference.html",
+    "arxiv": "2512.03383",
+    "kind": "inproceedings",
+    "authors": "Chiang, Hung-Yueh and Chang, Chi-Chih and Lu, Yu-Chen and Lin, Chien-Yu and Wu, Kai-Chiang and Abdelfattah, Mohamed and Marculescu, Diana",
+    "year": "2026",
+    "action": "checked"
+  },
+  {
+    "key": "pointcept2023",
+    "title": "Pointcept: A Codebase for Point Cloud Perception Research",
+    "source": "https://github.com/Pointcept/Pointcept",
+    "arxiv": null,
+    "kind": "repository",
+    "action": "retained",
+    "year": "2023"
+  },
+  {
+    "key": "dai2017scannet",
+    "title": "ScanNet: Richly-Annotated 3D Reconstructions of Indoor Scenes",
+    "source": "https://openaccess.thecvf.com/CVPR2017.py?day=all",
+    "arxiv": "1702.04405",
+    "kind": "inproceedings",
+    "authors": "Dai, Angela and Chang, Angel X. and Savva, Manolis and Halber, Maciej and Funkhouser, Thomas and Niessner, Matthias",
+    "year": "2017",
+    "action": "checked"
+  },
+  {
+    "key": "dehghan2021arkitscenes",
+    "title": "ARKitScenes: A Diverse Real-World Dataset For 3D Indoor Scene Understanding Using Mobile RGB-D Data",
+    "source": "https://github.com/apple/ARKitScenes",
+    "arxiv": "2111.08897",
+    "kind": "inproceedings",
+    "authors": "Gilad Baruch and Zhuoyuan Chen and Afshin Dehghan and Tal Dimry and Yuri Feigin and Peter Fu and Thomas Gebauer and Brandon Joffe and Daniel Kurz and Arik Schwartz and Elad Shulman",
+    "year": "2021",
+    "action": "checked"
+  },
+  {
+    "key": "ding2022language",
+    "title": "PLA: Language-Driven Open-Vocabulary 3D Scene Understanding",
+    "source": "https://openaccess.thecvf.com/CVPR2023?day=all",
+    "arxiv": "2211.16312",
+    "kind": "inproceedings",
+    "authors": "Ding, Runyu and Yang, Jihan and Xue, Chuhui and Zhang, Wenqing and Bai, Song and Qi, Xiaojuan",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "engelmann2024opennerf",
+    "title": "OpenNeRF: Open Set 3D Neural Scene Segmentation with Pixel-Wise Features and Rendered Novel Views",
+    "source": "https://proceedings.iclr.cc/paper_files/paper/2024/file/21f1c5bbf2519321c1bee9bfa9edcd46-Paper-Conference.pdf",
+    "arxiv": "2404.03650",
+    "kind": "inproceedings",
+    "authors": "Francis Engelmann and Fabian Manhardt and Michael Niemeyer and Keisuke Tateno and Marc Pollefeys and Federico Tombari",
+    "year": "2024",
+    "action": "checked",
+    "note": "论文首页及 arXiv 列出 6 位作者，会议网页/BibTeX 列出 5 位作者，详见报告。"
+  },
+  {
+    "key": "SVD",
+    "title": "Calculating the Singular Values and Pseudo-Inverse of a Matrix",
+    "source": "https://doi.org/10.1137/0702016",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Golub, G. and Kahan, W.",
+    "year": "1965",
+    "action": "checked"
+  },
+  {
+    "key": "guo2024semantic",
+    "title": "Semantic Gaussians: Open-Vocabulary Scene Understanding with 3D Gaussian Splatting",
+    "source": "https://arxiv.org/abs/2403.15624",
+    "arxiv": "2403.15624",
+    "kind": "article",
+    "authors": "Jun Guo and Xiaojian Ma and Yue Fan and Huaping Liu and Qing Li",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "gupta2015indoor",
+    "title": "Indoor Scene Understanding with RGB-D Images: Bottom-up Segmentation, Object Detection and Semantic Segmentation",
+    "source": "https://s-gupta.github.io/",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Gupta, Saurabh and Arbeláez, Pablo and Girshick, Ross and Malik, Jitendra",
+    "year": "2015",
+    "action": "checked"
+  },
+  {
+    "key": "jiang2024open",
+    "title": "Open-Vocabulary 3D Semantic Segmentation with Foundation Models",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": null,
+    "kind": "inproceedings",
+    "authors": "Jiang, Li and Shi, Shaoshuai and Schiele, Bernt",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "jiang2025votesplat",
+    "title": "VoteSplat: Hough Voting Gaussian Splatting for 3D Scene Understanding",
+    "source": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "arxiv": "2506.22799",
+    "kind": "inproceedings",
+    "authors": "Jiang, Minchao and Jia, Shunyu and Gu, Jiaming and Lu, Xiaoyuan and Zhu, Guangming and Dong, Anqi and Zhang, Liang",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "drsplat25",
+    "title": "Dr. Splat: Directly Referring 3D Gaussian Splatting via Direct Language Embedding Registration",
+    "source": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "arxiv": "2502.16652",
+    "kind": "inproceedings",
+    "authors": "Jun-Seong, Kim and Kim, GeonU and Yu-Ji, Kim and Wang, Yu-Chiang Frank and Choe, Jaesung and Oh, Tae-Hyun",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "kerbl3Dgaussians",
+    "title": "3D Gaussian Splatting for Real-Time Radiance Field Rendering",
+    "source": "https://arxiv.org/abs/2308.04079",
+    "arxiv": "2308.04079",
+    "kind": "article",
+    "authors": "Bernhard Kerbl and Georgios Kopanas and Thomas Leimkühler and George Drettakis",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "lerf2023",
+    "title": "LERF: Language Embedded Radiance Fields",
+    "source": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "arxiv": "2303.09553",
+    "kind": "inproceedings",
+    "authors": "Kerr, Justin and Kim, Chung Min and Goldberg, Ken and Kanazawa, Angjoo and Tancik, Matthew",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "kirillov2023segany",
+    "title": "Segment Anything",
+    "source": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "arxiv": "2304.02643",
+    "kind": "inproceedings",
+    "authors": "Kirillov, Alexander and Mintun, Eric and Ravi, Nikhila and Mao, Hanzi and Rolland, Chloe and Gustafson, Laura and Xiao, Tete and Whitehead, Spencer and Berg, Alexander C. and Lo, Wan-Yen and Dollar, Piotr and Girshick, Ross",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "lee2025mosaic3d",
+    "title": "Mosaic3D: Foundation Dataset and Model for Open-Vocabulary 3D Segmentation",
+    "source": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "arxiv": "2502.02548",
+    "kind": "inproceedings",
+    "authors": "Lee, Junha and Park, Chunghyun and Choe, Jaesung and Wang, Yu-Chiang Frank and Kautz, Jan and Cho, Minsu and Choy, Chris",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "li2025instancegaussian",
+    "title": "InstanceGaussian: Appearance-Semantic Joint Gaussian Representation for 3D Instance-Level Perception",
+    "source": "https://openaccess.thecvf.com/CVPR2025?day=all",
+    "arxiv": "2411.19235",
+    "kind": "inproceedings",
+    "authors": "Li, Haijie and Wu, Yanmin and Meng, Jiarui and Gao, Qiankun and Zhang, Zhiyao and Wang, Ronggang and Zhang, Jian",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "li2025langsplatv2",
+    "title": "LangSplatV2: High-dimensional 3D Language Gaussian Splatting with 450+ FPS",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/feb14cd8a37e800f38edba497e847363-Abstract-Conference.html",
+    "arxiv": "2507.07136",
+    "kind": "inproceedings",
+    "authors": "Li, Wanhua and Zhao, Yujie and Qin, Minghan and Liu, Yang and Cai, Yuanhao and Gan, Chuang and Pfister, Hanspeter",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "li2025scenesplat",
+    "title": "SceneSplat: Gaussian Splatting-based Scene Understanding with Vision-Language Pretraining",
+    "source": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "arxiv": "2503.18052",
+    "kind": "inproceedings",
+    "authors": "Li, Yue and Ma, Qi and Yang, Runyi and Li, Huapeng and Ma, Mengjiao and Ren, Bin and Popovic, Nikola and Sebe, Nicu and Konukoglu, Ender and Gevers, Theo and Van Gool, Luc and Oswald, Martin R. and Paudel, Danda Pani",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "liang2024supergseg",
+    "title": "SuperGSeg: Open-Vocabulary 3D Segmentation with Structured Super-Gaussians",
+    "source": "https://arxiv.org/abs/2412.10231",
+    "arxiv": "2412.10231",
+    "kind": "article",
+    "authors": "Siyun Liang and Sen Wang and Kunyi Li and Michael Niemeyer and Stefano Gasperini and Hendrik P. A. Lensch and Nassir Navab and Federico Tombari",
+    "year": "2026",
+    "action": "checked"
+  },
+  {
+    "key": "liu2023weakly",
+    "title": "Weakly Supervised 3D Open-vocabulary Segmentation",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2023/hash/a76b693f36916a5ed84d6e5b39a0dc03-Abstract-Conference.html",
+    "arxiv": "2305.14093",
+    "kind": "inproceedings",
+    "authors": "Liu, Kunhao and Zhan, Fangneng and Zhang, Jiahui and XU, MUYU and Yu, Yingchen and El Saddik, Abdulmotaleb and Theobalt, Christian and Xing, Eric and Lu, Shijian",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "ma2025scenesplatpp",
+    "title": "SceneSplat++: A Large Dataset and Comprehensive Benchmark for Language Gaussian Splatting",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/file/6b9628a5da76f5f1d6ec025f4b493686-Paper-Datasets_and_Benchmarks_Track.pdf",
+    "arxiv": "2506.08710",
+    "kind": "inproceedings",
+    "authors": "Mengjiao Ma and Qi Ma and Yue Li and Jiahuan Cheng and Runyi Yang and Bin Ren and Nikola Popovic and Mingqiang Wei and Nicu Sebe and Luc Van Gool and Theo Gevers and Martin R. Oswald and Danda Pani Paudel",
+    "year": "2025",
+    "action": "checked",
+    "note": "论文首页及 arXiv 列出 13 位作者，会议网页/BibTeX 列出 14 位作者，详见报告。"
+  },
+  {
+    "key": "marrie2025ludvig",
+    "title": "LUDVIG: Learning-Free Uplifting of 2D Visual Features to Gaussian Splatting Scenes",
+    "source": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "arxiv": "2410.14462",
+    "kind": "inproceedings",
+    "authors": "Marrie, Juliette and Menegaux, Romain and Arbel, Michael and Larlus, Diane and Mairal, Julien",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "mikaelyan2025deltallm",
+    "title": "DeltaLLM: Compress LLMs with Low-Rank Deltas between Shared Weights",
+    "source": "https://arxiv.org/abs/2501.18596",
+    "arxiv": "2501.18596",
+    "kind": "article",
+    "authors": "Liana Mikaelyan and Ayyoob Imani and Mathew Salvaris and Parth Pathak and Mohsen Fayyaz",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "mildenhall2020nerf",
+    "title": "NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis",
+    "source": "https://arxiv.org/abs/2003.08934",
+    "arxiv": "2003.08934",
+    "kind": "inproceedings",
+    "authors": "Ben Mildenhall and Pratul P. Srinivasan and Matthew Tancik and Jonathan T. Barron and Ravi Ramamoorthi and Ren Ng",
+    "year": "2020",
+    "action": "checked"
+  },
+  {
+    "key": "neal2011distributed",
+    "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+    "source": "https://web.stanford.edu/~boyd/papers/admm_distr_stats.html",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Stephen Boyd and Neal Parikh and Eric Chu and Borja Peleato and Jonathan Eckstein",
+    "year": "2011",
+    "action": "checked"
+  },
+  {
+    "key": "oquab2023dinov2",
+    "title": "DINOv2: Learning Robust Visual Features without Supervision",
+    "source": "https://arxiv.org/abs/2304.07193",
+    "arxiv": "2304.07193",
+    "kind": "article",
+    "authors": "Maxime Oquab and Timothée Darcet and Théo Moutakanni and Huy Vo and Marc Szafraniec and Vasil Khalidov and Pierre Fernandez and Daniel Haziza and Francisco Massa and Alaaeldin El-Nouby and Mahmoud Assran and Nicolas Ballas and Wojciech Galuba and Russell Howes and Po-Yao Huang and Shang-Wen Li and Ishan Misra and Michael Rabbat and Vasu Sharma and Gabriel Synnaeve and Hu Xu and Hervé Jegou and Julien Mairal and Patrick Labatut and Armand Joulin and Piotr Bojanowski",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "Proximal",
+    "title": "Proximal Algorithms",
+    "source": "https://doi.org/10.1561/2400000003",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Parikh, Neal and Boyd, Stephen",
+    "year": "2014",
+    "action": "checked"
+  },
+  {
+    "key": "peng2023openscene",
+    "title": "OpenScene: 3D Scene Understanding With Open Vocabularies",
+    "source": "https://openaccess.thecvf.com/CVPR2023?day=all",
+    "arxiv": "2211.15654",
+    "kind": "inproceedings",
+    "authors": "Peng, Songyou and Genova, Kyle and Jiang, Chiyu {\\textquotedblleft}Max{\\textquotedblright} and Tagliasacchi, Andrea and Pollefeys, Marc and Funkhouser, Thomas",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "piekenbrinck2025opensplat3d",
+    "title": "OpenSplat3D: Open-Vocabulary 3D Instance Segmentation using Gaussian Splatting",
+    "source": "https://doi.org/10.1109/cvprw67362.2025.00520",
+    "arxiv": "2506.07697",
+    "kind": "inproceedings",
+    "authors": "Piekenbrinck, Jens and Schmidt, Christian and Hermans, Alexander and Vaskevicius, Narunas and Linder, Timm and Leibe, Bastian",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "qin2024langsplat",
+    "title": "LangSplat: 3D Language Gaussian Splatting",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2312.16084",
+    "kind": "inproceedings",
+    "authors": "Qin, Minghan and Li, Wanhua and Zhou, Jiawei and Wang, Haoqian and Pfister, Hanspeter",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "qu2024goi",
+    "title": "GOI: Find 3D Gaussians of Interest with an Optimizable Open-vocabulary Semantic-space Hyperplane",
+    "source": "https://doi.org/10.1145/3664647.3680852",
+    "arxiv": "2405.17596",
+    "kind": "inproceedings",
+    "authors": "Qu, Yansong and Dai, Shaohui and Li, Xinyang and Lin, Jianghang and Cao, Liujuan and Zhang, Shengchuan and Ji, Rongrong",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "DBLP:journals/corr/abs-2103-00020",
+    "action": "merged_or_removed",
+    "replacement": "radford2021learning"
+  },
+  {
+    "key": "radford2021learning",
+    "title": "Learning Transferable Visual Models From Natural Language Supervision",
+    "source": "https://proceedings.mlr.press/v139/radford21a.html",
+    "arxiv": "2103.00020",
+    "kind": "inproceedings",
+    "authors": "Radford, Alec and Kim, Jong Wook and Hallacy, Chris and Ramesh, Aditya and Goh, Gabriel and Agarwal, Sandhini and Sastry, Girish and Askell, Amanda and Mishkin, Pamela and Clark, Jack and Krueger, Gretchen and Sutskever, Ilya",
+    "year": "2021",
+    "action": "checked"
+  },
+  {
+    "key": "rashid2023language",
+    "title": "Language Embedded Radiance Fields for Zero-Shot Task-Oriented Grasping",
+    "source": "https://proceedings.mlr.press/v229/rashid23a.html",
+    "arxiv": "2309.07970",
+    "kind": "inproceedings",
+    "authors": "Rashid, Adam and Sharma, Satvik and Kim, Chung Min and Kerr, Justin and Chen, Lawrence Yunliang and Kanazawa, Angjoo and Goldberg, Ken",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "ravi2024sam2",
+    "title": "SAM 2: Segment Anything in Images and Videos",
+    "source": "https://arxiv.org/abs/2408.00714",
+    "arxiv": "2408.00714",
+    "kind": "article",
+    "authors": "Nikhila Ravi and Valentin Gabeur and Yuan-Ting Hu and Ronghang Hu and Chaitanya Ryali and Tengyu Ma and Haitham Khedr and Roman Rädle and Chloe Rolland and Laura Gustafson and Eric Mintun and Junting Pan and Kalyan Vasudev Alwala and Nicolas Carion and Chao-Yuan Wu and Ross Girshick and Piotr Dollár and Christoph Feichtenhofer",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "roberts2021hypersim",
+    "title": "Hypersim: A Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding",
+    "source": "https://openaccess.thecvf.com/ICCV2021?day=all",
+    "arxiv": "2011.02523",
+    "kind": "inproceedings",
+    "authors": "Roberts, Mike and Ramapuram, Jason and Ranjan, Anurag and Kumar, Atulit and Bautista, Miguel Angel and Paczan, Nathan and Webb, Russ and Susskind, Joshua M.",
+    "year": "2021",
+    "action": "checked"
+  },
+  {
+    "key": "rosinol20203d",
+    "title": "3D Dynamic Scene Graphs: Actionable Spatial Perception with Places, Objects, and Humans",
+    "source": "https://doi.org/10.15607/rss.2020.xvi.079",
+    "arxiv": "2002.06289",
+    "kind": "inproceedings",
+    "authors": "Rosinol, Antoni and Gupta, Arjun and Abate, Marcus and Shi, Jingnan and Carlone, Luca",
+    "year": "2020",
+    "action": "checked"
+  },
+  {
+    "key": "shi2024language",
+    "title": "Language Embedded 3D Gaussians for Open-Vocabulary Scene Understanding",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2311.18482",
+    "kind": "inproceedings",
+    "authors": "Shi, Jin-Chuan and Wang, Miao and Duan, Hao-Bin and Guan, Shao-Hua",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "straub2019replica",
+    "title": "The Replica Dataset: A Digital Replica of Indoor Spaces",
+    "source": "https://arxiv.org/abs/1906.05797",
+    "arxiv": "1906.05797",
+    "kind": "article",
+    "authors": "Julian Straub and Thomas Whelan and Lingni Ma and Yufan Chen and Erik Wijmans and Simon Green and Jakob J. Engel and Raul Mur-Artal and Carl Ren and Shobhit Verma and Anton Clarkson and Mingfei Yan and Brian Budge and Yajie Yan and Xiaqing Pan and June Yon and Yuyang Zou and Kimberly Leon and Nigel Carter and Jesus Briales and Tyler Gillingham and Elias Mueggler and Luis Pesqueira and Manolis Savva and Dhruv Batra and Hauke M. Strasdat and Renzo De Nardi and Michael Goesele and Steven Lovegrove and Richard Newcombe",
+    "year": "2019",
+    "action": "checked"
+  },
+  {
+    "key": "tian2025ccl",
+    "title": "CCL-LGS: Contrastive Codebook Learning for 3D Language Gaussian Splatting",
+    "source": "https://openaccess.thecvf.com/ICCV2025?day=all",
+    "arxiv": "2505.20469",
+    "kind": "inproceedings",
+    "authors": "Tian, Lei and Li, Xiaomin and Ma, Liqian and Yin, Hao and Zheng, Zirui and Huang, Hefei and Li, Taiqing and Lu, Huchuan and Jia, Xu",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "tian2024drivevlm",
+    "title": "DriveVLM: The Convergence of Autonomous Driving and Large Vision-Language Models",
+    "source": "https://arxiv.org/abs/2402.12289",
+    "arxiv": "2402.12289",
+    "kind": "article",
+    "authors": "Xiaoyu Tian and Junru Gu and Bailin Li and Yicheng Liu and Yang Wang and Zhiyong Zhao and Kun Zhan and Peng Jia and Xianpeng Lang and Hang Zhao",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "tschannen2025siglip",
+    "title": "SigLIP 2: Multilingual Vision-Language Encoders with Improved Semantic Understanding, Localization, and Dense Features",
+    "source": "https://arxiv.org/abs/2502.14786",
+    "arxiv": "2502.14786",
+    "kind": "article",
+    "authors": "Michael Tschannen and Alexey Gritsenko and Xiao Wang and Muhammad Ferjad Naeem and Ibrahim Alabdulmohsin and Nikhil Parthasarathy and Talfan Evans and Lucas Beyer and Ye Xia and Basil Mustafa and Olivier Hénaff and Jeremiah Harmsen and Andreas Steiner and Xiaohua Zhai",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "lu2025nsvd",
+    "title": "Large Language Model Compression via the Nested Activation-Aware Decomposition",
+    "source": "https://arxiv.org/abs/2503.17101",
+    "arxiv": "2503.17101",
+    "kind": "article",
+    "authors": "Jun Lu and Tianyi Xu and Bill Ding and David Li and Yu Kang",
+    "year": "2025",
+    "action": "checked",
+    "replaces": "tsitsikas2020nsvd"
+  },
+  {
+    "key": "vonNeumann1937",
+    "title": "Some matrix-inequalities and metrization of matrix-space",
+    "source": "https://web.math.princeton.edu/~naor/homepage%20files/nuclear-dimension.pdf",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Von Neumann, John",
+    "year": "1937",
+    "action": "checked"
+  },
+  {
+    "key": "wald20193rscan",
+    "title": "RIO: 3D Object Instance Re-Localization in Changing Indoor Environments",
+    "source": "https://openaccess.thecvf.com/content_ICCV_2019/html/Wald_RIO_3D_Object_Instance_Re-Localization_in_Changing_Indoor_Environments_ICCV_2019_paper.html",
+    "arxiv": "1908.06109",
+    "kind": "inproceedings",
+    "authors": "Wald, Johanna and Avetisyan, Armen and Navab, Nassir and Tombari, Federico and Niessner, Matthias",
+    "year": "2019",
+    "action": "checked"
+  },
+  {
+    "key": "wang2025dobi",
+    "title": "Dobi-SVD: Differentiable SVD for LLM Compression and Some New Perspectives",
+    "source": "https://proceedings.iclr.cc/paper_files/paper/2025/hash/218ca0d92e6ed8f9db00621e103dc70c-Abstract-Conference.html",
+    "arxiv": "2502.02723",
+    "kind": "inproceedings",
+    "authors": "Wang, Qinsi and Ke, Jinghan and Tomizuka, Masayoshi and Keutzer, Kurt and Xu, Chenfeng",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "wang2025vala",
+    "title": "Visibility-Aware Language Aggregation for Open-Vocabulary Segmentation in 3D Gaussian Splatting",
+    "source": "https://arxiv.org/abs/2509.05515",
+    "arxiv": "2509.05515",
+    "kind": "article",
+    "authors": "Sen Wang and Kunyi Li and Siyun Liang and Elena Alegret and Jing Ma and Nassir Navab and Stefano Gasperini",
+    "year": "2026",
+    "action": "checked"
+  },
+  {
+    "key": "wang2025qsvd",
+    "title": "QSVD: Efficient Low-rank Approximation for Unified Query-Key-Value Weight Compression in Low-Precision Vision-Language Models",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/028ef7e68a5ea25fc26cd6abf3a5c147-Abstract-Conference.html",
+    "arxiv": "2510.16292",
+    "kind": "inproceedings",
+    "authors": "Wang, Yutong and Wang, Haiyu and Zhang, Sai Qian",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "wu2022ptv2",
+    "title": "Point Transformer V2: Grouped Vector Attention and Partition-based Pooling",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2022/hash/d78ece6613953f46501b958b7bb4582f-Abstract-Conference.html",
+    "arxiv": "2210.05666",
+    "kind": "inproceedings",
+    "authors": "Wu, Xiaoyang and Lao, Yixing and Jiang, Li and Liu, Xihui and Zhao, Hengshuang",
+    "year": "2022",
+    "action": "checked"
+  },
+  {
+    "key": "wu2024ptv3",
+    "title": "Point Transformer V3: Simpler Faster Stronger",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2312.10035",
+    "kind": "inproceedings",
+    "authors": "Wu, Xiaoyang and Jiang, Li and Wang, Peng-Shuai and Liu, Zhijian and Liu, Xihui and Qiao, Yu and Ouyang, Wanli and He, Tong and Zhao, Hengshuang",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "wu2024ppt",
+    "title": "Towards Large-scale 3D Representation Learning with Multi-dataset Point Prompt Training",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2308.09718",
+    "kind": "inproceedings",
+    "authors": "Wu, Xiaoyang and Tian, Zhuotao and Wen, Xin and Peng, Bohao and Liu, Xihui and Yu, Kaicheng and Zhao, Hengshuang",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "wu2024opengaussian",
+    "title": "OpenGaussian: Towards Point-Level 3D Gaussian-based Open Vocabulary Understanding",
+    "source": "https://proceedings.neurips.cc/paper_files/paper/2024/hash/21f7b745f73ce0d1f9bcea7f40b1388e-Abstract-Conference.html",
+    "arxiv": "2406.02058",
+    "kind": "inproceedings",
+    "authors": "Wu, Yanmin and Meng, Jiarui and Li, Haijie and Wu, Chenming and Shi, Yahao and Cheng, Xinhua and Zhao, Chen and Feng, Haocheng and Ding, Errui and Wang, Jingdong and Zhang, Jian",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "yang2024regionplc",
+    "title": "RegionPLC: Regional Point-Language Contrastive Learning for Open-World 3D Scene Understanding",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2304.00962",
+    "kind": "inproceedings",
+    "authors": "Yang, Jihan and Ding, Runyu and Deng, Weipeng and Wang, Zhe and Qi, Xiaojuan",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "ye2024gaussian",
+    "title": "Gaussian Grouping: Segment and Edit Anything in 3D Scenes",
+    "source": "https://doi.org/10.1007/978-3-031-73397-0_10",
+    "arxiv": "2312.00732",
+    "kind": "inproceedings",
+    "authors": "Ye, Mingqiao and Danelljan, Martin and Yu, Fisher and Ke, Lei",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "yeshwanth2023scannet++",
+    "title": "ScanNet++: A High-Fidelity Dataset of 3D Indoor Scenes",
+    "source": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "arxiv": "2308.11417",
+    "kind": "inproceedings",
+    "authors": "Yeshwanth, Chandan and Liu, Yueh-Cheng and Nie{\\ss}ner, Matthias and Dai, Angela",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "yu2023compressing",
+    "title": "Compressing Transformers: Features Are Low-Rank, but Weights Are Not!",
+    "source": "https://ojs.aaai.org/index.php/AAAI/article/view/26304",
+    "arxiv": null,
+    "kind": "article",
+    "authors": "Yu, Hao and Wu, Jianxin",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "yuelitept2026",
+    "title": "LitePT: Lighter Yet Stronger Point Transformer",
+    "source": "https://openaccess.thecvf.com/CVPR2026?day=all",
+    "arxiv": "2512.13689",
+    "kind": "inproceedings",
+    "authors": "Yue, Yuanwen and Robert, Damien and Wang, Jianyuan and Hong, Sunghwan and Wegner, Jan Dirk and Rupprecht, Christian and Schindler, Konrad",
+    "year": "2026",
+    "action": "checked"
+  },
+  {
+    "key": "zhai2023sigmoid",
+    "title": "Sigmoid Loss for Language Image Pre-Training",
+    "source": "https://openaccess.thecvf.com/ICCV2023?day=all",
+    "arxiv": "2303.15343",
+    "kind": "inproceedings",
+    "authors": "Zhai, Xiaohua and Mustafa, Basil and Kolesnikov, Alexander and Beyer, Lucas",
+    "year": "2023",
+    "action": "checked"
+  },
+  {
+    "key": "zhan2025hi",
+    "title": "Hi-LSplat: Hierarchical 3D Language Gaussian Splatting",
+    "source": "https://arxiv.org/abs/2506.06822",
+    "arxiv": "2506.06822",
+    "kind": "article",
+    "authors": "Chenlu Zhan and Yufei Zhang and Gaoang Wang and Hongwei Wang",
+    "year": "2025",
+    "action": "checked"
+  },
+  {
+    "key": "caron2021dino",
+    "title": "Emerging Properties in Self-Supervised Vision Transformers",
+    "source": "https://openaccess.thecvf.com/content/ICCV2021/html/Caron_Emerging_Properties_in_Self-Supervised_Vision_Transformers_ICCV_2021_paper.html",
+    "arxiv": "2104.14294",
+    "kind": "inproceedings",
+    "authors": "Caron, Mathilde and Touvron, Hugo and Misra, Ishan and J\\'egou, Herv\\'e and Mairal, Julien and Bojanowski, Piotr and Joulin, Armand",
+    "year": "2021",
+    "action": "checked",
+    "replaces": "zhang2022dino"
+  },
+  {
+    "key": "zhou2020cylinder3d",
+    "title": "Cylinder3D: An Effective 3D Framework for Driving-scene LiDAR Semantic Segmentation",
+    "source": "https://arxiv.org/abs/2008.01550",
+    "arxiv": "2008.01550",
+    "kind": "article",
+    "authors": "Hui Zhou and Xinge Zhu and Xiao Song and Yuexin Ma and Zhe Wang and Hongsheng Li and Dahua Lin",
+    "year": "2020",
+    "action": "checked"
+  },
+  {
+    "key": "zhou2024feature",
+    "title": "Feature 3DGS: Supercharging 3D Gaussian Splatting to Enable Distilled Feature Fields",
+    "source": "https://openaccess.thecvf.com/CVPR2024?day=all",
+    "arxiv": "2312.03203",
+    "kind": "inproceedings",
+    "authors": "Zhou, Shijie and Chang, Haoran and Jiang, Sicheng and Fan, Zhiwen and Zhu, Zehao and Xu, Dejia and Chari, Pradyumna and You, Suya and Wang, Zhangyang and Kadambi, Achuta",
+    "year": "2024",
+    "action": "checked"
+  },
+  {
+    "key": "zuo2025fmgs",
+    "title": "FMGS: Foundation Model Embedded 3D Gaussian Splatting for Holistic 3D Scene Understanding",
+    "source": "https://doi.org/10.1007/s11263-024-02183-8",
+    "arxiv": "2401.01970",
+    "kind": "article",
+    "authors": "Zuo, Xingxing and Samangouei, Pouya and Zhou, Yunwen and Di, Yan and Li, Mingyang",
+    "year": "2025",
+    "action": "checked"
+  }
+]
