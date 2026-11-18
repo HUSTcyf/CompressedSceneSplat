@@ -31,3 +31,12 @@
 恢复方式：在该 LitePT 版本上运行 `git -C LitePT apply ../docs/patches/LitePT-local-pointrope.patch`。
 
 该补丁包含 CPython 3.11 扩展文件名及张量布局修改；本次仅保存原有修改，运行效果以目标环境实测为准。
+
+## 下载验收记录（2026-11-18）
+
+- 本地归档：`/home/cyf/archives/CompressedSceneSplat-final-20261118/CompressedSceneSplat-final.tar.gz`，约 1.15 GB；配套一个 `.sha256` 文件。
+- 整包 SHA-256：`d12b073649e55ae63c9f463a67ca17cb5a9139fef3dae9a7b5102a01e1589a64`，用户下载校验与本地独立复核均通过。
+- E9 权重 SHA-256：`9b9932887ae18e8bdef157173777df2d524e7014136336e3c843f7b885323086`，服务器与包内权重校验通过。
+- 最终成绩原始证据：包内 `exp/tester_v10e9/result_ScanNetPPGSDataset/eval_results.txt`、`train_20260805_131101.log`，记录前景 0.2407、全类 0.2489；训练目录的同名评测摘要记录 E10 的前景 0.2355。
+- 包内已核对最终配置、初始化权重、top100 文本嵌入、代码现场和实验记录。配置的外部数据及符号注册表位于 `/home/isom/cyf/SceneSplat/scannetpp_v2`，清理范围为 `/home/isom/cyf/CompressedSceneSplat`。
+- 服务器目录清理状态以用户执行清理脚本后的回执为准。
